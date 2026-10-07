@@ -1,0 +1,15 @@
+{
+  "name": "dsh-voice-input",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "index.mjs",
+  "exports": {
+    ".": { "default": "./index.mjs" },
+    "./client": { "default": "./client.js" },
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": { "platform": "web" }
+  }
+}

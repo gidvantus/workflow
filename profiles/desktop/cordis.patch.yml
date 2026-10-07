@@ -1,0 +1,29 @@
+# Your patch layer for this dsh profile, applied after every bundle layer:
+# a top-level YAML array of loader patch entries (id-targeted config
+# overrides, disables, and insert lists; `!!js` expressions allowed).
+#
+# ВАЖНО: каждая вставленная строка обязана объявить в inject все хост-сервисы,
+# которые потребляет. Записи отсюда применяются РАНЬШЕ, чем бандлы публикуют
+# свои сервисы, и Cordis не откладывает плагин, если зависимости не объявлены, —
+# он запускает его в пустом окружении, и тот молча ничего не делает.
+- insert:
+    - id: tg-bridge
+      name: './plugins/tg-bridge.mjs'
+
+    # Ролевые сессии: инструменты open_role_session / list_agent_presets.
+    - id: role-sessions
+      name: './plugins/role-sessions.mjs'
+
+    # Отдел разработки: диспетчер ролей в окне смены и сводка в Telegram.
+    - id: dev-department
+      name: './plugins/dev-department.mjs'
+
+    # Разрешения ролей: сессиям dev/tester выдаётся danger-full-access, чтобы
+    # работа не упиралась в запросы подтверждения.
+    - id: role-permissions
+      name: './plugins/role-permissions.mjs'
+
+    # Голосовой ввод в GUI: кнопка 🎤 в композере (клиентская половина) и
+    # ручка распознавания POST /dsh-voice/transcribe (host-половина, ffmpeg+whisper).
+    - id: dsh-voice-input
+      name: './plugins/voice-input/index.mjs'

@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "default": "vahta",
+  "projects": {
+    "vahta": {
+      "title": "Вахта",
+      "repo": "gidvantus/vahta",
+      "base": "develop-m",
+      "workspace": "D:\\Agents\\Vahta",
+      "humanClone": "D:\\Development\\VideCoding\\Vahta",
+      "composeProject": "vahta-agent",
+      "frontendPort": 8080,
+      "apiPort": 8001,
+      "artifacts": "D:\\Agents\\vahta-artifacts",
+      "department": {
+        "enabled": true,
+        "windows": [
+          { "start": "13:00", "stop": "04:00" },
+          { "start": "07:00", "stop": "09:00" }
+        ],
+        "maxRework": 3
+      },
+      "telegram": {
+        "token": "<токен бота>",
+        "chatId": 0
+      }
+    },
+    "cloudpass": {
+      "title": "CloudPass",
+      "repo": "gidvantus/cloudpass",
+      "base": "main",
+      "workspace": "D:\\Agents\\CloudPass",
+      "humanClone": "D:\\Development\\VideCoding\\CloudPass",
+      "composeProject": "cloudpass-agent",
+      "department": {
+        "enabled": true,
+        "windows": [
+          { "start": "13:00", "stop": "04:00" },
+          { "start": "07:00", "stop": "09:00" }
+        ],
+        "maxRework": 3
+      },
+      "telegram": {
+        "token": "<токен бота>",
+        "chatId": 0
+      }
+    },
+    "brain": {
+      "title": "Brain",
+      "workspace": "D:\\Development\\VideCoding\\Brain",
+      "department": {
+        "enabled": false
+      },
+      "telegram": {
+        "token": "<токен бота>",
+        "chatId": 0
+      }
+    }
+  }
+}

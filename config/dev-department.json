@@ -1,0 +1,15 @@
+{
+  "windows": [
+    {
+      "start": "13:00",
+      "stop": "04:00"
+    },
+    {
+      "start": "07:00",
+      "stop": "09:00"
+    }
+  ],
+  "maxRework": 3,
+  "maxAttempts": 4,
+  "stuckAfterMinutes": 30
+}

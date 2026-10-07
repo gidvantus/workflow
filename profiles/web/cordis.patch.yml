@@ -1,0 +1,29 @@
+# Your patch layer for this dsh profile, applied after every bundle layer:
+# a top-level YAML array of loader patch entries (id-targeted config
+# overrides, disables, and insert lists; `!!js` expressions allowed).
+#
+# Ролевые сессии: инструменты open_role_session / list_agent_presets —
+# поднять новую сессию на выбранном пресете (dev/tester/…).
+# Та же строка добавлена в профиль desktop: какой из двух профилей запущен
+# в конкретный момент, из рантайма определить не удалось, а профили
+# взаимоисключающие — конфликта регистрации быть не может.
+- insert:
+    - id: role-sessions
+      name: './plugins/role-sessions.mjs'
+
+# dsh-relay: доступ к harness с телефона, в том числе вне локальной сети (Tailscale).
+# Патч заменяет config строки relay целиком, поэтому перечислены все нужные ключи.
+# privilegedMethods: loopback-only — телефон не видит settings.*/credentials.*;
+# чтобы вернуть их сопряжённому устройству, поставьте allow-authenticated.
+- id: relay
+  name: 'dsh-relay'
+  config:
+    bind: '0.0.0.0'
+    port: 3443
+    stateDir: !!js dshHomePath('relay')
+    tls: 'self-signed'
+    publicHostnames: []
+    privilegedMethods: 'loopback-only'
+    compat:
+      addressGrants: false
+      plainPort: 0

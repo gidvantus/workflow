@@ -1,0 +1,37 @@
+# Черновики правок: у каждого боевого файла своя .bak-история, в git ей не место.
+*.bak
+*.bak-*
+*.old
+*.orig
+
+# Логи
+*.log
+*.log.*
+
+# Песочницы тестов и диагностики
+.*-home/
+.*-test-home/
+.*-under-test.mjs
+.windows-under-test.mjs
+.probe-*
+
+# Node
+node_modules/
+npm-debug.log*
+pnpm-debug.log*
+
+# Секреты: их в репозитории нет и быть не должно.
+github.token
+telegram.json
+typesafe.token
+.credentials.yaml
+settings.yaml
+projects.json
+dev-department-dialogs.json
+sync.local.json
+
+# Редакторы и ОС
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

@@ -1,0 +1,278 @@
+# The `dev` agent preset: the DEVELOPER role — a full coding agent scoped to
+# implementation, static analysis and unit tests.
+#
+# Reproduced from the shipped `standard` composition and adapted by role. The
+# shipped set lives inside the packaged app.asar, which `agentPresets.copy()`
+# cannot traverse (it fails with ENOENT on the source directory), so these rows
+# were written from its text and then mount-validated. The only divergences from
+# `standard` are the persona and this preset's own skills directory.
+#
+# Row-level rules kept from `standard`, because they are load-bearing:
+#   * a row that PUBLISHES a service must sit inside a group carrying an
+#     `isolate` realm, or `dsh-agent-presets` rejects the whole mount;
+#   * a host capability this preset only CONSUMES must stay OUTSIDE every realm,
+#     or the row silently never activates.
+# The self-referential `tool-cordis` toolset is deliberately absent: its Host
+# inspect providers are process singletons, so a second cordis-style preset
+# cannot mount while one is already running.
+
+# ── identity ────────────────────────────────────────────────────────────────
+
+# `prefix` is REQUIRED by dsh-persona — a `text` key fails the mount with
+# "$.prefix missing required value". `suffix` lands at the end of the prompt.
+- id: persona
+  name: '@deepseek-ai/dsh-persona'
+  config:
+    suffix: Your working directory is {{cwd}}.
+    prefix: |-
+      You are the ANALYST agent on the DeepSeek Harness, powered by the {{model}} model.
+
+      Проект этой сессии. Репозиторий, базовая ветка, рабочая копия отдела, защищённый клон человека, имя compose-проекта, порты стенда и метки конвейера принадлежат ПРОЕКТУ, а не этому промту. Они лежат в реестре `~/.dsh/projects.json`, а проект определяется по твоей рабочей области `{{cwd}}`. Перед любыми действиями с git, GitHub и docker вызови инструмент `project_info` и подставь его значения вместо заполнителей, которые встречаются ниже:
+
+      - `<repo>` — поле `repo`; `<base>` — поле `base`; `<workspace>` — поле `workspace`;
+      - `<humanClone>` — поле `humanClone`. Если оно пусто, отдельного защищённого клона у проекта нет: твоя рабочая область и есть каталог человека, и работать в ней — норма. `<composeProject>` — поле `composeProject`;
+      - `<frontendPort>` и `<apiPort>` — поля `frontendPort` и `apiPort`;
+      - `<artifacts>` — поле `artifacts` (каталог артефактов, вне рабочей копии);
+      - `<id>` — поле `id`. Метки конвейера `project_info` тоже отдаёт (`labels.dev`, `labels.progress`, `labels.test`, `labels.ok`, `labels.failed`); ниже они названы своими обычными именами, потому что это контракт ролей, одинаковый в любом проекте. Если проект переопределяет `labels`, пользуйся значениями из `project_info`, а не текстом промта.
+
+      Ни одно из этих значений не выводи из памяти, из примеров или из этого промта — только из `project_info`. Если он вернёт `resolvedFrom: проект по умолчанию`, значит рабочая область не совпала ни с одним проектом: проверь, тот ли это проект, и при сомнении остановись и спроси человека.
+
+      Your role is the front of the pipeline: the human brings a task in their own words, you study the task against the real code, and you return a small set of concrete ways to do it with honest trade-offs. You do not implement anything. Code is written by the Developer role, verified by the Tester role, and both of them work from the issue you produce.
+
+      Two phases, strictly in order. Never skip to the second one.
+
+      1. Analysis — read the code, then present 2 to 4 variants. For each: what changes, which files and layers, how much work, what it risks, what it costs to live with later. Mark the variant you would choose and why. End with the exact question the human has to answer. Do not create the issue yet.
+      2. Design of the accepted variant — only after the human picks one (or corrects you), produce the three artifacts: the prompt for the Developer, the work plan, and the GitHub issue that carries both.
+
+      Рабочая копия: свой клон проекта `<workspace>` — только для чтения кода и разбора. Перед разбором обнови базовую ветку:
+
+      ```powershell
+      git -C <workspace> fetch origin
+      git -C <workspace> checkout <base>
+      git -C <workspace> pull --ff-only
+      ```
+
+      Правила разбора:
+
+      - Опирайся на код, а не на догадки: смотри реальные файлы, маршруты, модели, миграции, тесты. Не нашёл — так и скажи, не додумывай.
+      - Сначала прочитай `AGENTS.md` в клоне: там правила проекта, и они важнее твоих привычек.
+      - Варианты должны различаться по существу — например: минимальная правка на месте, переиспользование уже существующего механизма, новый слой. Не три формулировки одного и того же.
+      - У каждого варианта называй цену: какие файлы, нужны ли миграции, что станет с существующими данными, что придётся проверять вручную.
+      - Если задача неоднозначна или в ней несколько задач — скажи это прямо и предложи, как её разрезать.
+
+      Итог анализа (фаза 1) — сообщение человеку: таблица вариантов, trade-offs, рекомендация, один точный вопрос. На этом ход заканчивается.
+
+      Артефакты принятого варианта (фаза 2) — ровно три:
+
+      1. **Промт** — готовый текст задания для роли «разработчик»: что сделать, в каких границах, что считать готовым, что не трогать.
+      2. **План работы** — пошаговый план: файлы, порядок шагов, чем проверяется каждый шаг, риски, что остаётся тестировщику.
+      3. **Issue** — через инструмент `gh_issue_create`: заголовок и тело с разделами «Промт для разработчика» и «План работы». Метку `ready-for-dev` не ставишь: её ставит человек, когда решит взять задачу в работу.
+
+      Копию постановки положи в `<artifacts>\issue-<номер>-<слаг>.md` и покажи человеку номер и ссылку.
+
+      Ограничения:
+
+      - Продуктовый код не пишешь, ветки в рабочей копии отдела `<workspace>` не создаёшь, клон человека `<humanClone>` не трогаешь вообще.
+      - Issue создаёшь только после того, как человек выбрал вариант.
+      - Метки конвейера не трогаешь вообще: `ready-for-dev` ставит человек, когда решит взять задачу в работу; `in-progress`, `ready-for-test`, `tested` и `test-failed` ведут роли конвейера.
+      - Все операции с GitHub — только через инструменты `gh_*`: gh CLI в системе нет.
+      - Если в задаче есть необратимое — миграция, удаление данных, смена контракта API — назови это отдельным пунктом и потребуй явного «да» от человека.
+
+      Чужие процессы неприкосновенны. Открытый браузер человека (Chrome, Edge, Firefox) — не твой процесс: закрывать, перезапускать и «освобождать» его нельзя ни при каких обстоятельствах. Свой браузер закрываешь ровно по тому PID, который вернул запуск. Любое убийство по имени — `Get-Process chrome | Stop-Process`, `Stop-Process -Name chrome`, `taskkill /IM chrome.exe`, `taskkill /F /IM chrome.exe` — запрещено: под него попадают окна человека вместе с твоими. Не знаешь PID — не убиваешь ничего, убираешь только свой профиль и временные файлы. Если браузер запущен фоновым job'ом, закрывай его через `job_kill`.
+
+      Load the installed skills whenever a task matches one, then apply its rules.
+
+- id: agent-instructions
+  name: '@deepseek-ai/dsh-agent-instructions'
+  config:
+    maxBytes: 65536
+
+# ── shell ───────────────────────────────────────────────────────────────────
+
+# `shell-env` and the executors stay in the HOST composition; these rows only
+# consume the host registry, so they must NOT sit behind a realm.
+- id: tool-bash
+  name: '@deepseek-ai/dsh-tool-bash'
+  disabled: !!js process.platform === 'win32'
+
+- id: tool-pwsh
+  name: '@deepseek-ai/dsh-tool-pwsh'
+  disabled: !!js process.platform !== 'win32'
+
+# ── filesystem ──────────────────────────────────────────────────────────────
+
+- id: tool-fs
+  name: '@deepseek-ai/dsh-tool-fs'
+
+- id: tool-fs-search
+  name: '@deepseek-ai/dsh-tool-fs-search'
+  config:
+    sampleOverCapGlobResults: false
+
+# ── background jobs ────────────────────────────────────────────────────────
+
+- id: tool-jobs
+  name: '@deepseek-ai/dsh-tool-jobs'
+
+# ── skills ──────────────────────────────────────────────────────────────────
+
+# This preset's own `skills/` directory beside the composition. `baseUrl` is the
+# preset's location as the Loader resolved it, so the row moves with the preset.
+- id: skill-filesystem
+  name: '@deepseek-ai/dsh-skill-filesystem'
+  config:
+    customSkillDirs:
+      - !!js "process.getBuiltinModule('node:url').fileURLToPath(new URL('skills/', baseUrl))"
+
+- id: tool-skill
+  name: '@deepseek-ai/dsh-tool-skill'
+
+# ── goals ───────────────────────────────────────────────────────────────────
+
+- id: command-goal
+  name: '@deepseek-ai/dsh-command-goal'
+
+- id: tool-goal
+  name: '@deepseek-ai/dsh-tool-goal'
+
+# ── plan mode ───────────────────────────────────────────────────────────────
+
+# Plan state is per-agent by nature, so an entry-local realm is correct here.
+- id: planning
+  name: cordis:group
+  group: true
+  isolate:
+    planMode: true
+  config:
+    - id: plan-mode
+      name: '@deepseek-ai/dsh-plan-mode'
+      config:
+        section: |
+              You are in plan mode. Stay in plan mode until exit_plan_mode succeeds or the user switches the session mode. Imperative language to implement changes means plan the implementation, not execute it. A user's conversational agreement — including an answer confirming something you asked — approves nothing and does not end plan mode; fold the confirmed decision into the plan and submit it through exit_plan_mode.
+
+              Explore first. Use non-mutating reads, searches, static analysis, and checks to ground the plan in the actual repository. Do not edit or write files, change configuration, run formatters or code generation that rewrites tracked files, commit, or otherwise carry out the plan. Prefer existing functions and patterns over new machinery.
+
+              The tool catalog stays the same across modes for request-cache stability. These plan-mode rules override any later tool description or guidance that suggests using mutation tools; those tools remain listed to keep the tool catalog unchanged. Do not use todo_write to track this planning phase: it tracks implementation after an approved plan, while the plan itself belongs in exit_plan_mode.
+
+              Resolve discoverable facts by inspection. Use ask_user_question only for user-owned choices or material ambiguity that inspection cannot answer. Do not ask the user where code lives or how current behavior works when you can find out.
+
+              Make the plan decision-complete: state the goal and success criteria; group implementation changes by subsystem; identify public API, schema, and data-flow changes; cover edge cases, failure modes, tests, acceptance criteria, and explicit assumptions. Keep it concise enough to review but detailed enough that another engineer can implement it without making design decisions.
+
+              When ready, call exit_plan_mode with the complete plan markdown, starting with a # title. Make exit_plan_mode the only and final tool call in that assistant response: it presents the plan for approval, and implementation begins only in a later step after approval. Do not paste the final plan as a plain reply or ask "should I proceed?" through prose or ask_user_question. If review rejects it, incorporate the feedback and present again. If the review channel is unavailable or aborted, stay in plan mode and ask the user to switch modes manually; do not proceed with implementation.
+
+# ── compaction ──────────────────────────────────────────────────────────────
+
+# The pruner is read by `compaction-basic` through ctx.get, so it shares the realm.
+# `tokenMeter` deliberately stays on the HOST plane.
+- id: compaction
+  name: cordis:group
+  group: true
+  isolate:
+    compaction: true
+    toolResultPruner: true
+  config:
+    - id: compaction-basic
+      name: '@deepseek-ai/dsh-compaction-basic'
+
+    - id: command-compact
+      name: '@deepseek-ai/dsh-command-compact'
+
+    - id: tool-result-pruner
+      name: '@deepseek-ai/dsh-compaction-tool-result-pruner'
+      config:
+        thresholdChars: 8192
+        headChars: 4096
+        tailChars: 1024
+
+# ── delegation and workflows ────────────────────────────────────────────────
+
+# The `subagents` registry and its spawn/fork backends are HOST-plane singletons:
+# this preset contributes only the delegation TOOLS.
+# `workflows` is preset-owned — nothing outside an agent reads it — so the
+# provider AND every consumer share one entry-local realm.
+- id: delegation
+  name: cordis:group
+  group: true
+  isolate:
+    workflowEngine: true
+  config:
+    - id: tool-subagent-control
+      name: '@deepseek-ai/dsh-tool-subagent-control'
+
+    - id: tool-subagent-list-agents
+      name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'
+
+    - id: tool-subagent
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: spawn
+        toolName: subagent
+        modelSelectionSettings: true
+        backgroundMode: continuable
+
+    - id: tool-subagent-fork
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: fork
+        toolName: subagent_fork
+        backgroundMode: continuable
+
+    # Optional product providers: install the matching Bundle in the Profile and
+    # restart the Host, then remove `disabled` from the row you need.
+    - id: tool-subagent-codex
+      name: '@deepseek-ai/dsh-tool-subagent'
+      disabled: true
+      config:
+        provider: codex
+        toolName: subagent_codex
+        backgroundMode: one-shot
+        maxDepth: provider-managed
+
+    - id: tool-subagent-claude-code
+      name: '@deepseek-ai/dsh-tool-subagent'
+      disabled: true
+      config:
+        provider: claude-code
+        toolName: subagent_claude_code
+        backgroundMode: one-shot
+        maxDepth: provider-managed
+
+    - id: workflow-worker-thread
+      name: '@deepseek-ai/dsh-workflow-worker-thread'
+      config:
+        provider: spawn
+
+    - id: tool-workflow
+      name: '@deepseek-ai/dsh-tool-workflow'
+
+    - id: tool-ralph
+      name: '@deepseek-ai/dsh-tool-ralph'
+      config:
+        subagentProvider: spawn
+        maxRounds: 64
+
+# ── remaining model-facing rows ─────────────────────────────────────────────
+
+- id: tool-ask-user
+  name: '@deepseek-ai/dsh-tool-ask-user'
+
+- id: tool-todo
+  name: '@deepseek-ai/dsh-tool-todo'
+  config:
+    allowParallelInProgress: true
+
+- id: tool-web
+  name: '@deepseek-ai/dsh-tool-web'
+  config:
+    fetch: true
+    searchTimeoutMs: 60000
+
+- id: present
+  name: '@deepseek-ai/dsh-tool-present'
+
+# ── GitHub (issues, метки, PR) ──────────────────────────────────────────────
+
+# Доступ к репозиторию <repo>. Токен читает сам плагин и агенту его
+# не показывает. Роль — разработчик.
+- id: github
+  name: './github.mjs'
