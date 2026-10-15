@@ -47,9 +47,17 @@
     },
     "brain": {
       "title": "Brain",
-      "workspace": "D:\\Development\\VideCoding\\Brain",
+      "repo": "gidvantus/mybrain",
+      "base": "main",
+      "workspace": "D:\\Agents\\Brain",
+      "humanClone": "D:\\Development\\VideCoding\\Brain",
       "department": {
-        "enabled": false
+        "enabled": false,
+        "windows": [
+          { "start": "13:00", "stop": "04:00" },
+          { "start": "07:00", "stop": "09:00" }
+        ],
+        "maxRework": 3
       },
       "telegram": {
         "token": "<токен бота>",
