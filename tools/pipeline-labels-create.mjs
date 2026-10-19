@@ -37,14 +37,18 @@ function post(url, payload) {
   })
 }
 
+// Все метки, которые нужны конвейеру и могли не существовать в репозитории.
+const LABELS = [
+  { name: 'for-code-review', color: '8250DF', description: 'Изменение готово к код-ревью' },
+  { name: 'ready-for-design', color: 'D876E3', description: 'Задача дизайнеру: визуальный слой' },
+]
+
 for (const [id, project] of Object.entries(registry.projects || {})) {
   if (!project.repo) continue
-  const res = await post('/repos/' + project.repo + '/labels', {
-    name: 'for-code-review',
-    color: '8250DF',
-    description: 'Изменение готово к код-ревью',
-  })
-  if (res.status === 201) console.log(id + ' (' + project.repo + '): метка создана')
-  else if (res.status === 422) console.log(id + ' (' + project.repo + '): уже существует')
-  else console.log(id + ' (' + project.repo + '): ' + res.status + ' ' + JSON.parse(res.body).message)
+  for (const label of LABELS) {
+    const res = await post('/repos/' + project.repo + '/labels', label)
+    if (res.status === 201) console.log(id + ' (' + project.repo + '): ' + label.name + ' создана')
+    else if (res.status === 422) console.log(id + ' (' + project.repo + '): ' + label.name + ' уже есть')
+    else console.log(id + ' (' + project.repo + '): ' + label.name + ' → ' + res.status + ' ' + JSON.parse(res.body).message)
+  }
 }

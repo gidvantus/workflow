@@ -97,6 +97,7 @@ calls.length = 0
 const info = JSON.parse(await byName('project_info').execute({}, { agent: { id: 'session-1' } }))
 check('project_info отдаёт метку ревью', info.labels.review, 'for-code-review')
 check('project_info отдаёт метку теста', info.labels.test, 'ready-for-test')
+check('project_info отдаёт маршрут дизайнера', info.labels.design, 'ready-for-design')
 check('project_info называет проект по рабочей области', info.resolvedFrom, 'рабочая область сессии')
 
 status = 403

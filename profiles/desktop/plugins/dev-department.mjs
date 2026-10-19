@@ -38,13 +38,16 @@
 //
 // Конвейер строго по одному тикету НА ПРОЕКТ:
 //   ready-for-dev  → диспетчер ставит in-progress и поднимает сессию dev
-//   dev            → PR + комментарий, ставит for-code-review, снимает in-progress
+//   ready-for-design → то же самое, но сессию поднимает design и дальше ведёт её
+//                    (метка маршрута остаётся на тикете, по ней же возврат в
+//                    доработку уходит обратно дизайнеру)
+//   dev / design   → PR + комментарий, ставит for-code-review, снимает in-progress
 //   code-review    → читает PR и код вокруг, пишет замечания в PR
 //                    принял    → ready-for-test
 //                    не принял → ready-for-dev  (тот же тикет возвращается в dev)
 //   tester         → разворачивает ветку, проверяет
 //                    прошло  → tested          (цикл закрыт, можно брать следующий)
-//                    не прошло → test-failed  (тот же тикет возвращается в dev)
+//                    не прошло → test-failed  (тот же тикет возвращается исполнителю)
 //   Новый тикет проекта не берётся, пока его текущий не получил tested.
 //
 // Возврат из ревью в доработку считается такой же доработкой, как возврат из
@@ -231,6 +234,9 @@ const INFRA_BACKOFF_MAX_MS = 40 * 60 * 1000
 // labels у проекта — тогда работает оно.
 const PIPELINE_LABELS = {
   dev: 'ready-for-dev',
+  // Маршрут, а не ступень: тикет с этой меткой отдают дизайнеру вместо
+  // разработчика. Дальше путь общий — PR, код-ревью, тест.
+  design: 'ready-for-design',
   progress: 'in-progress',
   review: 'for-code-review',
   test: 'ready-for-test',
@@ -702,6 +708,13 @@ export default {
       return github('GET', '/repos/' + project.repo + '/issues/' + number)
     }
 
+    // Кто реализует тикет: дизайнер, если он помечен меткой маршрута, иначе
+    // разработчик. Метка остаётся на тикете всю жизнь задачи, поэтому по ней же
+    // возврат в доработку уходит обратно дизайнеру, а не разработчику.
+    function implementer(issue, L) {
+      return has(issue, L.design) ? 'design' : 'dev'
+    }
+
     // Единственный «активный» тикет проекта: сначала тот, что ждёт код-ревью,
     // затем ждущий тестировщика, затем отклонённый, затем взятый, но не доведённый.
     // Ревью стоит выше теста: оно раньше в конвейере, и тикет, помеченный обоими
@@ -713,15 +726,15 @@ export default {
       const waitingTest = issues.filter((i) => has(i, L.test))
       if (waitingTest.length > 0) return { role: 'tester', issue: waitingTest[0] }
       const failedTest = issues.filter((i) => has(i, L.failed))
-      if (failedTest.length > 0) return { role: 'dev', issue: failedTest[0], kind: 'rework' }
+      if (failedTest.length > 0) return { role: implementer(failedTest[0], L), issue: failedTest[0], kind: 'rework' }
       const taken = issues.filter((i) => has(i, L.progress))
-      if (taken.length > 0) return { role: 'dev', issue: taken[0], kind: 'continue' }
+      if (taken.length > 0) return { role: implementer(taken[0], L), issue: taken[0], kind: 'continue' }
       return null
     }
 
     function queuedOf(project, issues) {
       const L = project.labels
-      return issues.filter((i) => has(i, L.dev)
+      return issues.filter((i) => (has(i, L.dev) || has(i, L.design))
         && !has(i, L.progress) && !has(i, L.review) && !has(i, L.test) && !has(i, L.ok) && !has(i, L.failed))
     }
 
@@ -796,9 +809,10 @@ export default {
     // в списке сессий непонятно, какая из них чем занята.
     function titleFor(project, presetId, issue) {
       const role = presetId === 'dev' ? 'Разработчик'
-        : presetId === 'tester' ? 'Тестировщик'
-          : presetId === 'code-review' ? 'Код-ревьюер'
-            : presetId
+        : presetId === 'design' ? 'Дизайнер'
+          : presetId === 'tester' ? 'Тестировщик'
+            : presetId === 'code-review' ? 'Код-ревьюер'
+              : presetId
       const flat = String((issue && issue.title) || '').replace(/\s+/g, ' ').trim()
       const clipped = flat.length > 60 ? flat.slice(0, 57) + '…' : flat
       const head = role + ' [' + project.id + '] #' + issue.number
@@ -914,8 +928,11 @@ export default {
         ', compose-проект ' + project.composeProject + '.'
     }
 
-    function devPrompt(project, issue, kind, repeat) {
+    // Задание исполнителю. Роль одна из двух — разработчик или дизайнер; путь,
+    // метки и отчёт одинаковые, различаются только скилл и границы работы.
+    function implementerPrompt(project, issue, kind, repeat, role) {
       const L = project.labels
+      const isDesign = role === 'design'
       // Возврат в доработку бывает из теста и из код-ревью. Различаем по метке:
       // от теста остаётся test-failed, от ревьюера — ready-for-dev.
       const reworkWhy = kind !== 'rework'
@@ -931,7 +948,9 @@ export default {
             : 'Отдел разработки: возьми issue #' + issue.number + ' «' + issue.title + '».',
         '',
         projectHeader(project),
-        'Действуй по скиллу dev-workflow: прочитай issue через gh_issue, работай в ветке feature/' + issue.number + '-<слаг> от ' + project.base + ', доведи до pull request и передай на код-ревью.',
+        isDesign
+          ? 'Действуй по скиллу design-delivery: прочитай issue через gh_issue, работай в ветке feature/' + issue.number + '-<слаг> от ' + project.base + ', доведи до pull request и передай на код-ревью.'
+          : 'Действуй по скиллу dev-workflow: прочитай issue через gh_issue, работай в ветке feature/' + issue.number + '-<слаг> от ' + project.base + ', доведи до pull request и передай на код-ревью.',
         'Обязательный финал: комментарий в issue (что сделано, ветка, номер PR, что не проверено), затем метка ' + L.review + ' и снятие ' + L.progress + '.',
         'В ' + project.base + ' и main не коммить. PR не мержить. Работай только в своей рабочей копии отдела ' + project.workspace +
           (project.humanClone ? ': в клон человека ' + project.humanClone + ' не заходить вообще.' : '.'),
@@ -942,10 +961,21 @@ export default {
         'Поставь себе цель, чтобы довести работу до конца: один ход не должен обрывать задачу на середине.',
         'Если упёрся в то, что сам решить не можешь, — напиши это комментарием в issue и остановись.',
       ]
+      if (isDesign) {
+        lines.splice(4, 0, 'Границы дизайнера: меняешь только визуальный слой — стили, токены, вёрстку, компоненты представления, макеты. Бизнес-логику, схему данных и API не трогай: если задача без этого не решается, опиши это в issue и передай разработчику.')
+      }
       if (kind === 'rework') lines.splice(2, 0, 'Начни с комментариев в issue и в PR этого тикета: там причина отказа, замечания и воспроизводящая команда.')
       if (kind === 'continue') lines.splice(2, 0, 'Сначала посмотри, что уже сделано: ветка могла остаться, коммиты могли быть запушены, в issue может быть комментарий.')
       if (repeat) lines.splice(2, 0, 'Это тот же диалог, в котором шла работа по тикету: ветка, коммиты и замечания ревьюера или тестировщика уже в его истории — продолжай с этого места, заново ничего не поднимай.')
       return lines.join('\n')
+    }
+
+    function devPrompt(project, issue, kind, repeat) {
+      return implementerPrompt(project, issue, kind, repeat, 'dev')
+    }
+
+    function designPrompt(project, issue, kind, repeat) {
+      return implementerPrompt(project, issue, kind, repeat, 'design')
     }
 
     function testerPrompt(project, issue, repeat) {
@@ -1002,18 +1032,19 @@ export default {
         await github('POST', '/repos/' + project.repo + '/issues/' + issue.number + '/comments', {
           body: 'Отдел разработки: задача выдавалась ' + (attempts - 1) + ' раз(а) и не сдвинулась — снимаю с конвейера, нужен человек.',
         })
-        for (const name of [L.progress, L.review, L.failed, L.test]) {
+        for (const name of [L.progress, L.review, L.failed, L.test, L.design]) {
           try {
             await github('DELETE', '/repos/' + project.repo + '/issues/' + issue.number + '/labels/' + encodeURIComponent(name))
           } catch (error) { /* метки могло и не быть */ }
         }
         forgetDialog(project, 'dev', issue.number)
+        forgetDialog(project, 'design', issue.number)
         forgetDialog(project, 'tester', issue.number)
         forgetDialog(project, 'code-review', issue.number)
         st.run.entries.push({ number: issue.number, title: issue.title, role: role, outcome: 'снят с конвейера после ' + (attempts - 1) + ' попыток без результата' })
         return { action: 'dropped', project: project.id, issue: issue.number, reason: 'no progress after ' + (attempts - 1) + ' attempts' }
       }
-      if (role === 'dev') {
+      if (role === 'dev' || role === 'design') {
         const kind = decision.kind || 'new'
         const rounds = st.rework[issue.number] || 0
         if (kind === 'rework' && rounds >= project.department.maxRework) {
@@ -1026,6 +1057,7 @@ export default {
             } catch (error) { /* метки могло и не быть */ }
           }
           forgetDialog(project, 'dev', issue.number)
+          forgetDialog(project, 'design', issue.number)
           forgetDialog(project, 'tester', issue.number)
           forgetDialog(project, 'code-review', issue.number)
           st.run.entries.push({ number: issue.number, title: issue.title, outcome: 'снят с конвейера после ' + rounds + ' доработок' })
@@ -1044,10 +1076,13 @@ export default {
             } catch (error) { /* метки могло и не быть */ }
           }
         }
-        const sessionId = await startSession(project, 'dev', devPrompt(project, issue, kind, !!existingDialog(project, 'dev', issue.number)), issue)
-        st.session = { role: 'dev', issue: issue.number, title: issue.title, sessionId, startedAt: new Date().toISOString() }
+        const prompt = role === 'design'
+          ? designPrompt(project, issue, kind, !!existingDialog(project, 'design', issue.number))
+          : devPrompt(project, issue, kind, !!existingDialog(project, 'dev', issue.number))
+        const sessionId = await startSession(project, role, prompt, issue)
+        st.session = { role: role, issue: issue.number, title: issue.title, sessionId, startedAt: new Date().toISOString() }
         st.run.sessions = (st.run.sessions || 0) + 1
-        return { action: 'dispatched', project: project.id, role: 'dev', issue: issue.number, sessionId }
+        return { action: 'dispatched', project: project.id, role: role, issue: issue.number, sessionId }
       }
 
       if (role === 'code-review') {
@@ -1172,6 +1207,7 @@ export default {
           // Тикет принят — диалоги по нему закрыты.
           if (outcome === 'принято тестировщиком') {
             forgetDialog(project, 'dev', finished.issue)
+            forgetDialog(project, 'design', finished.issue)
             forgetDialog(project, 'tester', finished.issue)
             forgetDialog(project, 'code-review', finished.issue)
           }
@@ -1197,12 +1233,13 @@ export default {
       // хотя бы один диапазон работы.
       if (inWin || opts.ignoreWindow) {
         const queued = pickQueued(project, issues)
-        // Тикет вернулся с код-ревью: метка ready-for-dev, но диалог разработки
+        // Тикет вернулся с код-ревью: метка ready-for-dev, но диалог исполнителя
         // по нему уже был. Это доработка, а не новая задача — иначе пара
-        // dev↔code-review качалась бы без ограничения.
+        // исполнитель↔code-review качалась бы без ограничения.
         if (queued) {
-          const kind = existingDialog(project, 'dev', queued.number) ? 'rework' : 'new'
-          return dispatch(project, { role: 'dev', issue: queued, kind: kind })
+          const role = implementer(queued, project.labels)
+          const kind = existingDialog(project, role, queued.number) ? 'rework' : 'new'
+          return dispatch(project, { role: role, issue: queued, kind: kind })
         }
         return null
       }
@@ -1392,7 +1429,7 @@ export default {
                 ? 'поднять code-review по issue #' + active.issue.number
                 : active.role === 'tester'
                   ? 'поднять tester по issue #' + active.issue.number
-                  : 'поднять dev по issue #' + active.issue.number + ' (' + (active.kind || 'new') + ')')
+                  : 'поднять ' + active.role + ' по issue #' + active.issue.number + ' (' + (active.kind || 'new') + ')')
               : (queued.length > 0
                 ? (inWin ? 'в окне — взять issue #' + queued[0].number : 'вне окна — ждать расписания, тогда issue #' + queued[0].number)
                 : 'делать нечего: очередь пуста')

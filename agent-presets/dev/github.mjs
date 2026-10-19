@@ -9,6 +9,7 @@
 //
 // Контракт между ролями — метки, созданные в репозитории:
 //   ready-for-dev → in-progress → for-code-review → ready-for-test → tested | test-failed
+//   ready-for-design вместо ready-for-dev — тот же путь, но исполнитель дизайнер
 //
 // Базовая ветка — поле base проекта: в неё открываются PR и от неё
 // ответвляются feature-ветки.
@@ -32,6 +33,7 @@ import https from 'node:https'
 
 const PIPELINE_LABELS = {
   dev: 'ready-for-dev',
+  design: 'ready-for-design',
   progress: 'in-progress',
   review: 'for-code-review',
   test: 'ready-for-test',

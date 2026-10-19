@@ -32,7 +32,7 @@ function get(url) {
   })
 }
 
-const wanted = ['ready-for-dev', 'in-progress', 'for-code-review', 'ready-for-test', 'tested', 'test-failed']
+const wanted = ['ready-for-dev', 'ready-for-design', 'in-progress', 'for-code-review', 'ready-for-test', 'tested', 'test-failed']
 for (const [id, project] of Object.entries(registry.projects || {})) {
   if (!project.repo) { console.log(id + ': без GitHub'); continue }
   const res = await get('/repos/' + project.repo + '/labels?per_page=100')

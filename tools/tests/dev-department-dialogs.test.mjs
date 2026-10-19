@@ -386,6 +386,34 @@ check('петля ограничена лимитом доработок', round
 check('тикет снят с конвейера', dropped && dropped.action, 'dropped')
 check('причина снятия', dropped && dropped.reason, 'too many rework rounds')
 
+console.log('\n=== сценарий 6: метка ready-for-design уводит тикет дизайнеру ===')
+reset({ number: 600, title: 'Демо-тикет 600', labels: ['ready-for-design'], state: 'open' })
+app = await boot()
+step = await tick(app)
+check('дизайн-тикет уходит дизайнеру', step.result.action + ':' + step.result.role, 'dispatched:design')
+const designDialog = step.result.sessionId
+check('задание по скиллу design-delivery', lastPrompt().text.includes('design-delivery'), true)
+check('границы визуального слоя названы', lastPrompt().text.includes('только визуальный слой'), true)
+check('диалог открыт для роли design', Object.keys((await app.status()).dialogs).includes('vahta:design:600'), true)
+
+// Дизайнер открыл PR и передал на ревью; метка маршрута остаётся на тикете.
+endTurn(designDialog)
+setLabels(600, ['ready-for-design', 'for-code-review'])
+await tick(app)
+step = await tick(app)
+check('дальше — код-ревьюер', step.result.action + ':' + step.result.role, 'dispatched:code-review')
+const review600 = step.result.sessionId
+
+// Ревьюер вернул: тикет снова должен уйти ДИЗАЙНЕРУ, а не разработчику.
+endTurn(review600)
+setLabels(600, ['ready-for-design', 'ready-for-dev'])
+await tick(app)
+step = await tick(app)
+check('возврат из ревью уходит дизайнеру', step.result.action + ':' + step.result.role, 'dispatched:design')
+check('и это прежний диалог дизайнера', step.result.sessionId, designDialog)
+check('доработка засчитана', step.state.projects.vahta.rework[600], 1)
+check('сказано, что вернул ревьюер', lastPrompt().text.includes('код-ревьюер вернул'), true)
+
 console.log('\n=== служебное ===')
 const ids = allRequestIds.map((p) => p.requestId)
 check('requestId уникальны', new Set(ids).size, ids.length)
