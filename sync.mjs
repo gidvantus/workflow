@@ -36,7 +36,7 @@ if (!fs.existsSync(dshHome)) {
 // ── что синхронизируем ──────────────────────────────────────────────────────
 
 // Роли отдела: один каталог — один пресет. Новый пресет добавляется сюда строкой.
-const PRESETS = ['analyst', 'design', 'dev', 'devops-delivery', 'jev', 'security-review', 'tester']
+const PRESETS = ['analyst', 'code-review', 'design', 'dev', 'devops-delivery', 'jev', 'security-review', 'tester']
 
 // Хост-плоскость: путь внутри каталога установки совпадает с путём в репозитории.
 const HOST_FILES = [
@@ -64,6 +64,7 @@ const TOOL_FILES = [
   { from: '.dev-department-dialogs-test.mjs', to: 'tools/tests/dev-department-dialogs.test.mjs' },
   { from: '.dev-department-windows-test.mjs', to: 'tools/tests/dev-department-windows.test.mjs' },
   { from: '.tester-images-test.mjs', to: 'tools/tests/tester-images.test.mjs' },
+  { from: '.code-review-tools-test.mjs', to: 'tools/tests/code-review-tools.test.mjs' },
   { from: '.analyst-github-test.mjs', to: 'tools/tests/analyst-github.test.mjs' },
   { from: '.session-errors.mjs', to: 'tools/session-errors.mjs' },
   { from: '.session-tail.mjs', to: 'tools/session-tail.mjs' },

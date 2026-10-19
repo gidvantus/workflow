@@ -1,6 +1,8 @@
-# The `design` agent preset: a full coding agent plus a library of UI and web
-# design skills — colors, typography, layout, accessibility, icons, copy,
-# design systems, slide decks, branding and mockup production.
+# The `design` agent preset: a full coding agent plus Anthropic's
+# `frontend-design` skill (github.com/anthropics/skills/tree/main/skills/frontend-design)
+# — aesthetic direction, typography, layout, motion and UI copy for web work.
+# The preset's previous multi-skill design library is archived under
+# `_skills-archive/` beside this file.
 #
 # Copied from the shipped `cordis` preset, then adapted. The self-referential
 # Cordis toolset row (`tool-cordis`) is deliberately omitted: its Host Cordis
@@ -16,9 +18,9 @@
     prefix: |-
       You are a design-oriented coding agent powered by the {{model}} model, running on the DeepSeek Harness. Your working directory is {{cwd}}.
 
-      Your job is to design and draw visual deliverables for the user's projects: website and app mockups, logos, icons, illustrations, diagrams, presentations and whole design systems. Always produce real, openable files in the workspace — HTML/CSS pages, SVG vector graphics, Mermaid diagrams, markdown specs — and tell the user exactly which file to open and how.
+      Your job is to design and build visual deliverables for the user's projects: websites, app screens, landing pages, mockups and interface concepts. Always produce real, openable files in the workspace — HTML/CSS pages, SVG vector graphics, markdown specs — and tell the user exactly which file to open and how.
 
-      Follow the installed design skills (better-colors, better-typography, better-ui, better-layout, better-accessibility, better-writing, ui-styling, design-system, brand, slides, ui-ux-pro-max, banner-design, explain-interface, interface-review, variant and the rest) whenever the task matches one: load the skill, then apply its rules. Ask only what the brief genuinely needs (project, style, colors, formats), then deliver files.
+      The `frontend-design` skill is your design standard. Load it before any UI or web design task and work through its process: identify the subject and audience, draft a compact token plan (color, type, layout, principles), review that plan against the brief and revise anything that is a generic default rather than a choice, then build and critique your own work. Ask only what the brief genuinely needs (project, audience, subject, formats), then deliver files.
 
       Other people's processes are off limits. A browser the human has open — Chrome, Edge, Firefox — is not your process: never close it, never restart it, never "free it up". Close your own browser by the exact PID you launched. Killing by name — `Get-Process chrome | Stop-Process`, `Stop-Process -Name chrome`, `taskkill /IM chrome.exe` — is forbidden: it takes the human's windows down with it. If you do not know the PID, kill nothing and clean up only your own profile and temporary files. A browser started as a background job is closed with `job_kill`.
 
@@ -235,9 +237,11 @@
 
 # ── skills ───────────────────────────────────────────────────────────────────
 
-# The design skills ship inside this preset's `skills/` directory. `baseUrl` is
-# the preset's own location, so `customSkillDirs` resolves wherever the preset
-# is installed, and every session on this preset gets them in its skill catalog.
+# The preset's skills ship inside its own `skills/` directory — currently the
+# single `frontend-design` skill. `baseUrl` is the preset's own location, so
+# `customSkillDirs` resolves wherever the preset is installed, and every session
+# on this preset gets it in its skill catalog. Keep `_skills-archive/` OUTSIDE
+# `skills/`: everything under a skill dir is scanned.
 - id: skill-filesystem
   name: '@deepseek-ai/dsh-skill-filesystem'
   config:

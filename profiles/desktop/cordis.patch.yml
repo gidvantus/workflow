@@ -27,3 +27,22 @@
     # ручка распознавания POST /dsh-voice/transcribe (host-половина, ffmpeg+whisper).
     - id: dsh-voice-input
       name: './plugins/voice-input/index.mjs'
+
+    # Playwright MCP (microsoft/playwright-mcp): браузерная автоматизация для
+    # тестирования веб-приложений. Локальная установка пакета + системный Chrome
+    # в headless. Инструменты видны модели как mcp__playwright__<tool>.
+    - id: mcp-playwright
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: playwright
+        transport: stdio
+        command: 'C:\Program Files\nodejs\node.exe'
+        args:
+          - 'C:\Users\DiKsu\.dsh\mcp\playwright-mcp\node_modules\@playwright\mcp\cli.js'
+          - '--headless'
+          - '--browser'
+          - 'chrome'
+          - '--output-dir'
+          - 'C:\Users\DiKsu\.dsh\mcp\playwright-mcp\output'
+        cwd: 'C:\Users\DiKsu\.dsh\mcp\playwright-mcp'
+        failOnStartupError: false

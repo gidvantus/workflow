@@ -8,7 +8,7 @@
 // ошибочном вызове утечь токену некуда.
 //
 // Контракт между ролями — метки, созданные в репозитории:
-//   ready-for-dev → in-progress → ready-for-test → tested | test-failed
+//   ready-for-dev → in-progress → for-code-review → ready-for-test → tested | test-failed
 //
 // Базовая ветка — поле base проекта: в неё открываются PR и от неё
 // ответвляются feature-ветки.
@@ -33,6 +33,7 @@ import https from 'node:https'
 const PIPELINE_LABELS = {
   dev: 'ready-for-dev',
   progress: 'in-progress',
+  review: 'for-code-review',
   test: 'ready-for-test',
   ok: 'tested',
   failed: 'test-failed',

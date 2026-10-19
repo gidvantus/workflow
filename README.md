@@ -27,6 +27,7 @@ profiles/                       хост-плоскость DSH: процесс�
 agent-presets/                  агент-плоскость DSH: роли
   analyst/                      аналитик: разбор задачи, варианты, промт + план + issue
   dev/                          разработчик: код, статика, юнит-тесты, PR
+  code-review/                  код-ревьюер: чтение диффа, замечания в PR, решение меткой
   tester/                       тестировщик: приёмочный слой, вердикт со скриншотами
   security-review/              ревью безопасности
   devops-delivery/              доставка и эксплуатация
@@ -126,6 +127,7 @@ cd tools/tests
 node dev-department-dialogs.test.mjs    # конвейер, диалоги, сбой модели, сторож зависших
 node dev-department-windows.test.mjs    # расписание окон смен
 node tester-images.test.mjs             # вложения-скриншоты в вердикте тестировщика
+node code-review-tools.test.mjs         # gh_pr_comment и метка for-code-review
 node analyst-github.test.mjs            # инструменты аналитика
 ```
 

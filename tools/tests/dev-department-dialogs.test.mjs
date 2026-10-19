@@ -244,7 +244,7 @@ function reset(extraIssues) {
   if (extraIssues) issues.set(extraIssues.number, extraIssues)
 }
 
-console.log('=== сценарий 1: конвейер и один диалог на тикет ===')
+console.log('=== сценарий 1: конвейер dev → код-ревью → тест и один диалог на тикет ===')
 issues.set(100, { number: 100, title: 'Демо-тикет 100', labels: ['ready-for-dev'], state: 'open' })
 let app = await boot()
 let step = await tick(app)
@@ -253,23 +253,41 @@ const devDialog = step.result.sessionId
 check('рабочая область отдела зарегистрирована', createdWorkspaces, [{ path: WORKSPACE, title: 'Тест — отдел' }])
 
 endTurn(devDialog)
+setLabels(100, ['for-code-review'])
+await tick(app)
+step = await tick(app)
+check('после разработки — код-ревьюер', step.result.action + ':' + step.result.role, 'dispatched:code-review')
+const reviewDialog = step.result.sessionId
+check('ревьюеру сказано про метку', lastPrompt().text.includes('for-code-review'), true)
+check('ревьюеру сказано про комментарии в PR', lastPrompt().text.includes('gh_pr_comment'), true)
+check('диалоги записаны с проектом', Object.keys((await app.status()).dialogs).sort(), ['vahta:code-review:100', 'vahta:dev:100'])
+
+endTurn(reviewDialog)
 setLabels(100, ['ready-for-test'])
 await tick(app)
 step = await tick(app)
-check('дальше — тестировщик', step.result.action + ':' + step.result.role, 'dispatched:tester')
+check('ревьюер принял — тестировщик', step.result.action + ':' + step.result.role, 'dispatched:tester')
 const testerDialog = step.result.sessionId
-check('диалоги записаны с проектом', Object.keys((await app.status()).dialogs).sort(), ['vahta:dev:100', 'vahta:tester:100'])
+check('диалоги всех трёх ролей', Object.keys((await app.status()).dialogs).sort(), ['vahta:code-review:100', 'vahta:dev:100', 'vahta:tester:100'])
 
 endTurn(testerDialog)
 setLabels(100, ['test-failed'])
 await tick(app)
 step = await tick(app)
-check('возврат в доработку', step.result.action + ':' + step.result.role, 'dispatched:dev')
-check('НОВЫЙ диалог не создан', created.length, 2)
+check('возврат из теста в доработку', step.result.action + ':' + step.result.role, 'dispatched:dev')
+check('НОВЫЙ диалог не создан', created.length, 3)
 check('доработка в прежнем диалоге', step.result.sessionId, devDialog)
 check('в задании есть пометка о продолжении', lastPrompt().text.includes('Это тот же диалог'), true)
+check('сказано, что вернул тестировщик', lastPrompt().text.includes('тестировщик вернул'), true)
 
 endTurn(devDialog)
+setLabels(100, ['for-code-review'])
+await tick(app)
+step = await tick(app)
+check('повторное ревью в прежнем диалоге', step.result.sessionId, reviewDialog)
+check('сказано, что ревью повторное', lastPrompt().text.includes('ПОВТОРНО'), true)
+
+endTurn(reviewDialog)
 setLabels(100, ['ready-for-test'])
 await tick(app)
 step = await tick(app)
@@ -335,6 +353,38 @@ check('снятие отправлено', cancelled, [frozen])
 advance(60 * 1000)
 step = await tick(app)
 check('после снятия конвейер идёт', step.result.action, 'dispatched')
+
+console.log('\n=== сценарий 5: возврат с код-ревью — доработка, и лимит доработок держит петлю ===')
+reset({ number: 500, title: 'Демо-тикет 500', labels: ['ready-for-dev'], state: 'open' })
+app = await boot()
+step = await tick(app)
+const dev5 = step.result.sessionId
+check('разработчик взял тикет', step.result.action + ':' + step.result.role, 'dispatched:dev')
+
+let rounds = 0
+let dropped = null
+for (let i = 0; i < 5 && !dropped; i += 1) {
+  endTurn(dev5)
+  setLabels(500, ['for-code-review'])
+  await tick(app)
+  const reviewStep = await tick(app)
+  if (reviewStep.result.action !== 'dispatched') { dropped = reviewStep.result; break }
+  endTurn(reviewStep.result.sessionId)
+  setLabels(500, ['ready-for-dev'])
+  const closing = await tick(app)
+  check('ревьюер вернул — это движение, а не «без изменений»', closing.result.outcome, 'код-ревьюер вернул в доработку')
+  const devStep = await tick(app)
+  if (devStep.result.action === 'dropped') { dropped = devStep.result; break }
+  rounds += 1
+  if (rounds === 1) {
+    check('доработка в прежнем диалоге разработчика', devStep.result.sessionId, dev5)
+    check('сказано, что вернул код-ревьюер', lastPrompt().text.includes('код-ревьюер вернул'), true)
+    check('счётчик доработок растёт', devStep.state.projects.vahta.rework[500], 1)
+  }
+}
+check('петля ограничена лимитом доработок', rounds, 3)
+check('тикет снят с конвейера', dropped && dropped.action, 'dropped')
+check('причина снятия', dropped && dropped.reason, 'too many rework rounds')
 
 console.log('\n=== служебное ===')
 const ids = allRequestIds.map((p) => p.requestId)

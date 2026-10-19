@@ -21,7 +21,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-const ROLES = ['dev', 'tester', 'analyst']
+const ROLES = ['dev', 'tester', 'analyst', 'code-review']
 const PERMISSION_PRESET = 'danger-full-access'
 
 function logPath() {

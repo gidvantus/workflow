@@ -1,6 +1,6 @@
 ---
 name: dev-workflow
-description: Use when implementing or fixing product code in this project — choosing the fast feedback commands, taking a GitHub issue, branch and PR conventions, returning the department working copy to the base branch, respecting the dev/tester role split, and preparing a hand-off the Tester agent can verify.
+description: Use when implementing or fixing product code in this project — choosing the fast feedback commands, taking a GitHub issue, branch and PR conventions, returning the department working copy to the base branch, respecting the dev/code-review/tester role split, answering review findings in the PR, and preparing a hand-off the Code Review agent can approve.
 ---
 
 > **Проект.** Репозиторий, базовая ветка, рабочая копия отдела, защищённый клон человека,
@@ -22,7 +22,7 @@ You are the `dev` role. Your output is a working change plus the evidence that t
 1. Read the issue and the surrounding code before writing any. Prefer an existing helper over a new one.
 2. Make the smallest change that satisfies the task.
 3. Run the fast layers, fix, repeat.
-4. Commit, push, open the PR, report in the issue, hand off to the tester.
+4. Commit, push, open the PR, report in the issue, hand off to the code reviewer.
 5. Вернуть рабочую копию на `<base>`, чтобы следующая задача ветвилась от чистого основания.
 
 ## GitHub: репозиторий и ветки
@@ -67,16 +67,29 @@ gh_pr_create({
 
 База PR — `<base>` по умолчанию. **Мерж PR делает человек.** Ты PR не мержишь и не переводишь из черновика.
 
-## GitHub: отчёт и передача на тест
+## GitHub: отчёт и передача на код-ревью
 
 1. `gh_issue({ "number": 52 })` — прочитать задачу целиком, включая комментарии, если они там есть.
 2. Перед началом работы:
    `gh_issue_labels({ "number": 52, "add": ["in-progress"], "remove": ["ready-for-dev"] })`
 3. После PR — комментарий в issue через `gh_issue_comment`: что сделано, ветка, номер PR, что осталось непроверенным.
-4. Передача тестировщику:
-   `gh_issue_labels({ "number": 52, "add": ["ready-for-test"], "remove": ["in-progress"] })`
+4. Передача код-ревьюеру:
+   `gh_issue_labels({ "number": 52, "add": ["for-code-review"], "remove": ["in-progress"] })`
 
-Метки-контракт: `ready-for-dev` → `in-progress` → `ready-for-test` → `tested` / `test-failed`. Ставить чужие метки (`tested`, `test-failed`) — не твоя работа.
+Метки-контракт: `ready-for-dev` → `in-progress` → `for-code-review` → `ready-for-test` → `tested` / `test-failed`.
+Ставить чужие метки (`ready-for-test`, `tested`, `test-failed`) — не твоя работа: `ready-for-test` ставит код-ревьюер, когда принимает код.
+
+## Доработка после код-ревью
+
+Ревьюер возвращает тикет с меткой `ready-for-dev` и замечаниями **в PR**, а не в issue.
+Порядок:
+
+1. Читаешь замечания: `gh_pr({ "number": <номер PR>, "comments": true })` и комментарии issue.
+2. Правки делаешь **в той же ветке** `feature/<номер>-<слаг>` — новый PR не открываешь.
+3. Коммитишь, пушишь, отвечаешь в PR на каждое замечание: что изменил или почему не согласен.
+4. Короткий комментарий в issue о том, что доработано, и снова `for-code-review` (снять `ready-for-dev`, если он ещё висит).
+
+Спорное замечание не игнорируешь и не правишь молча в свою пользу: отвечаешь аргументом в PR, решение остаётся за ревьюером и человеком.
 
 ## После работы: вернуть рабочую копию на <base>
 
@@ -133,11 +146,12 @@ Report facts, not prose:
 - `changedFiles` — paths you touched
 - `commands` — the exact command lines you ran
 - `result` — observed status per command
-- `unverified` — what you deliberately left to the Tester
+- `unverified` — what you deliberately left to the Code Review and Tester agents
 
 ## Boundaries
 
 - Do not write Playwright E2E, visual baselines, or a11y reports — the `tester` role owns those.
+- Do not approve your own work: `ready-for-test` ставит код-ревьюер, `tested` — тестировщик.
 - Do not modify a test to make it pass. A failing test is information.
 - Add `data-testid` to anything a test will select. Positional CSS chains are forbidden here.
 - Never commit directly to `<base>` or `main`, and never merge a PR yourself.
