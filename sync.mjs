@@ -68,6 +68,8 @@ const TOOL_FILES = [
   { from: '.analyst-github-test.mjs', to: 'tools/tests/analyst-github.test.mjs' },
   { from: '.session-errors.mjs', to: 'tools/session-errors.mjs' },
   { from: '.session-tail.mjs', to: 'tools/session-tail.mjs' },
+  { from: '.github-labels-probe.mjs', to: 'tools/pipeline-labels-probe.mjs' },
+  { from: '.github-labels-create.mjs', to: 'tools/pipeline-labels-create.mjs' },
 ]
 
 // Что не синхронизируется никогда: черновики, логи, артефакты прогонов.
