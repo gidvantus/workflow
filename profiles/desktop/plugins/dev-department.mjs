@@ -1270,6 +1270,7 @@ export default {
         lines.splice(4, 0, ...boundary)
       }
       if (kind === 'rework') lines.splice(2, 0, 'Начни с комментариев в issue и в PR этого тикета: там причина отказа, замечания и воспроизводящая команда.')
+      if (kind === 'rework') lines.splice(2, 0, 'Это доработка №' + (projectState(project.id).rework[issue.number] || 0) + ' из ' + project.department.maxRework + ': её номер записан комментарием диспетчера в issue.')
       // Макет постановки — часть задания, а не украшение: раскладку, состояния и
       // тексты берут из него, чтобы фронтендер не придумывал их заново.
       if (has(issue, L.mockupsReady)) {
@@ -1326,7 +1327,21 @@ export default {
         lines.splice(2, 0, 'Это тот же диалог, где ты уже проверял этот тикет: тикет возвращался в доработку. Сверься со своим прошлым вердиктом в комментариях и проверь в первую очередь то, что тогда сломалось.')
         lines.push('Если прошлый дефект исправлен и новых нет — метка ' + L.ok + '.')
       }
+      lines.push(reworkCounterLine(project, issue))
       return lines.join('\n')
+    }
+
+    // Номер следующего возврата. Счётчик доработок растёт на шаге выдачи, поэтому
+    // ревьюер и тестировщик видят его до возврата — и пишут номер в свой
+    // комментарий. Иначе по истории тикета не понять, который это круг.
+    function reworkCounterLine(project, issue) {
+      const rounds = projectState(project.id).rework[issue.number] || 0
+      const limit = project.department.maxRework
+      const next = rounds + 1
+      return 'Счётчик доработок по тикету: ' + rounds + ' из ' + limit + '. ' +
+        (next > limit
+          ? 'Если вернёшь — это будет возврат №' + next + ' при лимите ' + limit + ': диспетчер снимет тикет с конвейера и позовёт человека, поэтому в комментарии перечисли все правки сразу.'
+          : 'Если вернёшь — это будет возврат №' + next + ': укажи номер в комментарии в issue и что именно вернул.')
     }
 
     // Код-ревьюер: читает PR и код вокруг него, замечания пишет в PR, а решение
@@ -1347,6 +1362,7 @@ export default {
         'Поставь себе цель, чтобы довести ревью до конца: тикет не должен остаться без метки.',
       ]
       if (repeat) lines.splice(2, 0, 'Это тот же диалог, где ты уже ревьюил этот тикет: твои прошлые замечания и правки разработчика в его истории — проверь в первую очередь то, что тогда вернул.')
+      lines.push(reworkCounterLine(project, issue))
       // Первая половина полного стека ревьюится отдельно и раньше фронтенда:
       // иначе контракт и серверная логика едут в тест непроверенными.
       if (has(issue, L.areaFullstack) && !has(issue, L.phaseFrontend)) {
@@ -1548,7 +1564,9 @@ export default {
         const rounds = st.rework[issue.number] || 0
         if (kind === 'rework' && rounds >= project.department.maxRework) {
           await github('POST', '/repos/' + project.repo + '/issues/' + issue.number + '/comments', {
-            body: 'Отдел разработки: тикет возвращался из код-ревью или теста ' + rounds + ' раз(а) и снят с конвейера — нужен человек.',
+            body: 'Отдел разработки: лимит доработок исчерпан — этот возврат был бы №' + (rounds + 1) +
+              ' при лимите ' + project.department.maxRework + '. Тикет снят с конвейера, нужен человек:' +
+              ' поставь ' + L.dev + ', и счётчики вместе с диалогами обнулятся.',
           })
           for (const name of [L.progress, L.review, L.failed, L.frontend, L.phaseFrontend, L.ok, L.dev, L.mockup, L.mockupsReady]) {
             try {
@@ -1564,6 +1582,19 @@ export default {
           return { action: 'dropped', project: project.id, issue: issue.number, reason: 'too many rework rounds' }
         }
         if (kind === 'rework') st.rework[issue.number] = rounds + 1
+        // Счётчик доработок живёт в памяти диспетчера и в тикете нигде не
+        // виден. Пишем номер круга в issue: по комментариям должно быть
+        // понятно, который это возврат из ревью или теста.
+        if (kind === 'rework') {
+          try {
+            await github('POST', '/repos/' + project.repo + '/issues/' + issue.number + '/comments', {
+              body: 'Отдел разработки: доработка №' + (rounds + 1) + ' из ' + project.department.maxRework +
+                ' (возврат ' + (has(issue, L.failed) ? 'из теста' : 'из код-ревью') + ').',
+            })
+          } catch (error) {
+            state.lastError = 'комментарий о номере доработки: ' + (error && error.message ? error.message : String(error))
+          }
+        }
         // Захват нормализуем здесь, а не в агенте: у конвейера должен оставаться
         // ровно один активный маркер, иначе следующий шаг неоднозначен.
         if (kind === 'new' || kind === 'rework' || kind === 'stage') {
