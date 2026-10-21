@@ -75,6 +75,9 @@ const TOOL_FILES = [
 
 // Что не синхронизируется никогда: черновики, логи, артефакты прогонов.
 const EXCLUDE = /\.bak(-|\.|$)|\.log(-|\.|$)|^\.coverage$|^coverage-|\.tmp$/
+// Архив прежних наборов скиллов роли — кладбище, а не рабочий файл: в репозиторий
+// он не едет, иначе каждый пресет тянет за собой сотни чужих страниц.
+const EXCLUDE_PATH = /(^|[\\/])_skills-archive([\\/]|$)/
 
 function walk(root) {
   if (!fs.existsSync(root)) return []
@@ -85,10 +88,72 @@ function walk(root) {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const full = path.join(dir, entry.name)
       if (entry.isDirectory()) stack.push(full)
-      else if (!EXCLUDE.test(entry.name)) out.push(path.relative(root, full))
+      else if (!EXCLUDE.test(entry.name)) {
+        const rel = path.relative(root, full)
+        if (!EXCLUDE_PATH.test(rel)) out.push(rel)
+      }
     }
   }
   return out
+}
+
+// Обход всех файлов каталога без исключений: по нему уборка понимает, что в
+// репозитории лишнее.
+function walkAll(root) {
+  if (!fs.existsSync(root)) return []
+  const out = []
+  const stack = [root]
+  while (stack.length > 0) {
+    const dir = stack.pop()
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) stack.push(full)
+      else out.push(path.relative(root, full))
+    }
+  }
+  return out
+}
+
+function pruneEmptyDirs(root) {
+  if (!fs.existsSync(root)) return
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue
+    const full = path.join(root, entry.name)
+    pruneEmptyDirs(full)
+    if (fs.readdirSync(full).length === 0) fs.rmdirSync(full)
+  }
+}
+
+// Каталоги пресетов зеркалятся целиком, поэтому collect ещё и убирает из
+// репозитория файлы, которых в каталоге установки нет: без этого удалённые
+// скиллы и переименованные роли остаются в репозитории навсегда.
+function mirrorRoots() {
+  const roots = []
+  for (const preset of PRESETS) {
+    const source = path.join(dshHome, '.agent-presets', preset)
+    if (!fs.existsSync(source)) continue
+    roots.push({
+      source,
+      target: path.join(repo, 'agent-presets', preset),
+      keep: new Set(walk(source)),
+    })
+  }
+  return roots
+}
+
+function prune(roots) {
+  let removed = 0
+  for (const root of roots) {
+    if (!fs.existsSync(root.target)) continue
+    for (const rel of walkAll(root.target)) {
+      if (root.keep.has(rel)) continue
+      fs.rmSync(path.join(root.target, rel))
+      removed += 1
+      console.log('  удалено   ' + short(path.join(root.target, rel)))
+    }
+    pruneEmptyDirs(root.target)
+  }
+  return removed
 }
 
 function pairs() {
@@ -182,7 +247,16 @@ if (mode === 'status') {
     } else same += 1
   }
   console.log('')
-  console.log('совпадает: ' + same + ', различается: ' + diff + ', нет в репозитории: ' + missing)
+  let extra = 0
+  for (const root of mirrorRoots()) {
+    if (!fs.existsSync(root.target)) continue
+    for (const rel of walkAll(root.target)) {
+      if (root.keep.has(rel)) continue
+      extra += 1
+      console.log('  лишнее      ' + short(path.join(root.target, rel)))
+    }
+  }
+  console.log('совпадает: ' + same + ', различается: ' + diff + ', нет в репозитории: ' + missing + ', лишнего: ' + extra)
 }
 
 if (mode === 'collect') {
@@ -198,8 +272,9 @@ if (mode === 'collect') {
       console.log('  собрано   ' + short(pair.to))
     }
   }
+  const removed = prune(mirrorRoots())
   console.log('')
-  console.log('обновлено файлов: ' + copied)
+  console.log('обновлено файлов: ' + copied + ', удалено лишних: ' + removed)
   console.log('')
   console.log('проверка секретов:')
   scanSecrets()

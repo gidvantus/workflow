@@ -67,7 +67,7 @@ gh_pr_create({
 
 ```powershell
 cd <workspace>
-git status --porcelain          # должно быть пусто
+git status --porcelain
 git checkout <base>
 git pull --ff-only
 ```

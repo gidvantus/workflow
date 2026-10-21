@@ -58,7 +58,7 @@ cd ..\<id>-review-52
 foreach ($name in @('.env', 'compose.override.yaml', 'compose.override.yml')) {
   if (Test-Path "<workspace>\$name") { Copy-Item "<workspace>\$name" $name -Force }
 }
-Select-String -Path .env -Pattern 'PORT|PROJECT_NAME'   # что подставится в сборку
+Select-String -Path .env -Pattern 'PORT|PROJECT_NAME'
 ```
 
 - Переносишь только то, что есть: нет файла — пропускаешь, придумывать значения не нужно.
@@ -73,7 +73,7 @@ Select-String -Path .env -Pattern 'PORT|PROJECT_NAME'   # что подстав�
 compose-стенда, поэтому ветку разворачиваешь сборкой:
 
 ```powershell
-cd <workspace>       # или каталог своего worktree
+cd <workspace>
 docker compose -p <composeProject> up -d --build
 docker compose -p <composeProject> exec backend alembic upgrade head
 docker compose -p <composeProject> exec backend pytest -m dbtest
@@ -107,7 +107,7 @@ E2E, a11y и визуальные проверки идут в браузере,
 $chrome = Start-Process "C:\Program Files\Google\Chrome\Application\chrome.exe" `
   -ArgumentList '--headless=new','--remote-debugging-port=9333',
                 "--user-data-dir=<artifacts>\chrome-profile-<номер>" -PassThru
-$chrome.Id   # этот PID — и только он — твой
+$chrome.Id
 ```
 
 - **Фоновый job закрывается job'ом.** Запустил браузер через `pwsh` с `run_in_background: true` — закрывай тем же id через `job_kill`: это завершает ровно своё дерево процессов.
