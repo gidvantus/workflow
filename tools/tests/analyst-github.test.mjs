@@ -69,25 +69,32 @@ function check(name, actual, expected) {
 const byName = (n) => tools.find((t) => t.name === n)
 
 check('пресет зарегистрировал 9 инструментов', tools.map((t) => t.name).sort(), [
-  'gh_issue', 'gh_issue_comment', 'gh_issue_create', 'gh_issue_labels',
+  'gh_issue', 'gh_issue_comment', 'gh_issue_create', 'gh_issue_mockup',
   'gh_issues', 'gh_pr', 'gh_pr_create', 'gh_prs', 'project_info',
 ])
+check('общего редактора меток у аналитика нет', !!byName('gh_issue_labels'), false)
 check('gh_issue_create есть', !!byName('gh_issue_create'), true)
 
 const created = JSON.parse(await byName('gh_issue_create').execute({
   title: 'Отпуск: замещение на срок',
   body: '## Промт для разработчика\n…\n\n## План работы\n…',
-  labels: ['ready-for-dev'],
 }))
 check('метод и путь запроса', [calls[0].method, calls[0].path], ['POST', '/repos/gidvantus/vahta/issues'])
 check('заголовок уехал как есть', calls[0].body.title, 'Отпуск: замещение на срок')
-check('метка ready-for-dev уехала', calls[0].body.labels, ['ready-for-dev'])
+check('постановка не ставит меток', 'labels' in calls[0].body, false)
 check('тело содержит оба раздела', /## Промт для разработчика/.test(calls[0].body.body) && /## План работы/.test(calls[0].body.body), true)
 check('токен ушёл в заголовке, а не в теле', [calls[0].auth, 'token' in calls[0].body], ['Bearer test-token', false])
 check('ответ разобран', { number: created.number, url: created.url, labels: created.labels }, {
   number: 123, url: 'https://github.com/gidvantus/vahta/issues/123', labels: ['ready-for-dev'],
 })
 check('токен не утёк в результат инструмента', JSON.stringify(created).includes('test-token'), false)
+
+calls.length = 0
+await byName('gh_issue_mockup').execute({ number: 123, needed: true })
+check('пометка «нужен макет» ставит needs-mockup', [calls[0].method, calls[0].path, calls[0].body.labels], ['POST', '/repos/gidvantus/vahta/issues/123/labels', ['needs-mockup']])
+calls.length = 0
+await byName('gh_issue_mockup').execute({ number: 123, needed: false })
+check('пометка снимается отдельным вызовом', [calls[0].method, calls[0].path], ['DELETE', '/repos/gidvantus/vahta/issues/123/labels/needs-mockup'])
 
 calls.length = 0
 await byName('gh_issue_create').execute({ title: 'Без метки', body: 'тело' })

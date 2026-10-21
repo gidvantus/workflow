@@ -1,14 +1,14 @@
 ---
 name: testing-contract
-description: Use when verifying a change as the tester role — which acceptance layers to run, how to take a task marked ready-for-test from GitHub and deploy its feature branch in the department's own clone and stand without disturbing the developer, where artifacts must land, and the exact machine-readable verdict.
+description: Use when verifying a change as the tester role — which acceptance layers to run, how to deploy a feature branch in the project's own clone and stand without disturbing the developer, where artifacts must land, and the exact machine-readable verdict. Process rules (which task to take, which labels to set) come with the task.
 ---
 
-> **Проект.** Репозиторий, базовая ветка, рабочая копия отдела, защищённый клон человека,
-> имя compose-проекта, порты стенда и метки конвейера принадлежат проекту: они лежат в реестре
+> **Проект.** Репозиторий, базовая ветка, рабочая копия проекта, защищённый клон человека,
+> имя compose-проекта, порты стенда и каталог артефактов принадлежат проекту: они лежат в реестре
 > `~/.dsh/projects.json`, а проект определяется по рабочей области сессии. Перед первым действием
 > вызови инструмент `project_info` и подставь его значения вместо заполнителей, встречающихся ниже:
 > `<repo>`, `<base>`, `<workspace>`, `<humanClone>`, `<composeProject>`, `<frontendPort>`, `<apiPort>`,
-> `<artifacts>`, `<id>`. Метки конвейера берутся из `project_info.labels`, если проект их переопределяет.
+> `<artifacts>`, `<id>`. Имена меток задаёт проект: если он их переопределяет, пользуйся `project_info.labels`, а не примером из текста.
 > Пустое `<humanClone>` значит, что защищённого клона нет и рабочая область и есть каталог человека.
 > Пустой `<repo>` значит, что проект не связан с GitHub — инструменты `gh_*` на нём откажут.
 > Ничего не выводи из памяти и не подставляй значения по умолчанию.
@@ -19,17 +19,17 @@ You are the `tester` role. Your output is evidence plus one explicit verdict.
 
 ## GitHub: как забрать задачу
 
-- Репозиторий — `<repo>`. Рабочая копия отдела — `<workspace>`;
+- Репозиторий — `<repo>`. Рабочая копия проекта — `<workspace>`;
   клон человека (`<humanClone>`) **не трогать вообще**.
-- Задачи на проверку — issue с меткой `ready-for-test`:
-  `gh_issues({ "labels": "ready-for-test" })`.
-- Разработчик прикладывает к issue комментарий с веткой и номером PR. Найди PR:
+- Что именно проверять, называет задание. Если задание ссылается на issue — прочитай его целиком:
+  `gh_issue({ "number": 52 })`.
+- Автор изменения прикладывает к issue комментарий с веткой и номером PR. Найди PR:
   `gh_prs({ "issue": 52 })`, детали и изменённые файлы — `gh_pr({ "number": 53, "files": true })`.
 
-## GitHub: как развернуть ветку и не сломать разработчика
+## GitHub: как развернуть ветку и не сломать чужую работу
 
-Рабочая копия отдела — `<workspace>`. В клоне отдела ветку не переключай: у разработчика
-там может лежать незакоммиченная работа. Разворачивай ветку отдельным worktree:
+В рабочей копии проекта ветку не переключай: у коллеги там может лежать незакоммиченная
+работа. Разворачивай ветку отдельным worktree:
 
 ```powershell
 cd <workspace>
@@ -148,10 +148,7 @@ gh_issue_comment({
 Per test: id/title, status, the exact command, artifact path on failure.
 Then exactly one line: `VERDICT: GREEN` or `VERDICT: RED`.
 
-Вердикт уходит комментарием в issue через `gh_issue_comment`, затем метки:
-
-- прошло — `gh_issue_labels({ "number": 52, "add": ["tested"], "remove": ["ready-for-test"] })`;
-- не прошло — `gh_issue_labels({ "number": 52, "add": ["test-failed"], "remove": ["ready-for-test"] })`, и в комментарии обязательна наименьшая воспроизводящая команда.
+Вердикт уходит комментарием в issue через `gh_issue_comment`. Если задание называет метки — ставишь ровно их; сам метки не выбираешь. В вердикте обязательна наименьшая воспроизводящая команда — и для зелёного результата тоже назови, чем именно проверял.
 
 Проверяй сам, а не по описанию из PR: описание — это заявление, а не доказательство.
 

@@ -9,7 +9,6 @@
 //
 // Контракт между ролями — метки, созданные в репозитории:
 //   ready-for-dev → in-progress → for-code-review → ready-for-test → tested | test-failed
-//   ready-for-design вместо ready-for-dev — тот же путь, но исполнитель дизайнер
 //
 // Базовая ветка — поле base проекта: в неё открываются PR и от неё
 // ответвляются feature-ветки.
@@ -33,12 +32,17 @@ import https from 'node:https'
 
 const PIPELINE_LABELS = {
   dev: 'ready-for-dev',
-  design: 'ready-for-design',
+  frontend: 'ready-for-frontend',
   progress: 'in-progress',
   review: 'for-code-review',
   test: 'ready-for-test',
   ok: 'tested',
   failed: 'test-failed',
+  merged: 'merged',
+  // Ступень постановки: макет к тикету. DevOps удаляет каталог макетов перед
+  // слиянием, поэтому метки нужны и здесь.
+  mockup: 'needs-mockup',
+  mockupsReady: 'mockups-ready',
 }
 
 function dshHomeDir() {
@@ -366,7 +370,7 @@ export default {
 
     const prCreateTool = define(
       'gh_pr_create',
-      'Открыть pull request. База — базовая ветка проекта (project_info.base). Заголовок и тело должны ссылаться на issue; мерж PR делает человек, не агент.',
+      'Открыть pull request. База — базовая ветка проекта (project_info.base). Заголовок и тело должны ссылаться на issue. Автор PR его не мержит: слияние делает DevOps-инженер по метке tested.',
       {
         type: 'object',
         properties: {
@@ -449,6 +453,63 @@ export default {
       },
     )
 
+    // Слияние — работа DevOps-инженера в отделе: тикет приходит с меткой tested,
+    // то есть тестировщик уже дал зелёный вердикт. Метод по умолчанию merge-коммит:
+    // история этих репозиториев ведётся строками «Merge pull request #N from …»,
+    // и squash сломал бы её вид. Ветка задачи после слияния удаляется, иначе
+    // десятки мёртвых веток копятся в репозитории.
+    const prMergeTool = define(
+      'gh_pr_merge',
+      'Слить pull request в базовую ветку и удалить его ветку. Вызывать только для тикета с меткой tested: остальные PR мержит человек. При конфликте инструмент отказывает — тогда правка нужна в ветке задачи, а не слияние.',
+      {
+        type: 'object',
+        properties: {
+          number: { type: 'integer', description: 'Номер PR' },
+          method: {
+            type: 'string',
+            enum: ['merge', 'squash', 'rebase'],
+            description: 'Метод слияния; по умолчанию merge — так ведётся история этих репозиториев',
+          },
+          title: { type: 'string', description: 'Заголовок merge-коммита; по умолчанию его составит GitHub' },
+          deleteBranch: { type: 'boolean', description: 'Удалить ветку PR после слияния, по умолчанию true' },
+        },
+        required: ['number'],
+        additionalProperties: false,
+      },
+      async (a, p) => {
+        const pr = await api('GET', '/repos/' + p.repo + '/pulls/' + a.number)
+        if (pr.merged) throw new Error('PR #' + a.number + ' уже слит')
+        if (pr.state !== 'open') throw new Error('PR #' + a.number + ' не открыт (state=' + pr.state + ')')
+        if (pr.mergeable === false) {
+          throw new Error('PR #' + a.number + ' конфликтует с ' + pr.base.ref +
+            ': нужен ребейз ветки задачи, слияние запрещено')
+        }
+        const body = { merge_method: a.method || 'merge' }
+        if (typeof a.title === 'string' && a.title.trim() !== '') body.commit_title = a.title.trim()
+        const result = await api('PUT', '/repos/' + p.repo + '/pulls/' + a.number + '/merge', body)
+        const branch = pr.head && pr.head.ref
+        let branchDeleted = false
+        if (a.deleteBranch !== false && branch && branch !== pr.base.ref) {
+          try {
+            await api('DELETE', '/repos/' + p.repo + '/git/refs/heads/' +
+              branch.split('/').map((part) => encodeURIComponent(part)).join('/'))
+            branchDeleted = true
+          } catch (error) {
+            // Слияние уже состоялось: уборка ветки не должна выглядеть провалом
+            // слияния. Защищённую ветку оставляем как есть.
+          }
+        }
+        return {
+          number: a.number,
+          merged: !!(result && result.merged),
+          sha: result && result.sha,
+          message: result && result.message,
+          branch: branch || null,
+          branchDeleted: branchDeleted,
+        }
+      },
+    )
+
     ctx.effect(() => tools.register(issueTool), 'github:gh_issue')
     ctx.effect(() => tools.register(issuesTool), 'github:gh_issues')
     ctx.effect(() => tools.register(commentTool), 'github:gh_issue_comment')
@@ -456,6 +517,7 @@ export default {
     ctx.effect(() => tools.register(prCreateTool), 'github:gh_pr_create')
     ctx.effect(() => tools.register(prsTool), 'github:gh_prs')
     ctx.effect(() => tools.register(prTool), 'github:gh_pr')
+    ctx.effect(() => tools.register(prMergeTool), 'github:gh_pr_merge')
 
     const projectInfoTool = define(
       'project_info',

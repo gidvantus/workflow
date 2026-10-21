@@ -9,7 +9,6 @@
 //
 // Контракт между ролями — метки, созданные в репозитории:
 //   ready-for-dev → in-progress → for-code-review → ready-for-test → tested | test-failed
-//   ready-for-design вместо ready-for-dev — тот же путь, но исполнитель дизайнер
 //
 // Базовая ветка — поле base проекта: в неё открываются PR и от неё
 // ответвляются feature-ветки.
@@ -33,12 +32,15 @@ import https from 'node:https'
 
 const PIPELINE_LABELS = {
   dev: 'ready-for-dev',
-  design: 'ready-for-design',
   progress: 'in-progress',
   review: 'for-code-review',
   test: 'ready-for-test',
   ok: 'tested',
   failed: 'test-failed',
+  // Единственная метка, которую может поставить автор постановки: она включает
+  // ступень макета в конвейере.
+  mockup: 'needs-mockup',
+  mockupsReady: 'mockups-ready',
 }
 
 function dshHomeDir() {
@@ -353,31 +355,34 @@ export default {
       },
     )
 
-    const labelsTool = define(
-      'gh_issue_labels',
-      'Изменить метки issue: добавить и/или снять. Этим роль передаёт задачу дальше по конвейеру.',
+    // Метки этого пресета — только одна и только через отдельный инструмент.
+    // Общий редактор меток убран: он позволял поставить ready-for-dev или
+    // area:* «потому что так сказал процесс», и постановка уходила в работу без
+    // человека (issue #63). Оставить роль без права трогать конвейер надёжнее,
+    // чем ещё раз попросить его не использовать.
+    const mockupTool = define(
+      'gh_issue_mockup',
+      'Отметить постановку как визуальную: дизайнер подготовит макет до того, как задачу возьмут в работу. Других меток инструмент не ставит.',
       {
         type: 'object',
         properties: {
           number: { type: 'integer', description: 'Номер issue' },
-          add: { type: 'array', items: { type: 'string' }, description: 'Метки, которые поставить' },
-          remove: { type: 'array', items: { type: 'string' }, description: 'Метки, которые снять' },
+          needed: { type: 'boolean', description: 'true — макет нужен, false — снять пометку' },
         },
-        required: ['number'],
+        required: ['number', 'needed'],
         additionalProperties: false,
       },
       async (a, p) => {
-        const add = Array.isArray(a.add) ? a.add : []
-        const remove = Array.isArray(a.remove) ? a.remove : []
-        if (add.length === 0 && remove.length === 0) throw new Error('укажите add и/или remove')
-        if (add.length > 0) {
-          await api('POST', '/repos/' + p.repo + '/issues/' + a.number + '/labels', { labels: add })
-        }
-        for (const name of remove) {
-          await api('DELETE', '/repos/' + p.repo + '/issues/' + a.number + '/labels/' + encodeURIComponent(name))
+        const label = p.labels.mockup
+        if (a.needed) {
+          await api('POST', '/repos/' + p.repo + '/issues/' + a.number + '/labels', { labels: [label] })
+        } else {
+          try {
+            await api('DELETE', '/repos/' + p.repo + '/issues/' + a.number + '/labels/' + encodeURIComponent(label))
+          } catch (error) { /* метки могло и не быть */ }
         }
         const after = await api('GET', '/repos/' + p.repo + '/issues/' + a.number)
-        return { number: a.number, labels: labelNames(after) }
+        return { number: a.number, mockup: a.needed, labels: labelNames(after) }
       },
     )
 
@@ -466,23 +471,26 @@ export default {
       },
     )
 
+    // Метки в этом инструменте намеренно отсутствуют. Аналитик — автор
+    // постановки, а не движок конвейера: метку ready-for-dev ставит человек,
+    // маршрут area:* — диспетчер. Когда параметр labels был доступен, агент
+    // передавал его сам, потому что «данные проекта отдают метки» легко
+    // прочитать как разрешение (issue #63 так и ушёл в работу без человека).
+    // Убрать параметр надёжнее, чем ещё раз попросить его не использовать.
     const issueCreateTool = define(
       'gh_issue_create',
-      'Создать issue проекта. Так аналитик заводит задачу в конвейер: в теле — промт для разработчика и план работы.',
+      'Создать issue проекта: в теле — промт для разработчика и план работы. Метки инструмент не ставит: ready-for-dev ставит человек, маршрут area:* — диспетчер. Нужен макет — отдельный вызов gh_issue_mockup.',
       {
         type: 'object',
         properties: {
           title: { type: 'string', description: 'Заголовок issue' },
           body: { type: 'string', description: 'Тело issue (markdown): промт и план работы' },
-          labels: { type: 'array', items: { type: 'string' }, description: 'Метки, например ["ready-for-dev"]' },
         },
         required: ['title', 'body'],
         additionalProperties: false,
       },
       async (a, p) => {
-        const payload = { title: a.title, body: a.body }
-        if (Array.isArray(a.labels) && a.labels.length > 0) payload.labels = a.labels
-        const created = await api('POST', '/repos/' + p.repo + '/issues', payload)
+        const created = await api('POST', '/repos/' + p.repo + '/issues', { title: a.title, body: a.body })
         return issueView(created)
       },
     )
@@ -490,7 +498,7 @@ export default {
     ctx.effect(() => tools.register(issueCreateTool), 'github:gh_issue_create')
     ctx.effect(() => tools.register(issuesTool), 'github:gh_issues')
     ctx.effect(() => tools.register(commentTool), 'github:gh_issue_comment')
-    ctx.effect(() => tools.register(labelsTool), 'github:gh_issue_labels')
+    ctx.effect(() => tools.register(mockupTool), 'github:gh_issue_mockup')
     ctx.effect(() => tools.register(prCreateTool), 'github:gh_pr_create')
     ctx.effect(() => tools.register(prsTool), 'github:gh_prs')
     ctx.effect(() => tools.register(prTool), 'github:gh_pr')

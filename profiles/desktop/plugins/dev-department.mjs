@@ -37,18 +37,39 @@
 // и это ожидаемое поведение, а не сбой.
 //
 // Конвейер строго по одному тикету НА ПРОЕКТ:
-//   ready-for-dev  → диспетчер ставит in-progress и поднимает сессию dev
-//   ready-for-design → то же самое, но сессию поднимает design и дальше ведёт её
-//                    (метка маршрута остаётся на тикете, по ней же возврат в
-//                    доработку уходит обратно дизайнеру)
-//   dev / design   → PR + комментарий, ставит for-code-review, снимает in-progress
+//   ready-for-dev  → входная ступень: диспетчер сам ставит маршрут area:* по
+//                    тексту постановки (пути, расширения файлов, слова роли) и
+//                    следующим шагом раздаёт задачу уже нужной половине роли;
+//                    без уверенности метку не ставит и отдаёт тикет dev-fullstack
+//   needs-mockup   → ступень постановки: дизайнер рисует макет до клика человека,
+//                    ставит mockups-ready и на этом заканчивает — реализации нет
+//   dev-fullstack / dev-backend / dev-frontend → PR + комментарий, ставит
+//                    for-code-review, снимает in-progress
 //   code-review    → читает PR и код вокруг, пишет замечания в PR
 //                    принял    → ready-for-test
 //                    не принял → ready-for-dev  (тот же тикет возвращается в dev)
 //   tester         → разворачивает ветку, проверяет
-//                    прошло  → tested          (цикл закрыт, можно брать следующий)
+//                    прошло  → tested
 //                    не прошло → test-failed  (тот же тикет возвращается исполнителю)
-//   Новый тикет проекта не берётся, пока его текущий не получил tested.
+//   devops-delivery → сливает PR merge-коммитом в базовую ветку и удаляет ветку
+//                    задачи; метка tested — это зелёный вердикт тестировщика, а не
+//                    закрытая задача, поэтому финал делает DevOps-инженер
+//                    слито  → merged          (цикл закрыт, можно брать следующий)
+//                    конфликт → ready-for-dev (тикет возвращается разработчику)
+//   Новый тикет проекта не берётся, пока его текущий не получил merged.
+//
+// Разработчик разделён на две роли метками маршрута area:backend, area:frontend
+// и area:fullstack. Одиночная половина идёт тем же путём, что и раньше. Полный
+// стек проходит две ступени В ОДНОЙ ветке:
+//   area:fullstack → dev-backend → for-code-review → code-review (первая половина)
+//   ревьюер принял → ready-for-test
+//   диспетчер превращает его в ready-for-frontend: тестировщику тикет пока рано
+//   ready-for-frontend → dev-frontend, та же ветка и тот же PR
+//   → for-code-review → code-review (всё изменение) → ready-for-test → tester
+//   Если бэкенд-части в постановке не было (for-code-review без PR), диспетчер
+//   передаёт тикет фронтенду сразу, не гоняя ревьюера на пустой PR.
+// Возврат в доработку уходит той половине, чьи файлы в PR: маршрут решают пути
+// изменённых файлов, а метка area:* — только запасной вариант.
 //
 // Возврат из ревью в доработку считается такой же доработкой, как возврат из
 // теста: счётчик доработок у тикета один, иначе пара dev↔code-review может
@@ -234,14 +255,30 @@ const INFRA_BACKOFF_MAX_MS = 40 * 60 * 1000
 // labels у проекта — тогда работает оно.
 const PIPELINE_LABELS = {
   dev: 'ready-for-dev',
-  // Маршрут, а не ступень: тикет с этой меткой отдают дизайнеру вместо
-  // разработчика. Дальше путь общий — PR, код-ревью, тест.
-  design: 'ready-for-design',
+  // Ступень последовательного маршрута «бэкенд → фронтенд». Ставит её диспетчер,
+  // а не агент: на тикете полного стека код-ревью после бэкенд-части — это ещё не
+  // весь тикет, и фронтенд должен получить ту же ветку и тот же PR.
+  frontend: 'ready-for-frontend',
+  // Маршрут реализации. Метка живёт на тикете всю жизнь, поэтому возврат в
+  // доработку попадает той же роли, что делала изменение.
+  areaBackend: 'area:backend',
+  areaFrontend: 'area:frontend',
+  areaFullstack: 'area:fullstack',
+  // Фаза тикета полного стека: фронтенд-часть уже начата. Переживает in-progress,
+  // поэтому «продолжи» после зависшего хода не возвращается бэкендеру.
+  phaseFrontend: 'phase:frontend',
+  // Ступень постановки: дизайнер делает макет раньше, чем задача уходит в
+  // разработку. needs-mockup ставит автор постановки, mockups-ready — дизайнер.
+  // Пока второй метки нет, тикет в очередь разработки не попадает.
+  mockup: 'needs-mockup',
+  mockupsReady: 'mockups-ready',
   progress: 'in-progress',
   review: 'for-code-review',
   test: 'ready-for-test',
   ok: 'tested',
   failed: 'test-failed',
+  // Финальная ступень: тестировщик принял, DevOps-инженер слил PR.
+  merged: 'merged',
 }
 
 // Причина закрытия смены. Различать важно: окно закрывается само по часам,
@@ -327,6 +364,8 @@ function projectRow(registry, id, shared) {
       ? { token: String(raw.telegram.token), chatId: raw.telegram.chatId }
       : undefined,
     labels: Object.assign({}, PIPELINE_LABELS, raw.labels || {}),
+    // Каталоги половин работы. Необязательны: по умолчанию работают AREA_PREFIXES.
+    areas: raw.areas && typeof raw.areas === 'object' ? raw.areas : undefined,
     problems,
     department: {
       enabled,
@@ -672,7 +711,7 @@ export default {
 
     function projectState(id) {
       if (!state.projects[id]) {
-        state.projects[id] = { run: null, lastShiftKey: null, session: null, rework: {}, attempts: {}, infraFails: 0, backoffUntil: null }
+        state.projects[id] = { run: null, lastShiftKey: null, session: null, rework: {}, attempts: {}, dropped: {}, infraFails: 0, backoffUntil: null }
       }
       return state.projects[id]
     }
@@ -696,6 +735,23 @@ export default {
       // Реестр недоступен — миграция повторится при следующем запуске.
     }
 
+    // Роль dev стала dev-fullstack: ключ диалога содержит имя пресета, и без
+    // переноса агент потерял бы ветку, коммиты и замечания ревьюера по тикетам,
+    // начатым до переименования.
+    try {
+      let renamed = false
+      for (const key of Object.keys(state.dialogs)) {
+        if (!/^[^:]+:dev:[0-9]+$/.test(key)) continue
+        const next = key.replace(/^(.*):dev:([0-9]+)$/, '-fullstack:')
+        if (!state.dialogs[next]) state.dialogs[next] = state.dialogs[key]
+        delete state.dialogs[key]
+        renamed = true
+      }
+      if (renamed) writeDialogs(state.dialogs)
+    } catch (error) {
+      // Диалоги переедут при следующем запуске.
+    }
+
     // ── чтение состояния из GitHub ─────────────────────────────────────────
 
     async function loadIssues(project) {
@@ -708,11 +764,82 @@ export default {
       return github('GET', '/repos/' + project.repo + '/issues/' + number)
     }
 
-    // Кто реализует тикет: дизайнер, если он помечен меткой маршрута, иначе
-    // разработчик. Метка остаётся на тикете всю жизнь задачи, поэтому по ней же
-    // возврат в доработку уходит обратно дизайнеру, а не разработчику.
+    // Кто реализует тикет: маршрут задаёт метка, и живёт она на тикете всю жизнь
+    // задачи. Поэтому возврат в доработку уходит той же роли, а не первой
+    // попавшейся. Полный стек проходит две половины: сначала бэкенд, затем
+    // фронтенд — вторая половина помечена phaseFrontend.
     function implementer(issue, L) {
-      return has(issue, L.design) ? 'design' : 'dev'
+      if (has(issue, L.areaFullstack)) return has(issue, L.phaseFrontend) ? 'dev-frontend' : 'dev-backend'
+      if (has(issue, L.areaFrontend)) return 'dev-frontend'
+      if (has(issue, L.areaBackend)) return 'dev-backend'
+      // Без метки маршрута остаётся разработчик полного стека: старые тикеты и
+      // задачи вне разделения ролей должны доделываться, а не вставать.
+      return 'dev-fullstack'
+    }
+
+    // Каталоги проектов по половинам работы. Проект может переопределить их
+    // полем areas в реестре, но по умолчанию монорепо этих проектов закрываются
+    // этим списком.
+    const AREA_PREFIXES = {
+      backend: ['backend/', 'api/', 'app/backend/', 'app/api/'],
+      frontend: ['frontend/', 'web/', 'app/frontend/', 'app/web/'],
+    }
+
+    function areasOf(project) {
+      const raw = project.areas
+      if (!raw || typeof raw !== 'object') return AREA_PREFIXES
+      const backend = Array.isArray(raw.backend) ? raw.backend : AREA_PREFIXES.backend
+      const frontend = Array.isArray(raw.frontend) ? raw.frontend : AREA_PREFIXES.frontend
+      return { backend: backend, frontend: frontend }
+    }
+
+    // PR ищется по головной ветке: соглашение feature/<номер>-* — часть контракта
+    // ролей, поэтому номер тикета однозначно указывает на его PR.
+    async function findPr(project, number) {
+      const pulls = await github('GET', '/repos/' + project.repo + '/pulls?state=all&per_page=100&sort=updated&direction=desc')
+      return (pulls || []).filter((p) => p && p.head && String(p.head.ref).indexOf('feature/' + number + '-') === 0)[0] || null
+    }
+
+    // Файлы PR — единственный честный ответ на вопрос «кто это изменение делал».
+    // Метка врёт при смешанном изменении и после ручных правок человеком.
+    async function prChangedFiles(project, number) {
+      const pr = await findPr(project, number)
+      if (!pr) return null
+      const files = await github('GET', '/repos/' + project.repo + '/pulls/' + pr.number + '/files?per_page=100')
+      return (files || []).map((f) => String(f.filename || ''))
+    }
+
+    async function roleForRework(project, issue, L) {
+      let files = null
+      try {
+        files = await prChangedFiles(project, issue.number)
+      } catch (error) {
+        // GitHub не ответил — судим по меткам маршрута, как раньше.
+        state.lastError = 'файлы PR #' + issue.number + ': ' + (error && error.message ? error.message : String(error))
+      }
+      if (files && files.length > 0) {
+        const areas = areasOf(project)
+        let backend = 0
+        let frontend = 0
+        for (const file of files) {
+          const p = String(file).replace(/\\/g, '/').toLowerCase()
+          if (areas.backend.some((prefix) => p.indexOf(String(prefix).toLowerCase()) === 0)) backend += 1
+          else if (areas.frontend.some((prefix) => p.indexOf(String(prefix).toLowerCase()) === 0)) frontend += 1
+        }
+        if (frontend > backend) return 'dev-frontend'
+        if (backend > frontend) return 'dev-backend'
+      }
+      return implementer(issue, L)
+    }
+
+    // Дизайнера здесь нет намеренно: его диалог — ступень макета, то есть
+    // постановка, а не начатая работа. Считать её доработкой значило бы тратить
+    // бюджет доработок ещё до первой строки кода.
+    function anyImplementerDialog(project, issue) {
+      for (const presetId of ['dev-fullstack', 'dev-backend', 'dev-frontend']) {
+        if (existingDialog(project, presetId, issue.number)) return true
+      }
+      return false
     }
 
     // Единственный «активный» тикет проекта: сначала тот, что ждёт код-ревью,
@@ -721,26 +848,168 @@ export default {
     // (ревьюер принял, но метку не снял), должен доехать до ревью, а не проскочить.
     async function findActive(project, issues) {
       const L = project.labels
+      // Ступень фронтенда стоит первой: бэкенд-часть полного стека уже сделана,
+      // и тикет нельзя снова отдать ревьюеру или тестировщику — они увидят
+      // половину изменения.
+      const waitingFrontend = issues.filter((i) => has(i, L.frontend))
+      if (waitingFrontend.length > 0) return { role: 'dev-frontend', issue: waitingFrontend[0], kind: 'stage' }
       const waitingReview = issues.filter((i) => has(i, L.review))
       if (waitingReview.length > 0) return { role: 'code-review', issue: waitingReview[0], kind: 'review' }
       const waitingTest = issues.filter((i) => has(i, L.test))
       if (waitingTest.length > 0) return { role: 'tester', issue: waitingTest[0] }
+      // Принятый тестировщиком тикет — уже не финал: его сливает DevOps-инженер.
+      // Метка тестировщика означает его зелёный вердикт, а не закрытую задачу.
+      const waitingMerge = issues.filter((i) => has(i, L.ok))
+      if (waitingMerge.length > 0) return { role: 'devops-delivery', issue: waitingMerge[0], kind: 'merge' }
       const failedTest = issues.filter((i) => has(i, L.failed))
-      if (failedTest.length > 0) return { role: implementer(failedTest[0], L), issue: failedTest[0], kind: 'rework' }
+      if (failedTest.length > 0) {
+        return { role: await roleForRework(project, failedTest[0], L), issue: failedTest[0], kind: 'rework' }
+      }
       const taken = issues.filter((i) => has(i, L.progress))
-      if (taken.length > 0) return { role: implementer(taken[0], L), issue: taken[0], kind: 'continue' }
+      if (taken.length > 0) {
+        return { role: await roleForRework(project, taken[0], L), issue: taken[0], kind: 'continue' }
+      }
       return null
     }
 
     function queuedOf(project, issues) {
       const L = project.labels
-      return issues.filter((i) => (has(i, L.dev) || has(i, L.design))
-        && !has(i, L.progress) && !has(i, L.review) && !has(i, L.test) && !has(i, L.ok) && !has(i, L.failed))
+      return issues.filter((i) => has(i, L.dev)
+        && !has(i, L.progress) && !has(i, L.review) && !has(i, L.test) && !has(i, L.ok) && !has(i, L.failed)
+        // Макет — часть постановки: пока его нет, тикет в разработку не уходит.
+        // ready-for-dev при этом может стоять заранее, и это нормально.
+        && !(has(i, L.mockup) && !has(i, L.mockupsReady)))
     }
 
     function pickQueued(project, issues) {
       const queued = queuedOf(project, issues)
       return queued.length > 0 ? queued[0] : null
+    }
+
+    // ── входная ступень: маршрут по постановке ─────────────────────────────
+
+    // Человек ставит только ready-for-dev. Маршрут area:* отдел определяет сам
+    // по тексту постановки: явные пути и расширения файлов — сильный признак,
+    // словари ролей — слабый. Сомнение не разыгрывается: без уверенности метка
+    // не ставится, и тикет берёт общий разработчик, который умеет оба дерева.
+    const AREA_EXTENSIONS = {
+      backend: ['.py', '.sql'],
+      frontend: ['.tsx', '.jsx', '.css', '.scss', '.vue', '.svelte', '.html', '.ts', '.js'],
+    }
+
+    const AREA_WORDS = {
+      backend: ['fastapi', 'эндпоинт', 'миграц', 'схем', 'pytest', 'ruff', 'mypy', 'alembic', 'сервер', 'бэкенд', 'backend', 'контракт', 'sql'],
+      frontend: ['вёрстк', 'верстк', 'кнопк', 'компонент', 'экран', 'страниц', 'шапк', 'модал', 'фронтенд', 'frontend', 'react', 'tsx', 'vitest', 'eslint', 'prettier', 'интерфейс', 'макет', 'скриншот', 'css'],
+    }
+
+    function areaText(issue) {
+      return String((issue.title || '') + '\n' + (issue.body || '')).toLowerCase()
+    }
+
+    // Разбор постановки. Возвращает { area, evidence, score }.
+    // Сильные признаки — упоминание путей проекта и файлов с расширением: именно
+    // они показывают, какое дерево придётся менять. Слова роли — слабый признак,
+    // они встречаются и в чужой постановке, поэтому решают только когда сильных
+    // признаков нет вовсе. Если сильные есть у обеих сторон, маршрут — fullstack:
+    // лишняя половина работы дешевле, чем тикет, у которого не сделана половина.
+    function classifyArea(project, issue) {
+      const text = areaText(issue)
+      const words = text.split(/[^a-zа-яё0-9._-]+/).filter(Boolean)
+      const areas = areasOf(project)
+      const score = {
+        backend: { path: 0, ext: 0, word: 0 },
+        frontend: { path: 0, ext: 0, word: 0 },
+      }
+      const evidence = { backend: [], frontend: [] }
+
+      for (const side of ['backend', 'frontend']) {
+        for (const prefix of areas[side]) {
+          const needle = String(prefix || '').toLowerCase()
+          if (!needle) continue
+          const hits = text.split(needle).length - 1
+          if (hits > 0) {
+            score[side].path += hits
+            evidence[side].push('путь ' + prefix)
+          }
+        }
+        for (const ext of AREA_EXTENSIONS[side]) {
+          const found = words.filter((w) => w.endsWith(ext)).length
+          if (found > 0) {
+            score[side].ext += found
+            evidence[side].push('файлы ' + ext)
+          }
+        }
+        for (const stem of AREA_WORDS[side]) {
+          if (words.some((w) => w.indexOf(stem) === 0)) {
+            score[side].word += 1
+            evidence[side].push('слово ' + stem)
+          }
+        }
+      }
+
+      const strong = (side) => score[side].path > 0 || score[side].ext > 0
+      if (strong('backend') && !strong('frontend')) {
+        return { area: 'backend', evidence: evidence.backend, score: score }
+      }
+      if (strong('frontend') && !strong('backend')) {
+        return { area: 'frontend', evidence: evidence.frontend, score: score }
+      }
+      if (strong('backend') && strong('frontend')) {
+        return { area: 'fullstack', evidence: evidence.backend.concat(evidence.frontend), score: score }
+      }
+
+      const backend = score.backend.word
+      const frontend = score.frontend.word
+      if (backend > 0 && frontend === 0) return { area: 'backend', evidence: evidence.backend, score: score }
+      if (frontend > 0 && backend === 0) return { area: 'frontend', evidence: evidence.frontend, score: score }
+      if (backend > 0 && frontend > 0) {
+        return { area: 'fullstack', evidence: evidence.backend.concat(evidence.frontend), score: score }
+      }
+      return { area: null, evidence: [], score: score }
+    }
+
+    function areaLabelOf(area, L) {
+      return area === 'backend' ? L.areaBackend : area === 'frontend' ? L.areaFrontend : L.areaFullstack
+    }
+
+    function hasAnyArea(issue, L) {
+      return has(issue, L.areaBackend) || has(issue, L.areaFrontend) || has(issue, L.areaFullstack)
+    }
+
+    // Ставит маршрут тикету, которому его не поставили. Возвращает действие, чтобы
+    // следующий тик уже раздал задачу по метке, а не гадал повторно.
+    async function assignArea(project, issues) {
+      const L = project.labels
+      const open = queuedOf(project, issues).filter((i) => !hasAnyArea(i, L))
+      if (open.length === 0) return null
+      const issue = open[0]
+      const verdict = classifyArea(project, issue)
+      if (!verdict.area) return null
+      const label = areaLabelOf(verdict.area, L)
+      await github('POST', '/repos/' + project.repo + '/issues/' + issue.number + '/labels', { labels: [label] })
+      // Разметка — прогресс процесса, а не попытка исполнителя.
+      projectState(project.id).attempts[issue.number] = 0
+      const b = verdict.score.backend
+      const f = verdict.score.frontend
+      await github('POST', '/repos/' + project.repo + '/issues/' + issue.number + '/comments', {
+        body: 'Отдел разработки: маршрут по постановке — ' + label +
+          ' (пути/файлы: бэкенд ' + (b.path + b.ext) + ', фронтенд ' + (f.path + f.ext) +
+          '; слова: бэкенд ' + b.word + ', фронтенд ' + f.word + ').' +
+          '\nПризнаки: ' + verdict.evidence.slice(0, 8).join(', ') + '.' +
+          '\nЕсли маршрут не тот, поставь другую метку: ' +
+          [L.areaBackend, L.areaFrontend, L.areaFullstack].join(', ') + '.',
+      })
+      const st = projectState(project.id)
+      if (st.run) {
+        st.run.entries.push({
+          number: issue.number,
+          title: issue.title,
+          role: 'маршрут',
+          outcome: label + ' по постановке (пути/файлы: бэкенд ' + (b.path + b.ext) +
+            ', фронтенд ' + (f.path + f.ext) + ')',
+        })
+      }
+      return { action: 'routed', project: project.id, issue: issue.number, area: verdict.area, label }
     }
 
     // ── запуск сессий ролей ────────────────────────────────────────────────
@@ -808,11 +1077,14 @@ export default {
     // Имя диалога: проект + роль + номер тикета + короткий заголовок. Без этого
     // в списке сессий непонятно, какая из них чем занята.
     function titleFor(project, presetId, issue) {
-      const role = presetId === 'dev' ? 'Разработчик'
-        : presetId === 'design' ? 'Дизайнер'
-          : presetId === 'tester' ? 'Тестировщик'
-            : presetId === 'code-review' ? 'Код-ревьюер'
-              : presetId
+      const role = presetId === 'dev-fullstack' ? 'Разработчик (полный стек)'
+        : presetId === 'dev-backend' ? 'Бэкенд-разработчик'
+          : presetId === 'dev-frontend' ? 'Фронтенд-разработчик'
+            : presetId === 'design' ? 'Дизайнер'
+              : presetId === 'tester' ? 'Тестировщик'
+                : presetId === 'code-review' ? 'Код-ревьюер'
+              : presetId === 'devops-delivery' ? 'DevOps-инженер'
+                : presetId
       const flat = String((issue && issue.title) || '').replace(/\s+/g, ' ').trim()
       const clipped = flat.length > 60 ? flat.slice(0, 57) + '…' : flat
       const head = role + ' [' + project.id + '] #' + issue.number
@@ -832,6 +1104,18 @@ export default {
       if (state.dialogs[key]) {
         delete state.dialogs[key]
         writeDialogs(state.dialogs)
+      }
+    }
+
+    // Снять метку, которой может и не быть. Ошибку глотаем: отсутствие метки —
+    // норма, а сбой сети не должен срывать шаг диспетчера.
+    async function dropLabel(project, issueNumber, name) {
+      if (!name) return false
+      try {
+        await github('DELETE', '/repos/' + project.repo + '/issues/' + issueNumber + '/labels/' + encodeURIComponent(name))
+        return true
+      } catch (error) {
+        return false
       }
     }
 
@@ -928,11 +1212,18 @@ export default {
         ', compose-проект ' + project.composeProject + '.'
     }
 
-    // Задание исполнителю. Роль одна из двух — разработчик или дизайнер; путь,
-    // метки и отчёт одинаковые, различаются только скилл и границы работы.
+    // Задание исполнителю. Ролей реализации три — полного стека, бэкендер и
+    // фронтендер, — но путь, метки и отчёт у них общие: различаются границы
+    // работы. Финальный шаг одинаков у всех — PR и for-code-review: передачу
+    // полного стека фронтенду делает диспетчер по меткам, а не агент.
     function implementerPrompt(project, issue, kind, repeat, role) {
       const L = project.labels
-      const isDesign = role === 'design'
+      const isBackend = role === 'dev-backend'
+      const isFrontend = role === 'dev-frontend'
+      const fullstack = has(issue, L.areaFullstack)
+      const skillLine = isBackend || isFrontend
+        ? 'Действуй по скиллам dev-workflow и role-boundaries'
+        : 'Действуй по скиллу dev-workflow'
       // Возврат в доработку бывает из теста и из код-ревью. Различаем по метке:
       // от теста остаётся test-failed, от ревьюера — ready-for-dev.
       const reworkWhy = kind !== 'rework'
@@ -945,12 +1236,12 @@ export default {
           ? 'Отдел разработки: доработай issue #' + issue.number + ' «' + issue.title + '» — ' + reworkWhy + '.'
           : kind === 'continue'
             ? 'Отдел разработки: продолжи issue #' + issue.number + ' «' + issue.title + '» — он уже помечен ' + L.progress + ', то есть работа начата, но не доведена.'
-            : 'Отдел разработки: возьми issue #' + issue.number + ' «' + issue.title + '».',
+            : kind === 'stage'
+              ? 'Отдел разработки: продолжай issue #' + issue.number + ' «' + issue.title + '» — бэкенд-часть уже сдана, настала очередь фронтенда.'
+              : 'Отдел разработки: возьми issue #' + issue.number + ' «' + issue.title + '».',
         '',
         projectHeader(project),
-        isDesign
-          ? 'Действуй по скиллу design-delivery: прочитай issue через gh_issue, работай в ветке feature/' + issue.number + '-<слаг> от ' + project.base + ', доведи до pull request и передай на код-ревью.'
-          : 'Действуй по скиллу dev-workflow: прочитай issue через gh_issue, работай в ветке feature/' + issue.number + '-<слаг> от ' + project.base + ', доведи до pull request и передай на код-ревью.',
+        skillLine + ': прочитай issue через gh_issue, работай в ветке feature/' + issue.number + '-<слаг> от ' + project.base + ', доведи до pull request и передай на код-ревью.',
         'Обязательный финал: комментарий в issue (что сделано, ветка, номер PR, что не проверено), затем метка ' + L.review + ' и снятие ' + L.progress + '.',
         'В ' + project.base + ' и main не коммить. PR не мержить. Работай только в своей рабочей копии отдела ' + project.workspace +
           (project.humanClone ? ': в клон человека ' + project.humanClone + ' не заходить вообще.' : '.'),
@@ -958,24 +1249,63 @@ export default {
           ' ... Без -p docker возьмёт имя из docker-compose.yml и ты задешь стенд человека на его портах и его базе.',
         'После PR обязательно верни рабочую копию на ' + project.base + ': git checkout ' + project.base +
           ', затем git pull --ff-only. Незакоммиченных изменений в клоне остаться не должно.',
+        'Ветка задачи может уже существовать: макет постановки кладёт её до разработки, а полный стек — до фронтенда. Если она есть — продолжай в ней и не открывай второй PR.',
         'Поставь себе цель, чтобы довести работу до конца: один ход не должен обрывать задачу на середине.',
         'Если упёрся в то, что сам решить не можешь, — напиши это комментарием в issue и остановись.',
       ]
-      if (isDesign) {
-        lines.splice(4, 0, 'Границы дизайнера: меняешь только визуальный слой — стили, токены, вёрстку, компоненты представления, макеты. Бизнес-логику, схему данных и API не трогай: если задача без этого не решается, опиши это в issue и передай разработчику.')
+      if (isBackend) {
+        const boundary = ['Границы бэкендера: меняешь только бэкенд-дерево (backend/, api/, app/backend/, app/api/). Фронтенд, компоненты и стили не трогай. Контракт — OpenAPI-схема, DTO и общие типы — твой: фронтендер его читает, а не догадывается.']
+        if (fullstack) {
+          boundary.push('Тикет полного стека: доведи бэкенд-часть до обычного финала. Метку ' + L.frontend + ' поставит диспетчер — тебе её ставить не нужно, фронтенд-часть не делай и фронтенд не жди.')
+          boundary.push('Если бэкенд-части в постановке нет вовсе — пустой PR не открывай: напиши это комментарием в issue, поставь ' + L.review + ' и заверши ход. Диспетчер сам передаст тикет фронтенду.')
+        }
+        lines.splice(4, 0, ...boundary)
+      }
+      if (isFrontend) {
+        const boundary = ['Границы фронтендера: меняешь только фронтенд-дерево (frontend/, web/, app/frontend/, app/web/). Бэкенд, схему и контракт не трогай — контракт только читаешь. Если API не хватает, это комментарий в issue и остановка, а не мок и не «временная» правка бэкенда.']
+        if (fullstack) {
+          boundary.unshift('Ветка и PR могут быть уже открыты бэкенд-части: если они есть — продолжай в них, второй PR не открывай. Если ветки и PR ещё нет (бэкенд-части в постановке не оказалось) — создай их сам.')
+          boundary.push('Если фронтенд-части в постановке нет — пустой PR не открывай: напиши это комментарием в issue, поставь ' + L.review + ' и заверши ход.')
+        }
+        lines.splice(4, 0, ...boundary)
       }
       if (kind === 'rework') lines.splice(2, 0, 'Начни с комментариев в issue и в PR этого тикета: там причина отказа, замечания и воспроизводящая команда.')
+      // Макет постановки — часть задания, а не украшение: раскладку, состояния и
+      // тексты берут из него, чтобы фронтендер не придумывал их заново.
+      if (has(issue, L.mockupsReady)) {
+        lines.splice(4, 0, 'Макет постановки лежит в ветке в mockups/' + issue.number + '/ (index.html и notes.md): раскладку, состояния и тексты бери из него, расхождения — только осознанные и описанные в комментарии. Скриншоты и пути есть в комментарии дизайнера.')
+      }
       if (kind === 'continue') lines.splice(2, 0, 'Сначала посмотри, что уже сделано: ветка могла остаться, коммиты могли быть запушены, в issue может быть комментарий.')
+      if (kind === 'stage') lines.splice(2, 0, 'Это ступень фронтенда: прочитай комментарий бэкендера в issue и изменённые файлы PR, чтобы работать с существующими эндпоинтами, а не с выдуманными.')
       if (repeat) lines.splice(2, 0, 'Это тот же диалог, в котором шла работа по тикету: ветка, коммиты и замечания ревьюера или тестировщика уже в его истории — продолжай с этого места, заново ничего не поднимай.')
       return lines.join('\n')
     }
 
-    function devPrompt(project, issue, kind, repeat) {
-      return implementerPrompt(project, issue, kind, repeat, 'dev')
-    }
-
-    function designPrompt(project, issue, kind, repeat) {
-      return implementerPrompt(project, issue, kind, repeat, 'design')
+    // Ступень постановки: макет, а не реализация. Дизайнер получает её раньше,
+    // чем человек поставит ready-for-dev, поэтому финал другой: комментарий со
+    // скриншотами и метка mockups-ready вместо for-code-review и PR.
+    function mockupPrompt(project, issue, repeat) {
+      const L = project.labels
+      const artifacts = project.artifacts || (project.workspace + '\\.dsh-artifacts')
+      const shot = artifacts + '\\mockups-' + issue.number
+      const lines = [
+        'Отдел разработки: подготовь МАКЕТ по issue #' + issue.number + ' «' + issue.title + '» (метка ' + L.mockup + ').',
+        '',
+        projectHeader(project),
+        'Действуй по скиллу mockup-delivery. Это ступень постановки, а не разработка: продуктовый код, стили приложения, схему данных и API не менять.',
+        'Прочитай постановку целиком: gh_issue({ "number": ' + issue.number + ' }) — тело, комментарии, вложения.',
+        'Ветка: feature/' + issue.number + '-<слаг> от ' + project.base + '. Если такая ветка уже есть — продолжай в ней, вторую не создавай. Работай только в рабочей копии отдела ' + project.workspace + '.',
+        'Макет — только в каталоге mockups/' + issue.number + '/: index.html со статичной разметкой и стилями на токенах проекта (без сборки, без внешних зависимостей) и notes.md — экраны, состояния (пусто, загрузка, ошибка), брейкпоинты, тексты и то, что в макет не входит.',
+        'Смотри, что уже есть в репозитории: палитра, шрифты, отступы, готовые компоненты. Макет должен выглядеть как продолжение продукта, а не как чужая страница.',
+        'Скриншоты для человека: node C:\\Users\\DiKsu\\.dsh\\tools\\mockup-shot.mjs --html mockups/' + issue.number + '/index.html --out ' + shot + '-1440.png --width 1440 (и ещё один с --width 375). PNG в репозиторий не коммить.',
+        'Обязательный финал: комментарий в issue через gh_issue_comment — что нарисовано, пути файлов макета и прикреплённые скриншоты (поле images), затем метка ' + L.mockupsReady + ' и снятие ' + L.progress + '.',
+        'Метку ' + L.review + ' НЕ ставить и PR НЕ открывать: реализация и PR будут следующим шагом, после того как человек поставит ' + L.dev + '.',
+        'В ' + project.base + ' и main не коммить, ветку не мержить' + (project.humanClone ? ', в клон человека ' + project.humanClone + ' не заходить вообще.' : '.'),
+        'Если визуального слоя в задаче нет вовсе — комментарий в issue с объяснением, снять ' + L.mockup + ' и завершить ход: макет тут не нужен.',
+        'Поставь себе цель, чтобы довести макет до конца: один ход не должен обрывать работу на середине.',
+      ]
+      if (repeat) lines.splice(2, 0, 'Это тот же диалог, где ты уже делал макет по этому тикету: посмотри свои прошлые файлы и замечания человека в комментариях — правь макет, а не начинай заново.')
+      return lines.join('\n')
     }
 
     function testerPrompt(project, issue, repeat) {
@@ -986,9 +1316,10 @@ export default {
         projectHeader(project),
         'Действуй по скиллу testing-contract: найди PR через gh_prs({ "issue": ' + issue.number + ' }), посмотри изменённые файлы через gh_pr({ "number": <номер PR>, "files": true }), разверни ветку через git worktree в отдельный каталог.',
         'Проверяй сам, а не по описанию из PR. Артефакты клади в ' + (project.artifacts || 'reports/') + '.',
+        'Если в ветке есть макет постановки (mockups/' + issue.number + '/), сверь с ним экраны: раскладка, состояния (пусто, загрузка, ошибка) и тексты — это часть приёмки, расхождение и есть дефект.',
         'Стенд поднимай только со своим именем проекта: docker compose -p ' + project.composeProject +
           ' ... Без -p docker возьмёт имя из docker-compose.yml и ты задешь стенд человека на его портах и его базе.',
-        'Вердикт — комментарий в issue: прошло — метка ' + L.ok + '; не прошло — ' + L.failed + ' и наименьшая воспроизводящая команда.',
+        'Вердикт — комментарий в issue: прошло — метка ' + L.ok + '; не прошло — ' + L.failed + ' и наименьшая воспроизводящая команда. В обоих случаях сними ' + L.test + ': тикет не должен остаться в очереди тестировщика.',
         'Продуктовый код и PR не править, PR не мержить. Поставь себе цель, чтобы довести проверку до конца.',
       ]
       if (repeat) {
@@ -1009,13 +1340,159 @@ export default {
         'Действуй по скиллу code-review: найди PR через gh_prs({ "issue": ' + issue.number + ' }), прочитай изменённые файлы через gh_pr({ "number": <номер PR>, "files": true }), затем сам дифф и код вокруг него в рабочей копии отдела ' + project.workspace + '.',
         'Замечания оставляй комментариями В PR: gh_pr_comment({ "number": <номер PR>, "body": "<вопрос>\\n\\npath:line — случай — минимальная правка" }). По одному комментарию на замечание, чтобы автор мог ответить точечно.',
         'Решение — меткой: принял → ' + L.test + ' и снять ' + L.review + '; нужны правки → ' + L.dev + ' и снять ' + L.review + ', плюс короткий комментарий в issue, что именно вернул.',
+        'Если в ветке PR есть макет постановки (mockups/<номер>/), сверь изменение с ним: раскладка, состояния и тексты из макета — часть задания, расхождение без объяснения в PR — замечание.',
         'Продуктовый код не править, PR не мержить, стенд не поднимать — прогон и приёмочные слои принадлежат тестировщику.',
         'В ' + project.base + ' и main не коммитить и не переключать ветки в рабочей копии: ревью читает, а не строит.' +
           (project.humanClone ? ' В клон человека ' + project.humanClone + ' не заходить.' : ''),
         'Поставь себе цель, чтобы довести ревью до конца: тикет не должен остаться без метки.',
       ]
       if (repeat) lines.splice(2, 0, 'Это тот же диалог, где ты уже ревьюил этот тикет: твои прошлые замечания и правки разработчика в его истории — проверь в первую очередь то, что тогда вернул.')
+      // Первая половина полного стека ревьюится отдельно и раньше фронтенда:
+      // иначе контракт и серверная логика едут в тест непроверенными.
+      if (has(issue, L.areaFullstack) && !has(issue, L.phaseFrontend)) {
+        lines.splice(2, 0,
+          'Это ПЕРВАЯ половина тикета полного стека: фронтенд-часть ещё не начата. Ревьюй бэкенд-часть по существу — контракт, обработчики, данные, миграции. Отсутствие экранов, кнопок и клиентской связки дефектом не считай: вторая половина идёт следом, в той же ветке.')
+        lines.push('Принял — ' + L.test + ' означает «половина принята»: диспетчер сам передаст тикет фронтенду, тестировщику он уйдёт только после второй половины.')
+      }
       return lines.join('\n')
+    }
+
+    // Финальная ступень. Тикет с меткой tested уже получил зелёный вердикт от
+    // тестировщика; DevOps-инженер сливает PR merge-коммитом, удаляет ветку
+    // задачи и переводит тикет в merged. Слияние — единственная запись в базовую
+    // ветку, которую делает агент.
+    function mergePrompt(project, issue, repeat) {
+      const L = project.labels
+      const lines = [
+        (repeat ? 'Отдел разработки: ПОВТОРНО слей PR по issue #' : 'Отдел разработки: слей PR по issue #') + issue.number + ' «' + issue.title + '» (метка ' + L.ok + ').',
+        '',
+        projectHeader(project),
+        'Действуй по скиллу devops-delivery, раздел «Слияние pull request»: найди PR через gh_prs({ "issue": ' + issue.number + ' }), прочитай вердикт тестировщика в issue и само изменение через gh_pr({ "number": <PR>, "files": true }).',
+        'Перед слиянием убери артефакты постановки: если в ветке PR есть каталог mockups/' + issue.number + ', удали его отдельным коммитом (git rm -r mockups/' + issue.number + ', сообщение «Убрать макеты постановки (#' + issue.number + ')»), запушь в ветку и только потом сливай. В ' + project.base + ' макеты попадать не должны; в истории git они остаются. Если каталога нет — пропусти этот шаг молча.',
+        'Слияние — gh_pr_merge({ "number": <PR> }): merge-коммит в ' + project.base + ', ветка задачи удаляется. Force-push, ребейз и правки кода в чужой ветке запрещены.',
+        'Обязательный финал: комментарий в issue с sha merge-коммита и удалённой веткой, затем снять ' + L.ok + ', снять ' + L.phaseFrontend + ' (если он есть) и поставить ' + L.merged + '.',
+        'PR нет или вердикт тестировщика не зелёный — комментарий в issue и остановка: это сломанная передача, её разбирает человек.',
+        'PR конфликтует с ' + project.base + ' — комментарий с конфликтующими файлами, метка ' + L.dev + ' вместо ' + L.ok + ': тикет возвращается разработчику, слияние не форсируется.',
+        'PR уже слит (человеком раньше) — это не ошибка: комментарий с sha и метка ' + L.merged + ', снять ' + L.ok + '.',
+        'После слияния верни рабочую копию отдела ' + project.workspace + ' на ' + project.base + ': git checkout ' + project.base + ', затем git pull --ff-only.',
+        'Стенд не поднимай: слияние не требует прогона, а лишний стенд займёт порты проекта.',
+        'Поставь себе цель, чтобы довести слияние до конца: тикет не должен остаться без метки.',
+      ]
+      if (repeat) lines.splice(2, 0, 'Это тот же диалог, где ты уже сливал этот тикет: проверь, не слит ли PR уже, и не дублируй слияние.')
+      return lines.join('\n')
+    }
+
+    // Ступень слияния для тикетов, у которых PR уже слит руками: старые тикеты с
+    // меткой tested и ручной мерж. Гонять на такой тикет сессию DevOps-инженера
+    // бессмысленно — состояние дописывается по факту.
+    async function settleAlreadyMerged(project, issues) {
+      const L = project.labels
+      const waiting = issues.filter((i) => has(i, L.ok))
+      if (waiting.length === 0) return null
+      for (const issue of waiting) {
+        let pr = null
+        try {
+          pr = await findPr(project, issue.number)
+        } catch (error) {
+          // GitHub не ответил — оставляем тикет ступени слияния как есть.
+          continue
+        }
+        if (!pr || !pr.merged_at) continue
+        await github('POST', '/repos/' + project.repo + '/issues/' + issue.number + '/comments', {
+          body: 'Отдел разработки: PR #' + pr.number + ' уже слит (' + pr.merged_at +
+            ') — снимаю ' + L.ok + ' и ставлю ' + L.merged + ' без сессии DevOps-инженера.',
+        })
+        await github('POST', '/repos/' + project.repo + '/issues/' + issue.number + '/labels', { labels: [L.merged] })
+        await dropLabel(project, issue.number, L.ok)
+        await dropLabel(project, issue.number, L.phaseFrontend)
+        await dropLabel(project, issue.number, L.frontend)
+        // Макет постановки ушёл в историю вместе со слиянием: метки ступени
+        // больше ничего не значат и только путают следующий шаг.
+        await dropLabel(project, issue.number, L.mockup)
+        await dropLabel(project, issue.number, L.mockupsReady)
+        const st = projectState(project.id)
+        if (st.run) {
+          st.run.entries.push({
+            number: issue.number,
+            title: issue.title,
+            role: 'devops-delivery',
+            outcome: 'PR #' + pr.number + ' уже был слит — тикет переведён в ' + L.merged,
+          })
+        }
+        return { action: 'merged-already', project: project.id, issue: issue.number, pr: pr.number }
+      }
+      return null
+    }
+
+    // Передача тикета полного стека фронтенду. Три состояния, и каждое требует
+    // своего решения:
+    //   1. бэкендер поставил for-code-review и открыл PR — ревьюер смотрит первую
+    //      половину; передача ждёт его вердикта;
+    //   2. ревьюер принял (ready-for-test), фазы фронтенда ещё нет — передаём
+    //      тикет фронтенду, тестировщику он уйдёт только после второй половины;
+    //   3. for-code-review без PR — бэкенд-части в постановке не было, смотреть
+    //      ревьюеру нечего: сразу передаём фронтенду.
+    async function handOffToFrontend(project, issues) {
+      const L = project.labels
+      const candidates = issues.filter((i) => has(i, L.areaFullstack)
+        && !has(i, L.phaseFrontend)
+        && (has(i, L.review) || has(i, L.test)))
+      if (candidates.length === 0) return null
+      for (const issue of candidates) {
+        let pr = null
+        try {
+          pr = await findPr(project, issue.number)
+        } catch (error) {
+          // GitHub не ответил: не решаем за ревьюера и не передаём вслепую.
+          return null
+        }
+        if (has(issue, L.review) && pr) return null
+        const fromLabel = has(issue, L.test) ? L.test : L.review
+        const reason = pr ? 'бэкенд-часть прошла код-ревью' : 'бэкенд-части в постановке не было'
+        await dropLabel(project, issue.number, fromLabel)
+        await dropLabel(project, issue.number, L.review)
+        await github('POST', '/repos/' + project.repo + '/issues/' + issue.number + '/labels', { labels: [L.frontend] })
+        // Передача — это прогресс диспетчера, а не неудачная попытка агента:
+        // счётчик обнуляем, иначе вторая половина сгорала бы на первом же шаге.
+        projectState(project.id).attempts[issue.number] = 0
+        await github('POST', '/repos/' + project.repo + '/issues/' + issue.number + '/comments', {
+          body: 'Отдел разработки: ' + reason + ' — тикет передан фронтенд-разработчику (' + L.frontend +
+            '). Он продолжит в той же ветке и том же PR. Код-ревью и тест будут после второй половины.',
+        })
+        const st = projectState(project.id)
+        if (st.run) {
+          st.run.entries.push({
+            number: issue.number,
+            title: issue.title,
+            role: 'dev-backend',
+            outcome: reason + ' — передано фронтенду (' + L.frontend + ')',
+          })
+        }
+        return { action: 'handoff', project: project.id, issue: issue.number, issueTitle: issue.title, reason }
+      }
+      return null
+    }
+
+    // ── ступень постановки: макет ──────────────────────────────────────────
+
+    // Тикет, которому автор постановки поставил needs-mockup, проходит через
+    // дизайнера раньше разработки. Ступень работает без ready-for-dev: макет —
+    // часть постановки, и человек ставит свою метку уже по готовому визуальному
+    // ответу. Как только дизайнер поставил mockups-ready, тикет становится
+    // обычной очередью разработки (см. queuedOf).
+    function mockupStage(project, issues) {
+      const L = project.labels
+      const st = projectState(project.id)
+      const waiting = issues.filter((i) => has(i, L.mockup)
+        && !has(i, L.mockupsReady)
+        && !has(i, L.progress)
+        && !has(i, L.review)
+        && !has(i, L.test)
+        && !has(i, L.ok)
+        && !has(i, L.merged)
+        && !st.dropped[i.number])
+      if (waiting.length === 0) return null
+      return { role: 'design', issue: waiting[0], kind: 'mockup' }
     }
 
     // ── один шаг диспетчера по проекту ─────────────────────────────────────
@@ -1029,60 +1506,101 @@ export default {
       if (attempts > project.department.maxAttempts) {
         // Задача выдавалась несколько раз и ни разу не сдвинулась: молча
         // падающая сессия не должна крутить попытки без остановки.
+        // ready-for-dev снимаем вместе с остальными: иначе снятый тикет остаётся
+        // в очереди, человек его снова ставит, и цикл «снят → возвращён → снят»
+        // крутится каждый тик, засыпая issue комментариями.
         await github('POST', '/repos/' + project.repo + '/issues/' + issue.number + '/comments', {
           body: 'Отдел разработки: задача выдавалась ' + (attempts - 1) + ' раз(а) и не сдвинулась — снимаю с конвейера, нужен человек.',
         })
-        for (const name of [L.progress, L.review, L.failed, L.test, L.design]) {
+        for (const name of [L.progress, L.review, L.failed, L.test, L.frontend, L.phaseFrontend, L.ok, L.dev, L.mockup, L.mockupsReady]) {
           try {
             await github('DELETE', '/repos/' + project.repo + '/issues/' + issue.number + '/labels/' + encodeURIComponent(name))
           } catch (error) { /* метки могло и не быть */ }
         }
-        forgetDialog(project, 'dev', issue.number)
+        forgetDialog(project, 'dev-fullstack', issue.number)
+        forgetDialog(project, 'dev-backend', issue.number)
+        forgetDialog(project, 'dev-frontend', issue.number)
         forgetDialog(project, 'design', issue.number)
         forgetDialog(project, 'tester', issue.number)
         forgetDialog(project, 'code-review', issue.number)
+        forgetDialog(project, 'devops-delivery', issue.number)
+        // Снятый тикет не возвращается сам: иначе агент, который всё ещё работает
+        // по нему, поставит метку, диспетчер снова выдаст задачу и снова снимет —
+        // и так по кругу с новым комментарием каждый раз.
+        st.dropped[issue.number] = true
         st.run.entries.push({ number: issue.number, title: issue.title, role: role, outcome: 'снят с конвейера после ' + (attempts - 1) + ' попыток без результата' })
         return { action: 'dropped', project: project.id, issue: issue.number, reason: 'no progress after ' + (attempts - 1) + ' attempts' }
       }
-      if (role === 'dev' || role === 'design') {
+      // Ступень макета: финал другой — комментарий со скриншотами и
+      // mockups-ready. Бюджет доработок разработки эта ступень не тратит, а
+      // ready-for-dev не снимается: человек мог поставить его заранее, и по
+      // готовому макету задача уйдёт в разработку сама.
+      if (role === 'design' && (decision.kind === 'mockup' || decision.kind === 'mockup-rework')) {
+        const repeat = existingDialog(project, 'design', issue.number)
+        await github('POST', '/repos/' + project.repo + '/issues/' + issue.number + '/labels', { labels: [L.progress] })
+        const sessionId = await startSession(project, 'design', mockupPrompt(project, issue, repeat), issue)
+        st.session = { role: 'design', issue: issue.number, title: issue.title, sessionId, startedAt: new Date().toISOString() }
+        st.run.sessions = (st.run.sessions || 0) + 1
+        return { action: 'dispatched', project: project.id, role: 'design', stage: 'mockup', issue: issue.number, sessionId }
+      }
+      if (role === 'dev-fullstack' || role === 'dev-backend' || role === 'dev-frontend') {
         const kind = decision.kind || 'new'
         const rounds = st.rework[issue.number] || 0
         if (kind === 'rework' && rounds >= project.department.maxRework) {
           await github('POST', '/repos/' + project.repo + '/issues/' + issue.number + '/comments', {
             body: 'Отдел разработки: тикет возвращался из код-ревью или теста ' + rounds + ' раз(а) и снят с конвейера — нужен человек.',
           })
-          for (const name of [L.progress, L.review, L.failed]) {
+          for (const name of [L.progress, L.review, L.failed, L.frontend, L.phaseFrontend, L.ok, L.dev, L.mockup, L.mockupsReady]) {
             try {
               await github('DELETE', '/repos/' + project.repo + '/issues/' + issue.number + '/labels/' + encodeURIComponent(name))
             } catch (error) { /* метки могло и не быть */ }
           }
-          forgetDialog(project, 'dev', issue.number)
+          forgetDialog(project, 'dev-fullstack', issue.number)
           forgetDialog(project, 'design', issue.number)
           forgetDialog(project, 'tester', issue.number)
           forgetDialog(project, 'code-review', issue.number)
+          st.dropped[issue.number] = true
           st.run.entries.push({ number: issue.number, title: issue.title, outcome: 'снят с конвейера после ' + rounds + ' доработок' })
           return { action: 'dropped', project: project.id, issue: issue.number, reason: 'too many rework rounds' }
         }
         if (kind === 'rework') st.rework[issue.number] = rounds + 1
         // Захват нормализуем здесь, а не в агенте: у конвейера должен оставаться
         // ровно один активный маркер, иначе следующий шаг неоднозначен.
-        if (kind === 'new' || kind === 'rework') {
+        if (kind === 'new' || kind === 'rework' || kind === 'stage') {
           await github('POST', '/repos/' + project.repo + '/issues/' + issue.number + '/labels', { labels: [L.progress] })
-          // Возврат из ревью приходит с ready-for-dev, из теста — с test-failed;
-          // снимаем обе, чтобы на тикете не осталось чужого шага.
-          for (const name of [L.dev, L.failed, L.review]) {
+          // Возврат из ревью приходит с ready-for-dev, из теста — с test-failed,
+          // ступень фронтенда — с ready-for-frontend; снимаем всё, чтобы на тикете
+          // не осталось чужого шага.
+          const stale = [L.dev, L.failed, L.review]
+          if (kind === 'stage') stale.push(L.frontend)
+          for (const name of stale) {
             try {
               await github('DELETE', '/repos/' + project.repo + '/issues/' + issue.number + '/labels/' + encodeURIComponent(name))
             } catch (error) { /* метки могло и не быть */ }
           }
         }
-        const prompt = role === 'design'
-          ? designPrompt(project, issue, kind, !!existingDialog(project, 'design', issue.number))
-          : devPrompt(project, issue, kind, !!existingDialog(project, 'dev', issue.number))
+        // Фаза фронтенда полного стека помечается меткой, которая переживает
+        // in-progress: по ней диспетчер понимает, кому продолжать и кому
+        // возвращать доработку, если ход завис или ревьюер вернул тикет.
+        if (role === 'dev-frontend' && has(issue, L.areaFullstack)) {
+          try {
+            await github('POST', '/repos/' + project.repo + '/issues/' + issue.number + '/labels', { labels: [L.phaseFrontend] })
+          } catch (error) {
+            state.lastError = 'метка фазы фронтенда: ' + (error && error.message ? error.message : String(error))
+          }
+        }
+        const prompt = implementerPrompt(project, issue, kind, !!existingDialog(project, role, issue.number), role)
         const sessionId = await startSession(project, role, prompt, issue)
         st.session = { role: role, issue: issue.number, title: issue.title, sessionId, startedAt: new Date().toISOString() }
         st.run.sessions = (st.run.sessions || 0) + 1
         return { action: 'dispatched', project: project.id, role: role, issue: issue.number, sessionId }
+      }
+
+      if (role === 'devops-delivery') {
+        const sessionId = await startSession(project, 'devops-delivery', mergePrompt(project, issue, !!existingDialog(project, 'devops-delivery', issue.number)), issue)
+        st.session = { role: 'devops-delivery', issue: issue.number, title: issue.title, sessionId, startedAt: new Date().toISOString() }
+        st.run.sessions = (st.run.sessions || 0) + 1
+        return { action: 'dispatched', project: project.id, role: 'devops-delivery', issue: issue.number, sessionId }
       }
 
       if (role === 'code-review') {
@@ -1116,7 +1634,19 @@ export default {
       if (!st.run && opts.ignoreWindow) {
         st.run = { startedAt: now.toISOString(), entries: [], sessions: 0, manual: true }
       }
-      if (!st.run) return null
+      if (!st.run) {
+        // Вне смены работа не идёт, но входная ступень — это книга, а не ход
+        // агента: маршрут ставится сразу, чтобы человек увидел, кому уйдёт
+        // задача, не дожидаясь окна. Раздачи задачи здесь нет и быть не может:
+        // assignArea только размечает тикет.
+        try {
+          const routed = await assignArea(project, await loadIssues(project))
+          if (routed) return routed
+        } catch (error) {
+          state.lastError = project.id + ': входная ступень: ' + (error && error.message ? error.message : String(error))
+        }
+        return null
+      }
 
       // Провайдер сорвал ход — не бьёмся в него каждую минуту.
       if (!st.session && st.backoffUntil && now.getTime() < st.backoffUntil) {
@@ -1196,20 +1726,30 @@ export default {
         try {
           const issue = await reload(project, finished.issue)
           const marks = labelsOf(issue)
-          const outcome = marks.indexOf(L.ok) !== -1 ? 'принято тестировщиком'
-            : marks.indexOf(L.failed) !== -1 ? 'возвращено в доработку'
-              : marks.indexOf(L.review) !== -1 ? 'ждёт код-ревью'
-                : marks.indexOf(L.test) !== -1 ? 'ждёт тестировщика'
-                  // Ревьюер вернул тикет разработчику: метка снова ready-for-dev.
-                  // Это движение по конвейеру, а не «без изменения меток».
-                  : finished.role === 'code-review' && marks.indexOf(L.dev) !== -1 ? 'код-ревьюер вернул в доработку'
-                    : 'без изменения меток'
-          // Тикет принят — диалоги по нему закрыты.
-          if (outcome === 'принято тестировщиком') {
-            forgetDialog(project, 'dev', finished.issue)
-            forgetDialog(project, 'design', finished.issue)
-            forgetDialog(project, 'tester', finished.issue)
-            forgetDialog(project, 'code-review', finished.issue)
+          const outcome = marks.indexOf(L.merged) !== -1 ? 'слито в ' + project.base
+            : marks.indexOf(L.ok) !== -1 ? 'принято тестировщиком'
+              : marks.indexOf(L.failed) !== -1 ? 'возвращено в доработку'
+                : marks.indexOf(L.review) !== -1 ? 'ждёт код-ревью'
+                  : marks.indexOf(L.test) !== -1 ? 'ждёт тестировщика'
+                    // Дизайнер сдал макет постановки: дальше ждём метку человека.
+                    : marks.indexOf(L.mockupsReady) !== -1 ? 'макет постановки готов, ждёт человека'
+                    // Ревьюер вернул тикет разработчику: метка снова ready-for-dev.
+                    // Это движение по конвейеру, а не «без изменения меток».
+                    : finished.role === 'code-review' && marks.indexOf(L.dev) !== -1 ? 'код-ревьюер вернул в доработку'
+                      // DevOps вернул тикет из-за конфликта слияния: тоже движение.
+                      : finished.role === 'devops-delivery' && marks.indexOf(L.dev) !== -1 ? 'слияние невозможно: возвращено разработчику'
+                        : 'без изменения меток'
+          // Тикет слит — диалоги по нему закрыты, служебная метка фазы снята.
+          // Только диспетчер знает, что фаза закончилась; если оставить метку,
+          // по ней будут думать, что на тикет надо как-то реагировать.
+          if (outcome === 'слито в ' + project.base) {
+            for (const presetId of ['dev-fullstack', 'dev-backend', 'dev-frontend', 'design', 'tester', 'code-review', 'devops-delivery']) {
+              forgetDialog(project, presetId, finished.issue)
+            }
+            await dropLabel(project, finished.issue, L.phaseFrontend)
+            await dropLabel(project, finished.issue, L.frontend)
+            await dropLabel(project, finished.issue, L.mockup)
+            await dropLabel(project, finished.issue, L.mockupsReady)
           }
           // Метки сдвинулись — задача движется, счётчик попыток обнуляем.
           if (outcome !== 'без изменения меток') st.attempts[finished.issue] = 0
@@ -1226,20 +1766,58 @@ export default {
       }
 
       const issues = await loadIssues(project)
+
+      // Тикет, снятый с конвейера, ждёт человека. Признак, что человек вернул его
+      // в работу, один — метка ready-for-dev: её ставит только человек. Тогда
+      // бюджет выдаётся заново целиком: и попытки, и доработки, и диалоги.
+      // Иначе снятый по лимиту доработок тикет снова упирался бы в тот же лимит
+      // на первом же шаге — человек возвращает задачу, а она мгновенно снимается.
+      for (const issue of issues) {
+        if (!st.dropped[issue.number]) continue
+        if (!has(issue, L.dev)) continue
+        delete st.dropped[issue.number]
+        st.attempts[issue.number] = 0
+        delete st.rework[issue.number]
+        for (const presetId of ['dev-fullstack', 'dev-backend', 'dev-frontend', 'design']) {
+          forgetDialog(project, presetId, issue.number)
+        }
+        st.run.entries.push({ number: issue.number, title: issue.title, role: 'человек', outcome: 'тикет возвращён в работу, попытки и доработки сброшены' })
+      }
+
+      // Полный стек: код-ревью после бэкенд-части — ещё не весь тикет. Диспетчер
+      // сам снимает for-code-review и ставит ступень фронтенда, чтобы фронтенд
+      // лёг в ту же ветку и тот же PR, а не в отдельный.
+      const handoff = await handOffToFrontend(project, issues)
+      if (handoff) return handoff
+
+      const settled = await settleAlreadyMerged(project, issues)
+      if (settled) return settled
+
+      // Входная ступень: маршрут ставится по постановке, до раздачи исполнителю.
+      const routed = await assignArea(project, issues)
+      if (routed) return routed
+
       const active = await findActive(project, issues)
       if (active) return dispatch(project, active)
 
       // Активного тикета нет — можно взять следующий, но только пока открыт
       // хотя бы один диапазон работы.
       if (inWin || opts.ignoreWindow) {
+        // Ступень постановки идёт раньше раздачи новых задач, но позже активных
+        // ступеней: ревью, тест и слияние доводят уже начатую работу, а макет
+        // только открывает следующую.
+        const mockupQueued = mockupStage(project, issues)
+        if (mockupQueued) return dispatch(project, mockupQueued)
         const queued = pickQueued(project, issues)
         // Тикет вернулся с код-ревью: метка ready-for-dev, но диалог исполнителя
         // по нему уже был. Это доработка, а не новая задача — иначе пара
         // исполнитель↔code-review качалась бы без ограничения.
         if (queued) {
-          const role = implementer(queued, project.labels)
-          const kind = existingDialog(project, role, queued.number) ? 'rework' : 'new'
-          return dispatch(project, { role: role, issue: queued, kind: kind })
+          const rework = anyImplementerDialog(project, queued)
+          const role = rework
+            ? await roleForRework(project, queued, project.labels)
+            : implementer(queued, project.labels)
+          return dispatch(project, { role: role, issue: queued, kind: rework ? 'rework' : 'new' })
         }
         return null
       }
@@ -1419,7 +1997,7 @@ export default {
                 number: active.issue.number,
                 title: active.issue.title,
                 role: active.role,
-                kind: active.kind || (active.role === 'tester' ? 'test' : active.role === 'code-review' ? 'review' : 'new'),
+                kind: active.kind || (active.role === 'tester' ? 'test' : active.role === 'code-review' ? 'review' : active.role === 'devops-delivery' ? 'merge' : 'new'),
                 labels: labelsOf(active.issue),
               }
               : null

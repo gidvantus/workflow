@@ -248,7 +248,7 @@ console.log('=== сценарий 1: конвейер dev → код-ревью 
 issues.set(100, { number: 100, title: 'Демо-тикет 100', labels: ['ready-for-dev'], state: 'open' })
 let app = await boot()
 let step = await tick(app)
-check('первый шаг — разработчик', step.result.action + ':' + step.result.role, 'dispatched:dev')
+check('первый шаг — разработчик', step.result.action + ':' + step.result.role, 'dispatched:dev-fullstack')
 const devDialog = step.result.sessionId
 check('рабочая область отдела зарегистрирована', createdWorkspaces, [{ path: WORKSPACE, title: 'Тест — отдел' }])
 
@@ -260,7 +260,7 @@ check('после разработки — код-ревьюер', step.result.a
 const reviewDialog = step.result.sessionId
 check('ревьюеру сказано про метку', lastPrompt().text.includes('for-code-review'), true)
 check('ревьюеру сказано про комментарии в PR', lastPrompt().text.includes('gh_pr_comment'), true)
-check('диалоги записаны с проектом', Object.keys((await app.status()).dialogs).sort(), ['vahta:code-review:100', 'vahta:dev:100'])
+check('диалоги записаны с проектом', Object.keys((await app.status()).dialogs).sort(), ['vahta:code-review:100', 'vahta:dev-fullstack:100'])
 
 endTurn(reviewDialog)
 setLabels(100, ['ready-for-test'])
@@ -268,13 +268,13 @@ await tick(app)
 step = await tick(app)
 check('ревьюер принял — тестировщик', step.result.action + ':' + step.result.role, 'dispatched:tester')
 const testerDialog = step.result.sessionId
-check('диалоги всех трёх ролей', Object.keys((await app.status()).dialogs).sort(), ['vahta:code-review:100', 'vahta:dev:100', 'vahta:tester:100'])
+check('диалоги всех трёх ролей', Object.keys((await app.status()).dialogs).sort(), ['vahta:code-review:100', 'vahta:dev-fullstack:100', 'vahta:tester:100'])
 
 endTurn(testerDialog)
 setLabels(100, ['test-failed'])
 await tick(app)
 step = await tick(app)
-check('возврат из теста в доработку', step.result.action + ':' + step.result.role, 'dispatched:dev')
+check('возврат из теста в доработку', step.result.action + ':' + step.result.role, 'dispatched:dev-fullstack')
 check('НОВЫЙ диалог не создан', created.length, 3)
 check('доработка в прежнем диалоге', step.result.sessionId, devDialog)
 check('в задании есть пометка о продолжении', lastPrompt().text.includes('Это тот же диалог'), true)
@@ -296,9 +296,15 @@ check('сказано, что проверка повторная', lastPrompt()
 
 endTurn(testerDialog)
 setLabels(100, ['tested'])
+await tick(app)
+step = await tick(app)
+check('финал конвейера — DevOps-инженер', step.result.action + ':' + step.result.role, 'dispatched:devops-delivery')
+const mergeSession = step.result.sessionId
+endTurn(mergeSession)
+setLabels(100, ['merged'])
 issues.get(100).state = 'closed'
-await app.tick()
-check('после приёмки карта диалогов пуста', (await app.status()).dialogs, {})
+await tick(app)
+check('после слияния карта диалогов пуста', (await app.status()).dialogs, {})
 
 console.log('\n=== сценарий 2: сбой модели не тратит попытку и уводит в паузу ===')
 reset({ number: 200, title: 'Демо-тикет 200', labels: ['ready-for-dev'], state: 'open' })
@@ -359,7 +365,7 @@ reset({ number: 500, title: 'Демо-тикет 500', labels: ['ready-for-dev']
 app = await boot()
 step = await tick(app)
 const dev5 = step.result.sessionId
-check('разработчик взял тикет', step.result.action + ':' + step.result.role, 'dispatched:dev')
+check('разработчик взял тикет', step.result.action + ':' + step.result.role, 'dispatched:dev-fullstack')
 
 let rounds = 0
 let dropped = null
@@ -386,33 +392,36 @@ check('петля ограничена лимитом доработок', round
 check('тикет снят с конвейера', dropped && dropped.action, 'dropped')
 check('причина снятия', dropped && dropped.reason, 'too many rework rounds')
 
-console.log('\n=== сценарий 6: метка ready-for-design уводит тикет дизайнеру ===')
-reset({ number: 600, title: 'Демо-тикет 600', labels: ['ready-for-design'], state: 'open' })
+console.log('\n=== сценарий 6: нужен макет — дизайнер рисует его до разработки ===')
+// Человек поставил ready-for-dev заранее: макет всё равно идёт первым.
+reset({ number: 600, title: 'Демо-тикет 600', labels: ['needs-mockup', 'ready-for-dev'], state: 'open' })
 app = await boot()
 step = await tick(app)
-check('дизайн-тикет уходит дизайнеру', step.result.action + ':' + step.result.role, 'dispatched:design')
+check('первым берётся макет, а не разработка', step.result.action + ':' + step.result.role, 'dispatched:design')
 const designDialog = step.result.sessionId
-check('задание по скиллу design-delivery', lastPrompt().text.includes('design-delivery'), true)
-check('границы визуального слоя названы', lastPrompt().text.includes('только визуальный слой'), true)
+check('задание по скиллу макета', lastPrompt().text.includes('mockup-delivery'), true)
+check('сказано, что это макет', lastPrompt().text.includes('МАКЕТ'), true)
+check('реализацию не просят', lastPrompt().text.includes('PR НЕ открывать'), true)
 check('диалог открыт для роли design', Object.keys((await app.status()).dialogs).includes('vahta:design:600'), true)
 
-// Дизайнер открыл PR и передал на ревью; метка маршрута остаётся на тикете.
+// Дизайнер закончил ход, но mockups-ready не поставил: ступень повторяется.
 endTurn(designDialog)
-setLabels(600, ['ready-for-design', 'for-code-review'])
-await tick(app)
+setLabels(600, ['needs-mockup', 'ready-for-dev'])
 step = await tick(app)
-check('дальше — код-ревьюер', step.result.action + ':' + step.result.role, 'dispatched:code-review')
-const review600 = step.result.sessionId
+check('ход без готового макета — не прогресс', step.result.outcome, 'без изменения меток')
+step = await tick(app)
+check('без mockups-ready макет выдаётся снова', step.result.action + ':' + step.result.role, 'dispatched:design')
+check('и это тот же диалог дизайнера', step.result.sessionId, designDialog)
+endTurn(designDialog)
 
-// Ревьюер вернул: тикет снова должен уйти ДИЗАЙНЕРУ, а не разработчику.
-endTurn(review600)
-setLabels(600, ['ready-for-design', 'ready-for-dev'])
-await tick(app)
+// Дизайнер сдал макет: тикет уходит в разработку.
+setLabels(600, ['needs-mockup', 'mockups-ready', 'ready-for-dev'])
 step = await tick(app)
-check('возврат из ревью уходит дизайнеру', step.result.action + ':' + step.result.role, 'dispatched:design')
-check('и это прежний диалог дизайнера', step.result.sessionId, designDialog)
-check('доработка засчитана', step.state.projects.vahta.rework[600], 1)
-check('сказано, что вернул ревьюер', lastPrompt().text.includes('код-ревьюер вернул'), true)
+check('сдача макета — это прогресс', step.result.outcome, 'макет постановки готов, ждёт человека')
+step = await tick(app)
+check('после макета — разработчик полного стека', step.result.action + ':' + step.result.role, 'dispatched:dev-fullstack')
+check('макет назван в задании разработчику', lastPrompt().text.includes('mockups/600'), true)
+check('готовый макет не считается доработкой', step.state.projects.vahta.rework[600], undefined)
 
 console.log('\n=== служебное ===')
 const ids = allRequestIds.map((p) => p.requestId)

@@ -9,7 +9,6 @@
 //
 // Контракт между ролями — метки, созданные в репозитории:
 //   ready-for-dev → in-progress → for-code-review → ready-for-test → tested | test-failed
-//   ready-for-design вместо ready-for-dev — тот же путь, но исполнитель дизайнер
 //
 // Базовая ветка — поле base проекта: в неё открываются PR и от неё
 // ответвляются feature-ветки.
@@ -33,12 +32,15 @@ import https from 'node:https'
 
 const PIPELINE_LABELS = {
   dev: 'ready-for-dev',
-  design: 'ready-for-design',
   progress: 'in-progress',
   review: 'for-code-review',
   test: 'ready-for-test',
   ok: 'tested',
   failed: 'test-failed',
+  // Ступень постановки: макет к тикету. Дизайнер ставит готовность, остальные роли
+  // только читают: пока mockups-ready нет, тикет в разработку не уходит.
+  mockup: 'needs-mockup',
+  mockupsReady: 'mockups-ready',
 }
 
 function dshHomeDir() {
@@ -306,7 +308,7 @@ export default {
 
     const issuesTool = define(
       'gh_issues',
-      'Список issue проекта, по умолчанию открытых. Фильтруется по метке — так tester находит `ready-for-test`, а dev — `ready-for-dev`.',
+      'Список issue проекта, по умолчанию открытых. Фильтруется по метке — так tester находит `ready-for-test`, а dev-fullstack — `ready-for-dev`.',
       {
         type: 'object',
         properties: {
@@ -337,7 +339,7 @@ export default {
 
     const commentTool = define(
       'gh_issue_comment',
-      'Добавить комментарий в issue. Так dev отчитывается о сделанном, а tester пишет вердикт с воспроизведением.',
+      'Добавить комментарий в issue. Так dev-fullstack отчитывается о сделанном, а tester пишет вердикт с воспроизведением.',
       {
         type: 'object',
         properties: {

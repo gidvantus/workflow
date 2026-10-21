@@ -32,7 +32,24 @@ function get(url) {
   })
 }
 
-const wanted = ['ready-for-dev', 'ready-for-design', 'in-progress', 'for-code-review', 'ready-for-test', 'tested', 'test-failed']
+// Весь набор меток конвейера: маршрут, ступень макета, ступень фронтенда и финал.
+// Список должен совпадать с PIPELINE_LABELS диспетчера и с .github-labels-create.mjs.
+const wanted = [
+  'ready-for-dev',
+  'needs-mockup',
+  'mockups-ready',
+  'area:backend',
+  'area:frontend',
+  'area:fullstack',
+  'ready-for-frontend',
+  'phase:frontend',
+  'in-progress',
+  'for-code-review',
+  'ready-for-test',
+  'tested',
+  'test-failed',
+  'merged',
+]
 for (const [id, project] of Object.entries(registry.projects || {})) {
   if (!project.repo) { console.log(id + ': без GitHub'); continue }
   const res = await get('/repos/' + project.repo + '/labels?per_page=100')

@@ -1,6 +1,6 @@
 // Role permissions — выдаёт сессиям ролей «разработчик», «дизайнер», «тестировщик»,
-// «аналитик» и «код-ревьюер» пресет разрешений danger-full-access, чтобы работа
-// не упиралась в запросы подтверждения, которые подтверждать некому.
+// «аналитик», «код-ревьюер» и «DevOps-инженер» пресет разрешений danger-full-access,
+// чтобы работа не упиралась в запросы подтверждения, которые подтверждать некому.
 //
 // ПОЧЕМУ ЧЕРЕЗ СЕССИЮ, А НЕ ЧЕРЕЗ ПРЕСЕТ
 // Строки `sandbox`, `approval` и `permission` живут в HOST-композиции: пресет не
@@ -21,7 +21,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-const ROLES = ['dev', 'design', 'tester', 'analyst', 'code-review']
+const ROLES = ['dev-fullstack', 'dev-backend', 'dev-frontend', 'design', 'tester', 'analyst', 'code-review', 'devops-delivery']
 const PERMISSION_PRESET = 'danger-full-access'
 
 function logPath() {

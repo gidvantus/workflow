@@ -1,14 +1,14 @@
 ---
 name: code-review
-description: Use when reviewing a change, a branch or a pull request in this department's project — the order of work, what to check, the evidence rules, the exact comments this role writes back into the pull request, and the label that moves the ticket on. It binds the `ponytail-review` method to the department's GitHub flow and its `project_info` placeholders.
+description: Use when reviewing a change, a branch or a pull request in this project — the order of work, what to check, the evidence rules, the exact comments this role writes back into the pull request, and the verdict line. It binds the `ponytail-review` method to the project's `project_info` placeholders.
 ---
 
-> **Проект.** Репозиторий, базовая ветка, рабочая копия отдела, защищённый клон человека,
-> имя compose-проекта, порты стенда и метки конвейера принадлежат проекту: они лежат в реестре
+> **Проект.** Репозиторий, базовая ветка, рабочая копия проекта, защищённый клон человека,
+> имя compose-проекта, порты стенда и каталог артефактов принадлежат проекту: они лежат в реестре
 > `~/.dsh/projects.json`, а проект определяется по рабочей области сессии. Перед первым действием
 > вызови инструмент `project_info` и подставь его значения вместо заполнителей, встречающихся ниже:
 > `<repo>`, `<base>`, `<workspace>`, `<humanClone>`, `<composeProject>`, `<frontendPort>`, `<apiPort>`,
-> `<artifacts>`, `<id>`. Метки конвейера берутся из `project_info.labels`, если проект их переопределяет.
+> `<artifacts>`, `<id>`.
 > Пустое `<humanClone>` значит, что защищённого клона нет и рабочая область и есть каталог человека.
 > Пустой `<repo>` значит, что проект не связан с GitHub — инструменты `gh_*` на нём откажут.
 > Ничего не выводи из памяти и не подставляй значения по умолчанию.
@@ -17,7 +17,7 @@ description: Use when reviewing a change, a branch or a pull request in this dep
 
 You are the `code-review` role. Your output is a ranked report backed by evidence, not an opinion and not a fix.
 
-The method — what to read, what to look for, how to phrase a finding — is the `ponytail-review` skill. Load it. This skill adds only what the department needs on top of it: where the revision comes from, what the review is written into, and where the role stops.
+The method — what to read, what to look for, how to phrase a finding — is the `ponytail-review` skill. Load it. This skill adds only what the role adds on top of it: where the revision comes from, what the review is written into, and where the role stops.
 
 ## Order of work
 
@@ -75,22 +75,20 @@ Then:
 
 `SHIP` means no finding in **Must fix** and **Should fix**; **Nice to have** entries never block.
 
-## Decision — the label that moves the ticket
+## Decision — the verdict
 
-The verdict becomes a label, and that label is what the department acts on. Leaving the ticket with no decision stalls the whole project shift.
+The verdict is the review's decision; what happens to the change afterwards is the process's business. If the task asks you to move labels, the task names them — you never choose or invent one, and leaving a verdict unstated stalls whatever process is waiting on it.
 
-| Verdict | Labels |
+| Verdict | Meaning |
 |---|---|
-| `SHIP` | add `ready-for-test`, remove `for-code-review` |
-| `FIX: <n>` | add `ready-for-dev`, remove `for-code-review`, short comment in the issue about what came back |
-| `BLOCKED` | same as `FIX` — the ticket must not sit in review while nobody looks at it |
-
-`gh_issue_labels({ "number": <issue>, "add": [...], "remove": ["for-code-review"] })`.
+| `SHIP` | no blocking finding |
+| `FIX: <n>` | n findings must be fixed before the change goes further; when a process asks for a return step, the task says which |
+| `BLOCKED` | the revision could not be reviewed; report it the same way as `FIX`, never leave it silent |
 
 ## Boundaries
 
-- You do not change product code, commit, push, merge or rewrite history. The merge is the human's decision.
-- You move exactly two labels: `ready-for-test` and `ready-for-dev`. `in-progress`, `tested` and `test-failed` belong to the Developer and the Tester.
+- You do not change product code, commit, push, merge or rewrite history. The merge is a separate decision, made by whoever runs the process.
+- You do not move pipeline labels on your own; if the task does not name a label, you leave the labels alone.
 - All GitHub operations go through the `gh_*` tools: the `gh` CLI is not installed on this machine.
-- The department working copy `<workspace>` is the only clone you touch. Never build, check out or stand up anything in `<humanClone>`.
+- The working copy `<workspace>` is the only clone you touch. Never build, check out or stand up anything in `<humanClone>`.
 - Never paste a real secret, token or credential into a comment. Mask it (`***` plus a short prefix and its location).

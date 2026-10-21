@@ -1,14 +1,14 @@
 ---
 name: devops-delivery
-description: Use when changing the build, the CI/CD pipeline, the Docker or compose setup, the release and rollback procedure, the runtime configuration or the observability of this project — including the exact commands, the stand isolation rules and the delivery hand-off format.
+description: Use when changing the build, the CI/CD pipeline, the Docker or compose setup, the release and rollback procedure, the runtime configuration or the observability of this project — including the exact commands, the stand isolation rules, how to merge a pull request when asked, and the delivery hand-off format.
 ---
 
-> **Проект.** Репозиторий, базовая ветка, рабочая копия отдела, защищённый клон человека,
-> имя compose-проекта, порты стенда и метки конвейера принадлежат проекту: они лежат в реестре
+> **Проект.** Репозиторий, базовая ветка, рабочая копия проекта, защищённый клон человека,
+> имя compose-проекта, порты стенда и каталог артефактов принадлежат проекту: они лежат в реестре
 > `~/.dsh/projects.json`, а проект определяется по рабочей области сессии. Перед первым действием
 > вызови инструмент `project_info` и подставь его значения вместо заполнителей, встречающихся ниже:
 > `<repo>`, `<base>`, `<workspace>`, `<humanClone>`, `<composeProject>`, `<frontendPort>`, `<apiPort>`,
-> `<artifacts>`, `<id>`. Метки конвейера берутся из `project_info.labels`, если проект их переопределяет.
+> `<artifacts>`, `<id>`. Имена меток задаёт проект: если он их переопределяет, пользуйся `project_info.labels`, а не примером из текста.
 > Пустое `<humanClone>` значит, что защищённого клона нет и рабочая область и есть каталог человека.
 > Пустой `<repo>` значит, что проект не связан с GitHub — инструменты `gh_*` на нём откажут.
 > Ничего не выводи из памяти и не подставляй значения по умолчанию.
@@ -45,10 +45,34 @@ You are the `devops-delivery` role. Your output is automation that behaves the s
 
 ## Release and rollback
 
-- `<base>` is the integration branch and `main` is what the human deploys; you never merge either.
+- `<base>` is the integration branch and `main` is what the human deploys. You never push to either: changes reach `<base>` through a pull request, and `main` stays the human's lane entirely.
 - Every deployable change states its rollback: the previous image tag, or the reversal steps for the migration.
 - Migrations are forward-only and backward-compatible for one release, run before the new code, and never combined with a destructive schema change in the same release.
 - After a deploy, verify that the health endpoint and the build identifier actually report the new revision.
+
+## Слияние pull request — когда его поручили
+
+Слияние — отдельная операция, а не завершение любой работы. Делаешь его, только когда задание прямо просит слить конкретный PR.
+
+1. Прочитай изменение: `gh_pr({ "number": <PR>, "files": true })`. Если в задании есть вердикт проверки, сверься с ним; красный вердикт при поручении слить — противоречие, о нём сообщаешь и останавливаешься.
+2. Метод — merge-коммит: история этих репозиториев ведётся строками «Merge pull request #N from …», squash её сломал бы.
+3. Конфликт с базой не форсируешь: называешь конфликтующие файлы и возвращаешь задачу тому, кто её поставил.
+4. Перед слиянием убери артефакты постановки: если в ветке PR есть каталог `mockups/<номер>/`, удали его отдельным коммитом, который остаётся в истории, но не попадает в `<base>`:
+
+   ```powershell
+   git -C <workspace> fetch origin
+   git -C <workspace> checkout feature/<номер>-<слаг>
+   git -C <workspace> pull --ff-only
+   git -C <workspace> rm -r mockups/<номер>
+   git -C <workspace> commit -m "Убрать макеты постановки (#<номер>)"
+   git -C <workspace> push
+   ```
+
+   Макеты — часть постановки: задачу слили, значит визуальные референсы в дереве больше не нужны, а копиться они не должны. Нет каталога — шаг пропускаешь: ничего не создаёшь и не коммитишь.
+5. После слияния ветку задачи удаляешь — она уже в базе.
+6. Рабочую копию возвращаешь на `<base>`: `git checkout <base>`, `git pull --ff-only`.
+
+Свои собственные PR, сделанные в этой же роли, не мержишь: их мержит человек.
 
 ## Configuration and secrets
 

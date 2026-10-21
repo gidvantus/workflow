@@ -36,7 +36,7 @@ if (!fs.existsSync(dshHome)) {
 // ── что синхронизируем ──────────────────────────────────────────────────────
 
 // Роли отдела: один каталог — один пресет. Новый пресет добавляется сюда строкой.
-const PRESETS = ['analyst', 'code-review', 'design', 'dev', 'devops-delivery', 'jev', 'security-review', 'tester']
+const PRESETS = ['analyst', 'code-review', 'design', 'dev-backend', 'dev-frontend', 'dev-fullstack', 'devops-delivery', 'jev', 'security-review', 'tester']
 
 // Хост-плоскость: путь внутри каталога установки совпадает с путём в репозитории.
 const HOST_FILES = [
@@ -70,6 +70,7 @@ const TOOL_FILES = [
   { from: '.session-tail.mjs', to: 'tools/session-tail.mjs' },
   { from: '.github-labels-probe.mjs', to: 'tools/pipeline-labels-probe.mjs' },
   { from: '.github-labels-create.mjs', to: 'tools/pipeline-labels-create.mjs' },
+  { from: 'DEPARTMENT-PROCESS.md', to: 'docs/DEPARTMENT-PROCESS.md' },
 ]
 
 // Что не синхронизируется никогда: черновики, логи, артефакты прогонов.
