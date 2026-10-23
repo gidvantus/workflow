@@ -1708,16 +1708,10 @@ export default {
         const head = await reviewHead(project, issue)
         if (head && head.same) {
           st.noop[issue.number] = (st.noop[issue.number] || 0) + 1
-          const owner = await roleForRework(project, issue, L)
-          try {
-            await github('POST', '/repos/' + project.repo + '/issues/' + issue.number + '/comments', {
-              body: 'Отдел разработки: ветка не менялась с прошлого ревью — ревизия ' + head.sha +
-                ' та же, ревьюера не зову. Доработка уходит ' + owner + '.',
-            })
-          } catch (error) {
-            state.lastError = 'комментарий о неизменённой ревизии: ' + (error && error.message ? error.message : String(error))
-          }
           if (st.noop[issue.number] >= 2) {
+            // Второй круг подряд: выдавать нечего, поэтому и обещания выдачи нет —
+            // только комментарий о снятии, иначе в тикете остались бы два
+            // взаимоисключающих следа («уходит разработчику» и «снят»).
             try {
               await github('POST', '/repos/' + project.repo + '/issues/' + issue.number + '/comments', {
                 body: 'Отдел разработки: два круга подряд без нового коммита — ревизия ' + head.sha +
@@ -1730,6 +1724,15 @@ export default {
             await dropFromPipeline(project, issue)
             if (st.run) st.run.entries.push({ number: issue.number, title: issue.title, outcome: 'снят с конвейера: два круга подряд без нового коммита' })
             return { action: 'dropped', project: project.id, issue: issue.number, reason: 'two review rounds without a new commit' }
+          }
+          const owner = await roleForRework(project, issue, L)
+          try {
+            await github('POST', '/repos/' + project.repo + '/issues/' + issue.number + '/comments', {
+              body: 'Отдел разработки: ветка не менялась с прошлого ревью — ревизия ' + head.sha +
+                ' та же, ревьюера не зову. Доработка уходит ' + owner + '.',
+            })
+          } catch (error) {
+            state.lastError = 'комментарий о неизменённой ревизии: ' + (error && error.message ? error.message : String(error))
           }
           // Круг без коммита не считается доработкой: возвращаем счётчик назад,
           // чтобы пустые круги не съедали бюджет задачи.
@@ -1918,6 +1921,9 @@ export default {
           } catch (error) {
             state.lastError = 'снятие зависшего хода: ' + (error && error.message ? error.message : String(error))
           }
+          // Ход снят до работы: ревизию ревьюер не видел, и сторож пустого круга
+          // должен начаться заново, иначе снятая сессия выдаст себя за просмотр.
+          if (stuck.role === 'code-review') delete st.reviewedHead[stuck.issue]
           st.run.entries.push({
             number: stuck.issue,
             title: stuck.title,
@@ -1944,6 +1950,10 @@ export default {
         const infraFailure = await failedTurnWithoutWork(finished.sessionId)
         if (infraFailure !== null) {
           st.attempts[finished.issue] = Math.max(0, (st.attempts[finished.issue] || 1) - 1)
+          // Ход не начался — ревьюер ревизию не смотрел. Забываем записанный head,
+          // иначе следующий тик объявит пустой круг по ветке, которой никто не
+          // видел, и спишет это на «разработчик не запушил».
+          if (finished.role === 'code-review') delete st.reviewedHead[finished.issue]
           const backoff = infraBackoffMs(st.infraFails || 0)
           st.infraFails = (st.infraFails || 0) + 1
           st.backoffUntil = now.getTime() + backoff

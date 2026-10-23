@@ -511,7 +511,31 @@ check('ревизия не менялась — ревьюер не зван', s
 check('счётчик доработок не вырос', step.state.projects.vahta.rework[800], 1)
 check('в issue сказано про неизменённую ревизию', comments.some((c) => c.number === 800 && c.body.includes('ветка не менялась с прошлого ревью')), true)
 check('ревьюер за пустой круг не звался', created.filter((c) => c.preset === 'code-review').length, 1)
+check('о снятии речи нет', comments.some((c) => c.number === 800 && c.body.includes('два круга подряд без нового коммита')), false)
+// Новый коммит снимает пустой круг: ревизия сменилась, ревьюер снова нужен, и
+// накопленный noop обнуляется — иначе честный круг стоил бы тикету одного пустого.
+endTurn(dev8)
+setLabels(800, ['for-code-review'])
+pulls.set(800, { number: 800, head: { ref: 'feature/800-empty-round', sha: 'sha-800-2' } })
+await tick(app)
+step = await tick(app)
+check('новый коммит снова зовёт ревьюера', step.result.action + ':' + step.result.role, 'dispatched:code-review')
+check('счётчик доработок не изменился', step.state.projects.vahta.rework[800], 1)
+const review8b = step.result.sessionId
+// Ревьюер вернул, а коммита снова нет: это первый пустой круг после честного.
+endTurn(review8b)
+setLabels(800, ['ready-for-dev'])
+await tick(app)
+step = await tick(app)
+check('возврат из ревью снова доработка', step.result.action + ':' + step.result.role, 'dispatched:dev-fullstack')
+endTurn(dev8)
+setLabels(800, ['for-code-review'])
+await tick(app)
+step = await tick(app)
+check('после честного круга пустой круг снова первый', step.result.action + ':' + step.result.role, 'dispatched:dev-fullstack')
+check('тикет ещё на конвейере', step.result.action, 'dispatched')
 // Второй пустой круг подряд: тикет уходит человеку.
+const unchangedBefore = comments.filter((c) => c.number === 800 && c.body.includes('ветка не менялась')).length
 endTurn(dev8)
 setLabels(800, ['for-code-review'])
 await tick(app)
@@ -520,7 +544,35 @@ check('второй пустой круг снимает тикет', step.resul
 check('причина снятия названа', step.result.reason, 'two review rounds without a new commit')
 check('человеку сказано про два круга', comments.some((c) => c.number === 800 && c.body.includes('два круга подряд без нового коммита')), true)
 check('метки стадий сняты', issues.get(800).labels, [])
-check('ревьюер не звался и во второй раз', created.filter((c) => c.preset === 'code-review').length, 1)
+check('на снятом круге обещания выдачи нет', comments.filter((c) => c.number === 800 && c.body.includes('ветка не менялась')).length, unchangedBefore)
+
+console.log('\n=== сценарий 9: сбой модели на ходе ревьюера не выдаёт себя за пустой круг ===')
+// Ход ревьюера не начался (провайдер): ревизию он не видел, значит и записанной
+// просмотренной ревизии быть не должно — иначе следующий тик объявит «ветка не
+// менялась» и спишет сбой на разработчика.
+reset({ number: 900, title: 'Демо-тикет 900', labels: ['ready-for-dev'], state: 'open' })
+pulls.clear()
+comments.length = 0
+pullFiles = []
+pulls.set(900, { number: 900, head: { ref: 'feature/900-provider-fail', sha: 'sha-900-1' } })
+app = await boot()
+step = await tick(app)
+const dev9 = step.result.sessionId
+endTurn(dev9)
+setLabels(900, ['for-code-review'])
+await tick(app)
+step = await tick(app)
+check('ревьюер вызван', step.result.action + ':' + step.result.role, 'dispatched:code-review')
+const review9 = step.result.sessionId
+turnTails.set(review9, brokenTurn('SSE stream ended without [DONE]'))
+endTurn(review9)
+step = await tick(app)
+check('сбой модели распознан', step.result.action, 'provider-error')
+advance(11 * 60 * 1000)
+step = await tick(app)
+check('после паузы ревьюер позван снова', step.result.action + ':' + step.result.role, 'dispatched:code-review')
+check('пустого круга не объявляли', comments.some((c) => c.number === 900 && c.body.includes('ветка не менялась с прошлого ревью')), false)
+check('бюджет доработок не тронут', step.state.projects.vahta.rework[900], undefined)
 
 console.log('\n=== служебное ===')
 const ids = allRequestIds.map((p) => p.requestId)
