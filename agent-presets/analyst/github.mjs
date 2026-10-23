@@ -494,7 +494,43 @@ export default {
         return issueView(created)
       },
     )
+
+    // Постановка — живой документ: ревью и разработка возвращаются с вопросами,
+    // и правка «в комментарии» оставляет тело issue описывать прежнюю ревизию.
+    // Инструмент меняет ТОЛЬКО title и body: меток он по-прежнему не ставит —
+    // ready-for-dev остаётся за человеком, маршрут area:* — за диспетчером.
+    // Поля передаются ровно те, что пришли: непереданное поле PATCH не трогает.
+    const issueEditTool = define(
+      'gh_issue_edit',
+      'Изменить заголовок и/или тело issue. Меняет только title и body — метки, состояние и назначенных не трогает. Переданное поле заменяет прежнее значение целиком, поэтому сначала прочитай текущее тело через gh_issue, а потом передай его с правкой.',
+      {
+        type: 'object',
+        properties: {
+          number: { type: 'integer', description: 'Номер issue' },
+          title: { type: 'string', description: 'Новый заголовок issue (не передан — заголовок остаётся прежним)' },
+          body: { type: 'string', description: 'Новое тело issue целиком (не передано — тело остаётся прежним)' },
+        },
+        required: ['number'],
+        additionalProperties: false,
+      },
+      async (a, p) => {
+        const patch = {}
+        if (typeof a.title === 'string') patch.title = a.title
+        if (typeof a.body === 'string') patch.body = a.body
+        if (Object.keys(patch).length === 0) {
+          throw new Error('передайте title и/или body: пустой вызов тело issue не меняет, а сетевой запрос не нужен')
+        }
+        const updated = await api('PATCH', '/repos/' + p.repo + '/issues/' + a.number, patch)
+        return {
+          number: updated && updated.number,
+          title: updated && updated.title,
+          body: (updated && updated.body) || '',
+          url: updated && updated.html_url,
+        }
+      },
+    )
     ctx.effect(() => tools.register(issueTool), 'github:gh_issue')
+    ctx.effect(() => tools.register(issueEditTool), 'github:gh_issue_edit')
     ctx.effect(() => tools.register(issueCreateTool), 'github:gh_issue_create')
     ctx.effect(() => tools.register(issuesTool), 'github:gh_issues')
     ctx.effect(() => tools.register(commentTool), 'github:gh_issue_comment')
