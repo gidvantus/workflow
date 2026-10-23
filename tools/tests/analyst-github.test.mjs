@@ -68,12 +68,14 @@ function check(name, actual, expected) {
 }
 const byName = (n) => tools.find((t) => t.name === n)
 
-check('пресет зарегистрировал 9 инструментов', tools.map((t) => t.name).sort(), [
-  'gh_issue', 'gh_issue_comment', 'gh_issue_create', 'gh_issue_mockup',
-  'gh_issues', 'gh_pr', 'gh_pr_create', 'gh_prs', 'project_info',
+check('пресет зарегистрировал 10 инструментов', tools.map((t) => t.name).sort(), [
+  'gh_issue', 'gh_issue_comment', 'gh_issue_create', 'gh_issue_edit',
+  'gh_issue_mockup', 'gh_issues', 'gh_pr', 'gh_pr_create', 'gh_prs', 'project_info',
 ])
 check('общего редактора меток у аналитика нет', !!byName('gh_issue_labels'), false)
 check('gh_issue_create есть', !!byName('gh_issue_create'), true)
+check('gh_issue_edit есть', !!byName('gh_issue_edit'), true)
+check('gh_issue_edit знает только number, title, body', Object.keys(byName('gh_issue_edit').parameters.properties).sort(), ['body', 'number', 'title'])
 
 const created = JSON.parse(await byName('gh_issue_create').execute({
   title: 'Отпуск: замещение на срок',
@@ -100,6 +102,35 @@ calls.length = 0
 await byName('gh_issue_create').execute({ title: 'Без метки', body: 'тело' })
 check('без меток поле labels не отправляется', 'labels' in calls[0].body, false)
 
+// Правка тела постановки: PATCH именно в issue, переданное поле — как есть.
+status = 200
+response = {
+  number: 123,
+  title: 'Отпуск: замещение на срок',
+  body: '## Промт для разработчика\n…\n\n## План работы\n…',
+  html_url: 'https://github.com/gidvantus/vahta/issues/123',
+}
+const newBody = '## Промт для разработчика\n…\n\n## План работы\n…\n\n## Поправка к постановке\nТело описывает вторую ревизию.'
+calls.length = 0
+const edited = JSON.parse(await byName('gh_issue_edit').execute({ number: 123, body: newBody }))
+check('правка тела — PATCH в issue', [calls[0].method, calls[0].path], ['PATCH', '/repos/gidvantus/vahta/issues/123'])
+check('тело уехало ровно переданным', calls[0].body, { body: newBody })
+check('правка тела меток не ставит', 'labels' in calls[0].body, false)
+check('ответ правки из четырёх полей', Object.keys(edited).sort(), ['body', 'number', 'title', 'url'])
+check('токен не утёк в результат правки', JSON.stringify(edited).includes('test-token'), false)
+
+calls.length = 0
+await byName('gh_issue_edit').execute({ number: 123, title: 'Отпуск: замещение (ревизия 2)' })
+check('частичное обновление не шлёт тело', calls[0].body, { title: 'Отпуск: замещение (ревизия 2)' })
+
+calls.length = 0
+let emptyError = null
+try {
+  await byName('gh_issue_edit').execute({ number: 123 })
+} catch (e) { emptyError = e.message }
+check('пустой вызов объяснён до сети', /title и\/или body/.test(emptyError || ''), true)
+check('пустой вызов не дошёл до сети', calls.length, 0)
+
 calls.length = 0
 status = 403
 response = { message: 'Resource not accessible by personal access token' }
@@ -108,6 +139,12 @@ try {
   await byName('gh_issue_create').execute({ title: 'X', body: 'Y', labels: ['ready-for-dev'] })
 } catch (e) { error = e.message }
 check('ошибка GitHub объясняется словами', /GitHub 403: Resource not accessible/.test(error || ''), true)
+
+error = null
+try {
+  await byName('gh_issue_edit').execute({ number: 123, body: 'z' })
+} catch (e) { error = e.message }
+check('ошибка правки тела объясняется словами', /GitHub 403: Resource not accessible/.test(error || ''), true)
 
 console.log(failures === 0 ? '\nВСЕ ПРОВЕРКИ ПРОШЛИ' : '\nПРОВАЛОВ: ' + failures)
 fs.rmSync(home, { recursive: true, force: true })

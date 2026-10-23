@@ -36,7 +36,9 @@ https.request = (options, callback) => ({
       auth: options.headers && options.headers.Authorization,
     })
     process.nextTick(() => {
-      const body = JSON.stringify(response)
+      // Ответ можно задать функцией от пути: один вызов gh_pr делает два
+      // запроса (сам PR и обсуждение), и ответы у них разные.
+      const body = JSON.stringify(typeof response === 'function' ? response(options.path) : response)
       const res = {
         statusCode: status,
         on(event, fn) {
@@ -76,6 +78,8 @@ check('пресет зарегистрировал 9 инструментов', 
   'gh_pr', 'gh_pr_comment', 'gh_pr_create', 'gh_prs', 'project_info',
 ])
 check('gh_pr_comment есть', !!byName('gh_pr_comment'), true)
+check('тела PR ревьюер не правит', !!byName('gh_pr_edit'), false)
+check('gh_pr умеет comments', !!byName('gh_pr').parameters.properties.comments, true)
 
 const posted = JSON.parse(await byName('gh_pr_comment').execute({ number: 77, body: 'FIX: 1\n\napp/api/x.py:42 — пустой список' }))
 check('комментарий ушёл в обсуждение PR', [calls[0].method, calls[0].path], ['POST', '/repos/gidvantus/vahta/issues/77/comments'])
@@ -83,6 +87,52 @@ check('текст уехал как есть', calls[0].body.body.startsWith('FI
 check('токен ушёл в заголовке', calls[0].auth, 'Bearer test-token')
 check('ответ разобран', [posted.commentId, typeof posted.url], [5, 'string'])
 check('токен не утёк в результат', JSON.stringify(posted).includes('test-token'), false)
+
+// Ответы автора на замечания читаются из обсуждения PR, а не домысливаются.
+status = 200
+const prRow = {
+  number: 77,
+  title: 'Отписка (#77)',
+  state: 'open',
+  draft: false,
+  head: { ref: 'feature/77-unsubscribe' },
+  base: { ref: 'develop-m' },
+  merged: false,
+  html_url: 'https://github.com/gidvantus/vahta/pull/77',
+  body: 'Что сделано: кнопка отписки',
+}
+response = prRow
+calls.length = 0
+const prBase = JSON.parse(await byName('gh_pr').execute({ number: 77 }))
+check('без comments обсуждение не запрашивается', calls.length, 1)
+check('без comments поля в ответе нет', 'comments' in prBase, false)
+check('детали PR читаются с пути pull request', [calls[0].method, calls[0].path], ['GET', '/repos/gidvantus/vahta/pulls/77'])
+
+// Первый запрос — сам PR, второй — его обсуждение; сеть поддельная, поэтому
+// Первый запрос — сам PR, второй — его обсуждение; ответ выбирается по пути.
+const replies = [
+  { user: { login: 'dev-fullstack' }, body: 'Поправил: тело PR обновлено под дифф', created_at: '2026-10-20T10:00:00Z' },
+  { user: { login: 'code-review' }, body: 'FIX: 1\n\napp/api/x.py:42 — пустой список', created_at: '2026-10-20T09:00:00Z' },
+]
+response = (requestPath) => (requestPath.indexOf('/comments') !== -1 ? replies : prRow)
+const byPathRequest = https.request
+calls.length = 0
+const withComments = JSON.parse(await byName('gh_pr').execute({ number: 77, comments: true }))
+check('обсуждение запрашивается на issue-пути', [
+  [calls[0].method, calls[0].path],
+  [calls[1].method, calls[1].path],
+], [
+  ['GET', '/repos/gidvantus/vahta/pulls/77'],
+  ['GET', '/repos/gidvantus/vahta/issues/77/comments?per_page=100'],
+])
+check('ответы автора пришли списком', Array.isArray(withComments.comments), true)
+check('каждый ответ — author, body, at', withComments.comments.map((c) => Object.keys(c).sort()).every((k) => JSON.stringify(k) === '["at","author","body"]'), true)
+check('ответ автора разобран', withComments.comments[0], {
+  author: 'dev-fullstack', body: 'Поправил: тело PR обновлено под дифф', at: '2026-10-20T10:00:00Z',
+})
+check('детали и обсуждение в одном ответе', [withComments.title, withComments.comments.length], ['Отписка (#77)', 2])
+check('токен не утёк в обсуждение', JSON.stringify(withComments).includes('test-token'), false)
+https.request = byPathRequest
 
 calls.length = 0
 status = 200

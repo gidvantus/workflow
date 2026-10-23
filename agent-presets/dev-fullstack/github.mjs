@@ -423,6 +423,41 @@ export default {
       })),
     )
 
+    // Тело PR — такая же часть отчёта, как дифф: ревьюер читает его и не может
+    // догадаться, что переделано в третьей итерации. Инструмент меняет ТОЛЬКО
+    // title и body: метки, состояние и мерж — дело процесса, а не автора правки.
+    // Поля передаются ровно те, что пришли: чего не передали, того PATCH не
+    // касается, и разделы прочитанного тела не стираются сами собой.
+    const prEditTool = define(
+      'gh_pr_edit',
+      'Изменить заголовок и/или тело pull request. Меняет только title и body — метки, состояние и мерж не трогает. Переданное поле заменяет прежнее значение целиком, поэтому сначала прочитай текущее тело через gh_pr, а потом передай его с правкой.',
+      {
+        type: 'object',
+        properties: {
+          number: { type: 'integer', description: 'Номер pull request' },
+          title: { type: 'string', description: 'Новый заголовок PR (не передан — заголовок остаётся прежним)' },
+          body: { type: 'string', description: 'Новое тело PR целиком (не передано — тело остаётся прежним)' },
+        },
+        required: ['number'],
+        additionalProperties: false,
+      },
+      async (a, p) => {
+        const patch = {}
+        if (typeof a.title === 'string') patch.title = a.title
+        if (typeof a.body === 'string') patch.body = a.body
+        if (Object.keys(patch).length === 0) {
+          throw new Error('передайте title и/или body: пустой вызов тело PR не меняет, а сетевой запрос не нужен')
+        }
+        const updated = await api('PATCH', '/repos/' + p.repo + '/pulls/' + a.number, patch)
+        return {
+          number: updated && updated.number,
+          title: updated && updated.title,
+          body: (updated && updated.body) || '',
+          url: updated && updated.html_url,
+        }
+      },
+    )
+
     const prsTool = define(
       'gh_prs',
       'Список pull request. Фильтр issue ищет PR, относящиеся к issue: по ветке feature/<номер>-… или по ссылке #<номер> в тексте.',
@@ -495,6 +530,7 @@ export default {
     ctx.effect(() => tools.register(commentTool), 'github:gh_issue_comment')
     ctx.effect(() => tools.register(labelsTool), 'github:gh_issue_labels')
     ctx.effect(() => tools.register(prCreateTool), 'github:gh_pr_create')
+    ctx.effect(() => tools.register(prEditTool), 'github:gh_pr_edit')
     ctx.effect(() => tools.register(prsTool), 'github:gh_prs')
     ctx.effect(() => tools.register(prTool), 'github:gh_pr')
 
