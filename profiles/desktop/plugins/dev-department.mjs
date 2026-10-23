@@ -68,8 +68,11 @@
 //   → for-code-review → code-review (всё изменение) → ready-for-test → tester
 //   Если бэкенд-части в постановке не было (for-code-review без PR), диспетчер
 //   передаёт тикет фронтенду сразу, не гоняя ревьюера на пустой PR.
-// Возврат в доработку уходит той половине, чьи файлы в PR: маршрут решают пути
-// изменённых файлов, а метка area:* — только запасной вариант.
+// Возврат в доработку уходит половине, названной в замечаниях ревьюера: маршрут
+// решают пути из последнего круга замечаний, а метка area:* и фаза — запасной
+// вариант. Круг без нового коммита доработкой не считается: на ту же ревизию
+// ревьюер не зовётся, бюджет доработок не тратится, а два таких круга подряд
+// снимают тикет с конвейера человеку.
 //
 // Возврат из ревью в доработку считается такой же доработкой, как возврат из
 // теста: счётчик доработок у тикета один, иначе пара dev↔code-review может
@@ -711,7 +714,22 @@ export default {
 
     function projectState(id) {
       if (!state.projects[id]) {
-        state.projects[id] = { run: null, lastShiftKey: null, session: null, rework: {}, attempts: {}, dropped: {}, infraFails: 0, backoffUntil: null }
+        // reviewedHead — ревизия, которую ревьюер уже смотрел; noop — сколько
+        // кругов подряд прошло без нового коммита; findings — пути из замечаний,
+        // по которым выбран маршрут доработки.
+        state.projects[id] = {
+          run: null,
+          lastShiftKey: null,
+          session: null,
+          rework: {},
+          attempts: {},
+          dropped: {},
+          reviewedHead: {},
+          noop: {},
+          findings: {},
+          infraFails: 0,
+          backoffUntil: null,
+        }
       }
       return state.projects[id]
     }
@@ -809,6 +827,33 @@ export default {
       return false
     }
 
+    // К какой ОДНОЙ половине относится путь. Одного inArea мало: каталог половин
+    // встречается в пути дважды — frontend/src/api/auth.js подходит и под
+    // frontend/, и под api/, и маршрут по замечаниям уезжал бы в dev-fullstack на
+    // ровном месте. Решает самое левое совпадение: оно ближе к корню и называет
+    // дерево, в котором файл лежит на самом деле.
+    function areaOfPath(path, areas) {
+      const p = String(path || '').replace(/\\/g, '/').toLowerCase()
+      if (!p) return null
+      const match = (prefixes, half) => {
+        let best = null
+        for (const prefix of prefixes || []) {
+          const needle = String(prefix || '').replace(/\\/g, '/').toLowerCase()
+          if (!needle) continue
+          const at = p.indexOf(needle)
+          if (at !== 0 && (at < 0 || p.charAt(at - 1) !== '/')) continue
+          if (best === null || at < best.at) best = { at, half }
+        }
+        return best
+      }
+      const backend = match(areas.backend, 'backend')
+      const frontend = match(areas.frontend, 'frontend')
+      if (backend && frontend) return frontend.at < backend.at ? 'frontend' : 'backend'
+      if (frontend) return 'frontend'
+      if (backend) return 'backend'
+      return null
+    }
+
     // PR ищется по головной ветке: соглашение feature/<номер>-* — часть контракта
     // ролей, поэтому номер тикета однозначно указывает на его PR.
     async function findPr(project, number) {
@@ -816,36 +861,112 @@ export default {
       return (pulls || []).filter((p) => p && p.head && String(p.head.ref).indexOf('feature/' + number + '-') === 0)[0] || null
     }
 
-    // Файлы PR — единственный честный ответ на вопрос «кто это изменение делал».
-    // Метка врёт при смешанном изменении и после ручных правок человеком.
-    async function prChangedFiles(project, number) {
-      const pr = await findPr(project, number)
-      if (!pr) return null
-      const files = await github('GET', '/repos/' + project.repo + '/pulls/' + pr.number + '/files?per_page=100')
-      return (files || []).map((f) => String(f.filename || ''))
+    // Пути файлов в тексте замечания. Расширения перечислены явно, суффикс
+    // :строка срезается: `frontend/src/api/auth.js:41` и `auth.js` — один файл.
+    const FINDING_PATH = /[A-Za-z0-9_@~$][A-Za-z0-9_@~$/.-]*\.(?:py|sql|js|jsx|ts|tsx|mjs|css|scss|vue|svelte|html)(?::[0-9]+(?:-[0-9]+)?)?/g
+
+    // Круг ревью начинается вердиктом: всё, что выше последнего вердикта, — уже
+    // закрытая история и к текущему возврату отношения не имеет.
+    const ROUND_START = /^(FIX:|SHIP\b|BLOCKED\b)/
+
+    // Комментарии PR. Их отдаёт тот же адрес, что и комментарии тикета: PR — это
+    // issue. По 100 на страницу, поэтому дочитываем, пока страница полная: иначе
+    // последний круг замечаний можно обрезать.
+    async function prComments(project, number) {
+      const all = []
+      for (let page = 1; page <= 10; page += 1) {
+        const rows = await github('GET', '/repos/' + project.repo + '/issues/' + number + '/comments?per_page=100&page=' + page)
+        const list = Array.isArray(rows) ? rows : []
+        all.push(...list)
+        if (list.length < 100) break
+      }
+      return all
     }
 
-    async function roleForRework(project, issue, L) {
-      let files = null
+    // Замечания последнего круга, разложенные по половинам работы. Вердикт и
+    // замечания живут комментариями PR — инлайновых review-комментариев этот
+    // процесс не пишет. Ошибка сети или отсутствие PR — null, а не исключение:
+    // маршрут тогда честно решает метка area:*.
+    async function reviewFindings(project, issue) {
+      let pr = null
       try {
-        files = await prChangedFiles(project, issue.number)
+        pr = await findPr(project, issue.number)
       } catch (error) {
-        // GitHub не ответил — судим по меткам маршрута, как раньше.
-        state.lastError = 'файлы PR #' + issue.number + ': ' + (error && error.message ? error.message : String(error))
+        state.lastError = 'PR #' + issue.number + ': ' + (error && error.message ? error.message : String(error))
+        return null
       }
-      if (files && files.length > 0) {
-        const areas = areasOf(project)
-        let backend = 0
-        let frontend = 0
-        for (const file of files) {
-          const p = String(file).replace(/\\/g, '/').toLowerCase()
-          if (inArea(p, areas.backend)) backend += 1
-          else if (inArea(p, areas.frontend)) frontend += 1
+      if (!pr) return null
+      let rows = null
+      try {
+        rows = await prComments(project, pr.number)
+      } catch (error) {
+        state.lastError = 'замечания PR #' + pr.number + ': ' + (error && error.message ? error.message : String(error))
+        return null
+      }
+      // Свои комментарии диспетчера — не замечания ревьюера: в них те же пути, и
+      // маршрут по ним замыкался бы сам на себя.
+      const texts = rows
+        .map((row) => String((row && row.body) || ''))
+        .filter((text) => !/^\s*Отдел разработки:/.test(text))
+      let from = -1
+      for (let i = 0; i < texts.length; i += 1) {
+        if (ROUND_START.test(texts[i])) from = i
+      }
+      if (from < 0) return { backend: [], frontend: [] }
+      const round = texts.slice(from).join('\n')
+      const areas = areasOf(project)
+      const backend = []
+      const frontend = []
+      const seen = new Set()
+      FINDING_PATH.lastIndex = 0
+      let match = FINDING_PATH.exec(round)
+      while (match) {
+        const cleaned = match[0].replace(/:\d+(?:-\d+)?$/, '').replace(/\\/g, '/').replace(/^\.\//, '')
+        if (cleaned && !seen.has(cleaned.toLowerCase())) {
+          seen.add(cleaned.toLowerCase())
+          const half = areaOfPath(cleaned, areas)
+          if (half === 'backend') backend.push(cleaned)
+          if (half === 'frontend') frontend.push(cleaned)
         }
-        if (frontend > backend) return 'dev-frontend'
-        if (backend > frontend) return 'dev-backend'
+        match = FINDING_PATH.exec(round)
+      }
+      return { backend, frontend }
+    }
+
+    // Кому отдать доработку. Решают пути из замечаний: подсчёт файлов всего PR
+    // врал — на vahta #193 фронтенд-замечания четыре раза подряд уходили
+    // бэкендеру, потому что бэкенд-файлов в PR было больше, и три доработки
+    // закончились без единого коммита. Нет путей или PR не прочитан — решает
+    // метка маршрута, как раньше.
+    async function roleForRework(project, issue, L) {
+      const findings = await reviewFindings(project, issue)
+      if (findings) projectState(project.id).findings[issue.number] = findings
+      if (findings) {
+        const backend = findings.backend.length > 0
+        const frontend = findings.frontend.length > 0
+        if (backend && frontend) return 'dev-fullstack'
+        if (frontend) return 'dev-frontend'
+        if (backend) return 'dev-backend'
       }
       return implementer(issue, L)
+    }
+
+    // Пути замечаний, относящиеся к половине исполнителя. Забрать их можно один
+    // раз: след маршрута в комментарии и строка в задании берут один и тот же
+    // список, а следующий возврат прочитает замечания заново.
+    function takeFindings(st, number, role) {
+      const findings = st.findings[number]
+      delete st.findings[number]
+      if (!findings) return []
+      if (role === 'dev-backend') return findings.backend
+      if (role === 'dev-frontend') return findings.frontend
+      return findings.backend.concat(findings.frontend)
+    }
+
+    // След маршрута в тикете: половина и до трёх путей, по которым она выбрана.
+    function findingsTrace(role, paths) {
+      if (!paths || paths.length === 0) return ''
+      return ' → ' + role + ': ' + paths.slice(0, 3).join(', ')
     }
 
     // Дизайнера здесь нет намеренно: его диалог — ступень макета, то есть
@@ -1232,7 +1353,7 @@ export default {
     // фронтендер, — но путь, метки и отчёт у них общие: различаются границы
     // работы. Финальный шаг одинаков у всех — PR и for-code-review: передачу
     // полного стека фронтенду делает диспетчер по меткам, а не агент.
-    function implementerPrompt(project, issue, kind, repeat, role) {
+    function implementerPrompt(project, issue, kind, repeat, role, findingPaths) {
       const L = project.labels
       const isBackend = role === 'dev-backend'
       const isFrontend = role === 'dev-frontend'
@@ -1289,6 +1410,11 @@ export default {
       }
       if (kind === 'rework') lines.splice(2, 0, 'Начни с комментариев в issue и в PR этого тикета: там причина отказа, замечания и воспроизводящая команда.')
       if (kind === 'rework') lines.splice(2, 0, 'Это доработка №' + (projectState(project.id).rework[issue.number] || 0) + ' из ' + project.department.maxRework + ': её номер записан комментарием диспетчера в issue.')
+      // Пути из замечаний — не украшение задания: по ним исполнитель сразу видит,
+      // какие файлы его половины ревьюер назвал, и не ищет их в чужом дереве.
+      if (kind === 'rework' && findingPaths && findingPaths.length > 0) {
+        lines.splice(2, 0, 'Замечания ревьюера — в твоей половине: ' + findingPaths.slice(0, 5).join(', '))
+      }
       // Макет постановки — часть задания, а не украшение: раскладку, состояния и
       // тексты берут из него, чтобы фронтендер не придумывал их заново.
       if (has(issue, L.mockupsReady)) {
@@ -1531,10 +1657,91 @@ export default {
 
     // ── один шаг диспетчера по проекту ─────────────────────────────────────
 
+    // Ревизия, которую ревьюер уже смотрел. Живёт в памяти диспетчера, как
+    // счётчики: после перезапуска DSH поведение откатывается к «позвать
+    // ревьюера» — осознанный деграйд, зависнуть тикет не может.
+    async function reviewHead(project, issue) {
+      let pr = null
+      try {
+        pr = await findPr(project, issue.number)
+      } catch (error) {
+        // GitHub не ответил — не решаем за ревьюера, зовём как обычно.
+        state.lastError = 'PR #' + issue.number + ': ' + (error && error.message ? error.message : String(error))
+        return null
+      }
+      if (!pr || !pr.head || !pr.head.sha) return null
+      const sha = String(pr.head.sha)
+      return { sha, same: projectState(project.id).reviewedHead[issue.number] === sha }
+    }
+
+    // Снятие тикета с конвейера: одна уборка на все поводы — лимит попыток, лимит
+    // доработок, два круга ревью без нового коммита. Метки снимаются все до одной:
+    // иначе снятый тикет остаётся в очереди, человек ставит ready-for-dev, и цикл
+    // «снят → возвращён → снят» крутится каждый тик.
+    async function dropFromPipeline(project, issue) {
+      const L = project.labels
+      for (const name of [L.progress, L.review, L.failed, L.test, L.frontend, L.phaseFrontend, L.ok, L.dev, L.mockup, L.mockupsReady]) {
+        try {
+          await github('DELETE', '/repos/' + project.repo + '/issues/' + issue.number + '/labels/' + encodeURIComponent(name))
+        } catch (error) { /* метки могло и не быть */ }
+      }
+      for (const presetId of ['dev-fullstack', 'dev-backend', 'dev-frontend', 'design', 'tester', 'code-review', 'devops-delivery']) {
+        forgetDialog(project, presetId, issue.number)
+      }
+      const st = projectState(project.id)
+      st.dropped[issue.number] = true
+      // Снятый тикет начинается заново: ни истории ревизий, ни пустых кругов.
+      delete st.reviewedHead[issue.number]
+      delete st.noop[issue.number]
+      delete st.findings[issue.number]
+    }
+
     async function dispatch(project, decision) {
       const st = projectState(project.id)
       const L = project.labels
-      const { role, issue, rework } = decision
+      const { role, issue } = decision
+      // Сторож пустого круга. Если разработчик закончил ход, не запушив коммит, а
+      // метку for-code-review переставил, ревьюер увидел бы ту же ревизию, что и в
+      // прошлый раз: круг без нового коммита не тратит ни ревью, ни бюджет
+      // доработок, а доработка уходит владельцу замечаний.
+      if (role === 'code-review') {
+        const head = await reviewHead(project, issue)
+        if (head && head.same) {
+          st.noop[issue.number] = (st.noop[issue.number] || 0) + 1
+          const owner = await roleForRework(project, issue, L)
+          try {
+            await github('POST', '/repos/' + project.repo + '/issues/' + issue.number + '/comments', {
+              body: 'Отдел разработки: ветка не менялась с прошлого ревью — ревизия ' + head.sha +
+                ' та же, ревьюера не зову. Доработка уходит ' + owner + '.',
+            })
+          } catch (error) {
+            state.lastError = 'комментарий о неизменённой ревизии: ' + (error && error.message ? error.message : String(error))
+          }
+          if (st.noop[issue.number] >= 2) {
+            try {
+              await github('POST', '/repos/' + project.repo + '/issues/' + issue.number + '/comments', {
+                body: 'Отдел разработки: два круга подряд без нового коммита — ревизия ' + head.sha +
+                  ' так и не сменилась. Тикет снят с конвейера, нужен человек: поставь ' + L.dev +
+                  ', и счётчики вместе с диалогами обнулятся.',
+              })
+            } catch (error) {
+              state.lastError = 'комментарий о снятии после пустых кругов: ' + (error && error.message ? error.message : String(error))
+            }
+            await dropFromPipeline(project, issue)
+            if (st.run) st.run.entries.push({ number: issue.number, title: issue.title, outcome: 'снят с конвейера: два круга подряд без нового коммита' })
+            return { action: 'dropped', project: project.id, issue: issue.number, reason: 'two review rounds without a new commit' }
+          }
+          // Круг без коммита не считается доработкой: возвращаем счётчик назад,
+          // чтобы пустые круги не съедали бюджет задачи.
+          st.rework[issue.number] = Math.max(0, (st.rework[issue.number] || 0) - 1)
+          return dispatch(project, { role: owner, issue: issue, kind: 'rework' })
+        }
+        if (head) {
+          // Эту ревизию ревьюер увидит сейчас; новый коммит обнуляет пустые круги.
+          st.reviewedHead[issue.number] = head.sha
+          delete st.noop[issue.number]
+        }
+      }
       const attempts = (st.attempts[issue.number] || 0) + 1
       st.attempts[issue.number] = attempts
       if (attempts > project.department.maxAttempts) {
@@ -1546,22 +1753,10 @@ export default {
         await github('POST', '/repos/' + project.repo + '/issues/' + issue.number + '/comments', {
           body: 'Отдел разработки: задача выдавалась ' + (attempts - 1) + ' раз(а) и не сдвинулась — снимаю с конвейера, нужен человек.',
         })
-        for (const name of [L.progress, L.review, L.failed, L.test, L.frontend, L.phaseFrontend, L.ok, L.dev, L.mockup, L.mockupsReady]) {
-          try {
-            await github('DELETE', '/repos/' + project.repo + '/issues/' + issue.number + '/labels/' + encodeURIComponent(name))
-          } catch (error) { /* метки могло и не быть */ }
-        }
-        forgetDialog(project, 'dev-fullstack', issue.number)
-        forgetDialog(project, 'dev-backend', issue.number)
-        forgetDialog(project, 'dev-frontend', issue.number)
-        forgetDialog(project, 'design', issue.number)
-        forgetDialog(project, 'tester', issue.number)
-        forgetDialog(project, 'code-review', issue.number)
-        forgetDialog(project, 'devops-delivery', issue.number)
         // Снятый тикет не возвращается сам: иначе агент, который всё ещё работает
         // по нему, поставит метку, диспетчер снова выдаст задачу и снова снимет —
         // и так по кругу с новым комментарием каждый раз.
-        st.dropped[issue.number] = true
+        await dropFromPipeline(project, issue)
         st.run.entries.push({ number: issue.number, title: issue.title, role: role, outcome: 'снят с конвейера после ' + (attempts - 1) + ' попыток без результата' })
         return { action: 'dropped', project: project.id, issue: issue.number, reason: 'no progress after ' + (attempts - 1) + ' attempts' }
       }
@@ -1586,20 +1781,16 @@ export default {
               ' при лимите ' + project.department.maxRework + '. Тикет снят с конвейера, нужен человек:' +
               ' поставь ' + L.dev + ', и счётчики вместе с диалогами обнулятся.',
           })
-          for (const name of [L.progress, L.review, L.failed, L.frontend, L.phaseFrontend, L.ok, L.dev, L.mockup, L.mockupsReady]) {
-            try {
-              await github('DELETE', '/repos/' + project.repo + '/issues/' + issue.number + '/labels/' + encodeURIComponent(name))
-            } catch (error) { /* метки могло и не быть */ }
-          }
-          forgetDialog(project, 'dev-fullstack', issue.number)
-          forgetDialog(project, 'design', issue.number)
-          forgetDialog(project, 'tester', issue.number)
-          forgetDialog(project, 'code-review', issue.number)
-          st.dropped[issue.number] = true
+          await dropFromPipeline(project, issue)
           st.run.entries.push({ number: issue.number, title: issue.title, outcome: 'снят с конвейера после ' + rounds + ' доработок' })
           return { action: 'dropped', project: project.id, issue: issue.number, reason: 'too many rework rounds' }
         }
         if (kind === 'rework') st.rework[issue.number] = rounds + 1
+        // Пути из замечаний, по которым выбран маршрут: половина и до пяти путей
+        // уходят в задание, до трёх — в комментарий тикета. След маршрута в тикете
+        // один, и он же объясняет, почему доработка ушла этой роли.
+        const findingPaths = kind === 'rework' ? takeFindings(st, issue.number, role) : []
+        if (kind !== 'rework') delete st.findings[issue.number]
         // Счётчик доработок живёт в памяти диспетчера и в тикете нигде не
         // виден. Пишем номер круга в issue: по комментариям должно быть
         // понятно, который это возврат из ревью или теста.
@@ -1607,7 +1798,7 @@ export default {
           try {
             await github('POST', '/repos/' + project.repo + '/issues/' + issue.number + '/comments', {
               body: 'Отдел разработки: доработка №' + (rounds + 1) + ' из ' + project.department.maxRework +
-                ' (возврат ' + (has(issue, L.failed) ? 'из теста' : 'из код-ревью') + ').',
+                ' (возврат ' + (has(issue, L.failed) ? 'из теста' : 'из код-ревью') + ')' + findingsTrace(role, findingPaths) + '.',
             })
           } catch (error) {
             state.lastError = 'комментарий о номере доработки: ' + (error && error.message ? error.message : String(error))
@@ -1638,7 +1829,7 @@ export default {
             state.lastError = 'метка фазы фронтенда: ' + (error && error.message ? error.message : String(error))
           }
         }
-        const prompt = implementerPrompt(project, issue, kind, !!existingDialog(project, role, issue.number), role)
+        const prompt = implementerPrompt(project, issue, kind, !!existingDialog(project, role, issue.number), role, findingPaths)
         const sessionId = await startSession(project, role, prompt, issue)
         st.session = { role: role, issue: issue.number, title: issue.title, sessionId, startedAt: new Date().toISOString() }
         st.run.sessions = (st.run.sessions || 0) + 1
@@ -1827,6 +2018,11 @@ export default {
         delete st.dropped[issue.number]
         st.attempts[issue.number] = 0
         delete st.rework[issue.number]
+        // Сторож пустого круга начинается заново: человек вернул задачу в работу,
+        // и прошлая ревизия больше ничего не значит.
+        delete st.reviewedHead[issue.number]
+        delete st.noop[issue.number]
+        delete st.findings[issue.number]
         for (const presetId of ['dev-fullstack', 'dev-backend', 'dev-frontend', 'design']) {
           forgetDialog(project, presetId, issue.number)
         }

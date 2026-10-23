@@ -56,6 +56,15 @@ const advance = (ms) => { clock += ms }
 const issues = new Map()
 const comments = []
 const telegram = []
+// PR тестового проекта: номер → { number, head: { ref, sha } }. Пустой список
+// значит «PR нет»: тогда маршрут решает метка, как раньше.
+const pulls = new Map()
+// Файлы PR и счётчик их чтений. Список отдаётся, но диспетчер нового поколения
+// его не запрашивает: маршрут решают пути замечаний, а не состав PR.
+let pullFiles = []
+let pullFilesReads = 0
+// Замечания и вердикты ревьюера живут комментариями PR — как в жизни.
+const reviewer = (number, text) => comments.push({ number, body: text, user: 'reviewer' })
 
 function respond(options, payload) {
   if (options.host === 'api.telegram.org') {
@@ -65,7 +74,16 @@ function respond(options, payload) {
   const url = new URL('https://api.github.com' + options.path)
   const parts = url.pathname.split('/').filter(Boolean)
   const body = payload ? JSON.parse(payload) : null
-  if (parts[0] !== 'repos' || parts[3] !== 'issues') return { statusCode: 404, body: '{"message":"nf"}' }
+  if (parts[0] !== 'repos') return { statusCode: 404, body: '{"message":"nf"}' }
+  if (parts[3] === 'pulls') {
+    if (parts.length === 4) return { statusCode: 200, body: JSON.stringify([...pulls.values()]) }
+    if (parts[5] === 'files') {
+      pullFilesReads += 1
+      return { statusCode: 200, body: JSON.stringify(pullFiles) }
+    }
+    return { statusCode: 404, body: '{"message":"nf"}' }
+  }
+  if (parts[3] !== 'issues') return { statusCode: 404, body: '{"message":"nf"}' }
   const tail = parts.slice(4)
   if (tail.length === 0) {
     const open = [...issues.values()].filter((i) => i.state === 'open')
@@ -75,7 +93,10 @@ function respond(options, payload) {
   if (!issue) return { statusCode: 404, body: '{"message":"nf"}' }
   if (tail.length === 1) return { statusCode: 200, body: JSON.stringify(issue) }
   if (tail[1] === 'comments') {
-    comments.push({ number: issue.number, body: body.body })
+    if (options.method === 'GET') {
+      return { statusCode: 200, body: JSON.stringify(comments.filter((c) => c.number === issue.number)) }
+    }
+    comments.push({ number: issue.number, body: body.body, user: 'dispatcher' })
     return { statusCode: 201, body: '{}' }
   }
   if (tail[1] === 'labels') {
@@ -422,6 +443,84 @@ step = await tick(app)
 check('после макета — разработчик полного стека', step.result.action + ':' + step.result.role, 'dispatched:dev-fullstack')
 check('макет назван в задании разработчику', lastPrompt().text.includes('mockups/600'), true)
 check('готовый макет не считается доработкой', step.state.projects.vahta.rework[600], undefined)
+
+console.log('\n=== сценарий 7: возврат из ревью уходит половине по путям замечаний ===')
+// В PR перевес бэкенд-файлов (20 против 5), но замечания назвали только
+// фронтенд-пути. Маршрут по составу PR увёл бы доработку бэкендеру, который по
+// границам frontend/ не правит: именно так vahta #193 потерял три доработки.
+reset({ number: 700, title: 'Демо-тикет 700', labels: ['ready-for-dev', 'area:backend'], state: 'open' })
+pulls.clear()
+comments.length = 0
+pullFilesReads = 0
+pullFiles = [
+  ...Array.from({ length: 20 }, (_, i) => ({ filename: 'backend/app/module' + i + '.py' })),
+  ...Array.from({ length: 5 }, (_, i) => ({ filename: 'frontend/src/screen' + i + '.js' })),
+]
+pulls.set(700, { number: 700, head: { ref: 'feature/700-subscription', sha: 'sha-700-1' } })
+app = await boot()
+step = await tick(app)
+check('разработчик взял тикет', step.result.action + ':' + step.result.role, 'dispatched:dev-backend')
+const dev7 = step.result.sessionId
+endTurn(dev7)
+setLabels(700, ['for-code-review'])
+await tick(app)
+step = await tick(app)
+check('ревьюер смотрит PR', step.result.action + ':' + step.result.role, 'dispatched:code-review')
+const review7 = step.result.sessionId
+reviewer(700, 'BLOCKED\n\nfrontend/src/lib/vacancySubscription.js:41 — не показан признак отписки\nfrontend/src/api/auth.js — у запроса нет заголовка')
+endTurn(review7)
+setLabels(700, ['ready-for-dev'])
+const closing7 = await tick(app)
+check('возврат ревьюера — это движение', closing7.result.outcome, 'код-ревьюер вернул в доработку')
+step = await tick(app)
+check('доработка ушла половине из замечаний', step.result.action + ':' + step.result.role, 'dispatched:dev-frontend')
+check('в задании названы пути замечаний', lastPrompt().text.includes('frontend/src/lib/vacancySubscription.js'), true)
+check('в задании сказано, чья это половина', lastPrompt().text.includes('в твоей половине'), true)
+check('в комментарии тикета есть след маршрута', comments.some((c) => c.number === 700 && c.body.includes('→ dev-frontend: frontend/src/lib/vacancySubscription.js')), true)
+check('счётчик доработок вырос', step.state.projects.vahta.rework[700], 1)
+check('состав PR больше не читается', pullFilesReads, 0)
+
+console.log('\n=== сценарий 8: круг без нового коммита не тратит ревью ===')
+reset({ number: 800, title: 'Демо-тикет 800', labels: ['ready-for-dev'], state: 'open' })
+pulls.clear()
+comments.length = 0
+pullFiles = []
+pulls.set(800, { number: 800, head: { ref: 'feature/800-empty-round', sha: 'sha-800-1' } })
+app = await boot()
+step = await tick(app)
+check('разработчик взял тикет', step.result.action + ':' + step.result.role, 'dispatched:dev-fullstack')
+const dev8 = step.result.sessionId
+endTurn(dev8)
+setLabels(800, ['for-code-review'])
+await tick(app)
+step = await tick(app)
+check('ревьюер вызван впервые', step.result.action + ':' + step.result.role, 'dispatched:code-review')
+const review8 = step.result.sessionId
+// Ревьюер вернул тикет, разработчик отчитался о правке, но нового коммита нет:
+// head PR остался тем же.
+endTurn(review8)
+setLabels(800, ['ready-for-dev'])
+await tick(app)
+step = await tick(app)
+check('возврат из ревью — доработка разработчику', step.result.action + ':' + step.result.role, 'dispatched:dev-fullstack')
+endTurn(dev8)
+setLabels(800, ['for-code-review'])
+await tick(app)
+step = await tick(app)
+check('ревизия не менялась — ревьюер не зван', step.result.action + ':' + step.result.role, 'dispatched:dev-fullstack')
+check('счётчик доработок не вырос', step.state.projects.vahta.rework[800], 1)
+check('в issue сказано про неизменённую ревизию', comments.some((c) => c.number === 800 && c.body.includes('ветка не менялась с прошлого ревью')), true)
+check('ревьюер за пустой круг не звался', created.filter((c) => c.preset === 'code-review').length, 1)
+// Второй пустой круг подряд: тикет уходит человеку.
+endTurn(dev8)
+setLabels(800, ['for-code-review'])
+await tick(app)
+step = await tick(app)
+check('второй пустой круг снимает тикет', step.result.action, 'dropped')
+check('причина снятия названа', step.result.reason, 'two review rounds without a new commit')
+check('человеку сказано про два круга', comments.some((c) => c.number === 800 && c.body.includes('два круга подряд без нового коммита')), true)
+check('метки стадий сняты', issues.get(800).labels, [])
+check('ревьюер не звался и во второй раз', created.filter((c) => c.preset === 'code-review').length, 1)
 
 console.log('\n=== служебное ===')
 const ids = allRequestIds.map((p) => p.requestId)
