@@ -87,6 +87,21 @@ function projectArtifacts(raw) {
   return workspace ? workspace + '-artifacts' : ''
 }
 
+// Половины работы задаёт проект: у одного приложения бэкенд в backend/, у
+// другого в operator/backend/, у третьего в crates/. Список ниже — запасной
+// вариант для проекта, который areas не задал. Роль свою половину берёт из
+// project_info.areas, а не из промта.
+const DEFAULT_AREAS = {
+  backend: ['backend/', 'api/', 'app/backend/', 'app/api/'],
+  frontend: ['frontend/', 'web/', 'app/frontend/', 'app/web/'],
+}
+
+function projectAreas(raw) {
+  const own = raw && typeof raw.areas === 'object' && raw.areas ? raw.areas : {}
+  const side = (key) => (Array.isArray(own[key]) && own[key].length > 0 ? own[key].map(String) : DEFAULT_AREAS[key])
+  return { backend: side('backend'), frontend: side('frontend') }
+}
+
 function projectRow(registry, id, cwd) {
   const raw = registry.projects[id] || {}
   return {
@@ -98,6 +113,7 @@ function projectRow(registry, id, cwd) {
     humanClone: typeof raw.humanClone === 'string' ? raw.humanClone : '',
     composeProject: typeof raw.composeProject === 'string' && raw.composeProject ? raw.composeProject : id,
     artifacts: projectArtifacts(raw),
+    areas: projectAreas(raw),
     frontendPort: Number.isInteger(raw.frontendPort) ? raw.frontendPort : 8080,
     apiPort: Number.isInteger(raw.apiPort) ? raw.apiPort : 8001,
     labels: Object.assign({}, PIPELINE_LABELS, raw.labels || {}),
@@ -484,7 +500,7 @@ export default {
 
     const projectInfoTool = define(
       'project_info',
-      'Проект этой сессии: репозиторий, базовая ветка, рабочая копия отдела, защищённый клон человека, имя compose-проекта, порты стенда и метки конвейера. Вызывай до любых действий с git, GitHub и docker и используй значения дословно.',
+      'Проект этой сессии: репозиторий, базовая ветка, рабочая копия отдела, защищённый клон человека, имя compose-проекта, порты стенда, каталоги половин работы (areas) и метки конвейера. Вызывай до любых действий с git, GitHub и docker и используй значения дословно.',
       { type: 'object', properties: {}, required: [], additionalProperties: false },
       async (_a, p) => ({
         id: p.id,
@@ -495,6 +511,7 @@ export default {
         humanClone: p.humanClone || null,
         composeProject: p.composeProject,
         artifacts: p.artifacts,
+        areas: p.areas,
         frontendPort: p.frontendPort,
         apiPort: p.apiPort,
         labels: p.labels,

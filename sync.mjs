@@ -6,6 +6,10 @@
 //   node sync.mjs status    сравнить и показать расхождения
 //
 // Каталог установки: $DSH_HOME, иначе ~/.dsh; переопределяется ключом --dsh-home.
+// Корень репозитория: каталог самого скрипта; переопределяется ключом --repo или
+// полем repo в sync.local.json. Скрипт лежит в корне репозитория и переезжает
+// вместе с ним: отдельного «пути к папке» внутри кода нет, поэтому переезд
+// каталога не ломает синхронизацию.
 // Черновики (*.bak-*), логи, артефакты тестов и секреты не синхронизируются.
 import fs from 'node:fs'
 import os from 'node:os'
@@ -14,7 +18,7 @@ import crypto from 'node:crypto'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 
-const repo = path.dirname(fileURLToPath(import.meta.url))
+const scriptDir = path.dirname(fileURLToPath(import.meta.url))
 
 // ── аргументы ───────────────────────────────────────────────────────────────
 
@@ -30,6 +34,24 @@ const dshHome = homeFlag === -1
   : argv[homeFlag + 1]
 if (!fs.existsSync(dshHome)) {
   console.error('каталог установки не найден: ' + dshHome + ' (задай --dsh-home)')
+  process.exit(2)
+}
+
+// Локальные переопределения: файл пишут руками, и в git он не попадает.
+const localConfig = path.join(scriptDir, 'sync.local.json')
+let local = {}
+if (fs.existsSync(localConfig)) {
+  // Редакторы Windows любят BOM: JSON.parse на нём падает.
+  const raw = fs.readFileSync(localConfig, 'utf8').replace(/^\uFEFF/, '')
+  local = JSON.parse(raw)
+}
+
+const repoFlag = argv.indexOf('--repo')
+const repo = repoFlag !== -1
+  ? path.resolve(argv[repoFlag + 1])
+  : (local.repo ? path.resolve(local.repo) : scriptDir)
+if (!fs.existsSync(repo)) {
+  console.error('каталог репозитория не найден: ' + repo + ' (задай --repo)')
   process.exit(2)
 }
 
@@ -52,26 +74,11 @@ const HOST_FILES = [
   'profiles/web/plugins/role-sessions.mjs',
 ]
 
-// Инструменты приезжают из рабочей области человека: её путь в sync.local.json.
-const localConfig = path.join(repo, 'sync.local.json')
-let toolsSource = null
-if (fs.existsSync(localConfig)) {
-  // Файл пишут руками, и редакторы любят BOM: JSON.parse на нём падает.
-  const raw = fs.readFileSync(localConfig, 'utf8').replace(/^\uFEFF/, '')
-  toolsSource = JSON.parse(raw).toolsSource || null
-}
-const TOOL_FILES = [
-  { from: '.dev-department-dialogs-test.mjs', to: 'tools/tests/dev-department-dialogs.test.mjs' },
-  { from: '.dev-department-windows-test.mjs', to: 'tools/tests/dev-department-windows.test.mjs' },
-  { from: '.tester-images-test.mjs', to: 'tools/tests/tester-images.test.mjs' },
-  { from: '.code-review-tools-test.mjs', to: 'tools/tests/code-review-tools.test.mjs' },
-  { from: '.analyst-github-test.mjs', to: 'tools/tests/analyst-github.test.mjs' },
-  { from: '.session-errors.mjs', to: 'tools/session-errors.mjs' },
-  { from: '.session-tail.mjs', to: 'tools/session-tail.mjs' },
-  { from: '.github-labels-probe.mjs', to: 'tools/pipeline-labels-probe.mjs' },
-  { from: '.github-labels-create.mjs', to: 'tools/pipeline-labels-create.mjs' },
-  { from: 'DEPARTMENT-PROCESS.md', to: 'docs/DEPARTMENT-PROCESS.md' },
-]
+// docs/ и tools/ живут только в репозитории: это документация процесса и
+// инструменты проверки, а не надстройка каталога установки. В ~/.dsh они не
+// кладутся и обратно не раскладываются. Раньше их источник задавался полем
+// toolsSource в sync.local.json и указывал на рабочую область человека; теперь
+// источник у них один — этот каталог, поэтому поле больше не нужно.
 
 // Что не синхронизируется никогда: черновики, логи, артефакты прогонов.
 const EXCLUDE = /\.bak(-|\.|$)|\.log(-|\.|$)|^\.coverage$|^coverage-|\.tmp$/
@@ -167,11 +174,6 @@ function pairs() {
       list.push({ from: path.join(fromRoot, rel), to: path.join(repo, 'agent-presets', preset, rel) })
     }
   }
-  if (toolsSource) {
-    for (const tool of TOOL_FILES) {
-      list.push({ from: path.join(toolsSource, tool.from), to: path.join(repo, tool.to) })
-    }
-  }
   return list
 }
 
@@ -229,8 +231,11 @@ function scanSecrets() {
 
 // ── режимы ──────────────────────────────────────────────────────────────────
 
+console.log('каталог установки: ' + dshHome)
+console.log('репозиторий:       ' + repo)
+console.log('')
+
 const list = pairs()
-if (!toolsSource) console.log('  (sync.local.json не найден — tools/ не синхронизируются)')
 
 if (mode === 'status') {
   let same = 0

@@ -777,9 +777,10 @@ export default {
       return 'dev-fullstack'
     }
 
-    // Каталоги проектов по половинам работы. Проект может переопределить их
-    // полем areas в реестре, но по умолчанию монорепо этих проектов закрываются
-    // этим списком.
+    // Каталоги половин работы. Проект задаёт их полем areas в реестре, и это
+    // единственный источник истины: у одного проекта приложение в backend/, у
+    // другого в operator/backend/, у третьего в crates/. Список ниже — запасной
+    // вариант для проекта, который areas не задал.
     const AREA_PREFIXES = {
       backend: ['backend/', 'api/', 'app/backend/', 'app/api/'],
       frontend: ['frontend/', 'web/', 'app/frontend/', 'app/web/'],
@@ -788,9 +789,24 @@ export default {
     function areasOf(project) {
       const raw = project.areas
       if (!raw || typeof raw !== 'object') return AREA_PREFIXES
-      const backend = Array.isArray(raw.backend) ? raw.backend : AREA_PREFIXES.backend
-      const frontend = Array.isArray(raw.frontend) ? raw.frontend : AREA_PREFIXES.frontend
+      const backend = Array.isArray(raw.backend) && raw.backend.length > 0 ? raw.backend : AREA_PREFIXES.backend
+      const frontend = Array.isArray(raw.frontend) && raw.frontend.length > 0 ? raw.frontend : AREA_PREFIXES.frontend
       return { backend: backend, frontend: frontend }
+    }
+
+    // Файл принадлежит половине, если каталог из areas стоит в его пути на любой
+    // глубине. Приложение бывает вложенным (operator/backend/app.py), а проверка
+    // «каталог с начала строки» оставляла такие файлы без половины вовсе — из-за
+    // неё тикет по operator/ не находил исполнителя.
+    function inArea(path, prefixes) {
+      const p = String(path || '').replace(/\\/g, '/').toLowerCase()
+      if (!p) return false
+      for (const prefix of prefixes) {
+        const needle = String(prefix || '').replace(/\\/g, '/').toLowerCase()
+        if (!needle) continue
+        if (p.indexOf(needle) === 0 || p.indexOf('/' + needle) >= 0) return true
+      }
+      return false
     }
 
     // PR ищется по головной ветке: соглашение feature/<номер>-* — часть контракта
@@ -823,8 +839,8 @@ export default {
         let frontend = 0
         for (const file of files) {
           const p = String(file).replace(/\\/g, '/').toLowerCase()
-          if (areas.backend.some((prefix) => p.indexOf(String(prefix).toLowerCase()) === 0)) backend += 1
-          else if (areas.frontend.some((prefix) => p.indexOf(String(prefix).toLowerCase()) === 0)) frontend += 1
+          if (inArea(p, areas.backend)) backend += 1
+          else if (inArea(p, areas.frontend)) frontend += 1
         }
         if (frontend > backend) return 'dev-frontend'
         if (backend > frontend) return 'dev-backend'
@@ -1254,7 +1270,8 @@ export default {
         'Если упёрся в то, что сам решить не можешь, — напиши это комментарием в issue и остановись.',
       ]
       if (isBackend) {
-        const boundary = ['Границы бэкендера: меняешь только бэкенд-дерево (backend/, api/, app/backend/, app/api/). Фронтенд, компоненты и стили не трогай. Контракт — OpenAPI-схема, DTO и общие типы — твой: фронтендер его читает, а не догадывается.']
+        const own = areasOf(project).backend.join(', ')
+        const boundary = ['Границы бэкендера: меняешь бэкенд-дерево ' + own + '. Фронтенд, компоненты и стили не трогай. Контракт — OpenAPI-схема, DTO и общие типы — твой: фронтендер его читает, а не догадывается.']
         if (fullstack) {
           boundary.push('Тикет полного стека: доведи бэкенд-часть до обычного финала. Метку ' + L.frontend + ' поставит диспетчер — тебе её ставить не нужно, фронтенд-часть не делай и фронтенд не жди.')
           boundary.push('Если бэкенд-части в постановке нет вовсе — пустой PR не открывай: напиши это комментарием в issue, поставь ' + L.review + ' и заверши ход. Диспетчер сам передаст тикет фронтенду.')
@@ -1262,7 +1279,8 @@ export default {
         lines.splice(4, 0, ...boundary)
       }
       if (isFrontend) {
-        const boundary = ['Границы фронтендера: меняешь только фронтенд-дерево (frontend/, web/, app/frontend/, app/web/). Бэкенд, схему и контракт не трогай — контракт только читаешь. Если API не хватает, это комментарий в issue и остановка, а не мок и не «временная» правка бэкенда.']
+        const own = areasOf(project).frontend.join(', ')
+        const boundary = ['Границы фронтендера: меняешь фронтенд-дерево ' + own + '. Бэкенд, схему и контракт не трогай — контракт только читаешь. Если API не хватает, это комментарий в issue и остановка, а не мок и не «временная» правка бэкенда.']
         if (fullstack) {
           boundary.unshift('Ветка и PR могут быть уже открыты бэкенд-части: если они есть — продолжай в них, второй PR не открывай. Если ветки и PR ещё нет (бэкенд-части в постановке не оказалось) — создай их сам.')
           boundary.push('Если фронтенд-части в постановке нет — пустой PR не открывай: напиши это комментарием в issue, поставь ' + L.review + ' и заверши ход.')

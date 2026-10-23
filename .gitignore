@@ -15,6 +15,10 @@
 .windows-under-test.mjs
 .probe-*
 
+# Черновая площадка пресетов: сюда кладут недоделанный пресет, пока он не попал
+# в ~/.dsh/.agent-presets. Боевой набор — agent-presets/, черновиков в git нет.
+_preset_staging/
+
 # Node
 node_modules/
 npm-debug.log*

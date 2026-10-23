@@ -63,6 +63,22 @@
         "token": "<токен бота>",
         "chatId": 0
       }
+    },
+    "workflow": {
+      "title": "Workflow",
+      "repo": "gidvantus/workflow",
+      "base": "main",
+      "workspace": "D:\\Agents\\Workflow",
+      "humanClone": "D:\\Development\\VideCoding\\Workflow",
+      "composeProject": "workflow-agent",
+      "department": {
+        "enabled": true,
+        "windows": [
+          { "start": "13:00", "stop": "04:00" },
+          { "start": "07:00", "stop": "09:00" }
+        ],
+        "maxRework": 3
+      }
     }
   }
 }
