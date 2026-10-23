@@ -63,7 +63,6 @@ docs/DEPARTMENT-PROCESS.md      процесс отдела: кто какой �
 docs/TESTING-WORKFLOW.md        полный workflow тестирования: инструменты, слои, вердикт
 docs/IDEAS.md                   идеи по доработке DSH: агенты, workflow, Telegram-мост
 
-migration/                      история сборки отдела: пошаговые скрипты и их README
 sync.mjs                        сборка изменений из ~/.dsh и раскладка обратно
 ```
 
