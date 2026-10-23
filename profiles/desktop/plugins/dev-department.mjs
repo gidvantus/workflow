@@ -861,9 +861,12 @@ export default {
       return (pulls || []).filter((p) => p && p.head && String(p.head.ref).indexOf('feature/' + number + '-') === 0)[0] || null
     }
 
-    // Пути файлов в тексте замечания. Расширения перечислены явно, суффикс
-    // :строка срезается: `frontend/src/api/auth.js:41` и `auth.js` — один файл.
-    const FINDING_PATH = /[A-Za-z0-9_@~$][A-Za-z0-9_@~$/.-]*\.(?:py|sql|js|jsx|ts|tsx|mjs|css|scss|vue|svelte|html)(?::[0-9]+(?:-[0-9]+)?)?/g
+    // Пути файлов в тексте замечания. Порядок расширений — от длинных к коротким:
+    // в alternation выигрывает первая подошедшая ветвь, и с `ts` раньше `tsx`
+    // путь обрывался до несуществующего файла (`Vacancy.ts` вместо `Vacancy.tsx`),
+    // а вместе с обрывом терялся и номер строки. Граница после расширения
+    // закрывает тот же случай вторым способом — на случай нового расширения.
+    const FINDING_PATH = /[A-Za-z0-9_@~$][A-Za-z0-9_@~$/.-]*\.(?:tsx|jsx|mjs|py|sql|js|ts|css|scss|vue|svelte|html)(?![A-Za-z0-9])(?::[0-9]+(?:-[0-9]+)?)?/g
 
     // Круг ревью начинается вердиктом: всё, что выше последнего вердикта, — уже
     // закрытая история и к текущему возврату отношения не имеет.
@@ -921,12 +924,17 @@ export default {
       FINDING_PATH.lastIndex = 0
       let match = FINDING_PATH.exec(round)
       while (match) {
-        const cleaned = match[0].replace(/:\d+(?:-\d+)?$/, '').replace(/\\/g, '/').replace(/^\.\//, '')
+        const raw = match[0]
+        // Суффикс :строка срезается для маршрута и для следа в тикете, но сам
+        // номер строки не теряется: исполнителю он нужен, чтобы сразу открыть
+        // место, на которое показал ревьюер.
+        const at = (raw.match(/:([0-9]+(?:-[0-9]+)?)$/) || [])[1] || null
+        const cleaned = raw.replace(/:\d+(?:-\d+)?$/, '').replace(/\\/g, '/').replace(/^\.\//, '')
         if (cleaned && !seen.has(cleaned.toLowerCase())) {
           seen.add(cleaned.toLowerCase())
           const half = areaOfPath(cleaned, areas)
-          if (half === 'backend') backend.push(cleaned)
-          if (half === 'frontend') frontend.push(cleaned)
+          if (half === 'backend') backend.push({ path: cleaned, at })
+          if (half === 'frontend') frontend.push({ path: cleaned, at })
         }
         match = FINDING_PATH.exec(round)
       }
@@ -964,9 +972,16 @@ export default {
     }
 
     // След маршрута в тикете: половина и до трёх путей, по которым она выбрана.
+    // Номера строк здесь не печатаются: постановка требует в следе пути файлов,
+    // а место в файле исполнитель получает в задании.
     function findingsTrace(role, paths) {
       if (!paths || paths.length === 0) return ''
-      return ' → ' + role + ': ' + paths.slice(0, 3).join(', ')
+      return ' → ' + role + ': ' + paths.map((item) => item.path).slice(0, 3).join(', ')
+    }
+
+    // Путь для задания исполнителю: с номером строки, если ревьюер его назвал.
+    function findingLabel(item) {
+      return item && item.at ? item.path + ':' + item.at : String((item && item.path) || item)
     }
 
     // Дизайнера здесь нет намеренно: его диалог — ступень макета, то есть
@@ -1413,7 +1428,7 @@ export default {
       // Пути из замечаний — не украшение задания: по ним исполнитель сразу видит,
       // какие файлы его половины ревьюер назвал, и не ищет их в чужом дереве.
       if (kind === 'rework' && findingPaths && findingPaths.length > 0) {
-        lines.splice(2, 0, 'Замечания ревьюера — в твоей половине: ' + findingPaths.slice(0, 5).join(', '))
+        lines.splice(2, 0, 'Замечания ревьюера — в твоей половине: ' + findingPaths.slice(0, 5).map(findingLabel).join(', '))
       }
       // Макет постановки — часть задания, а не украшение: раскладку, состояния и
       // тексты берут из него, чтобы фронтендер не придумывал их заново.
@@ -1700,14 +1715,17 @@ export default {
       const st = projectState(project.id)
       const L = project.labels
       const { role, issue } = decision
+      // Ревизия, на которой сейчас выдаётся ревью. Записывается в reviewedHead
+      // только после того, как сессия ревьюера создана: упавшее создание сессии
+      // не должно превращаться в «ветка не менялась» на следующем тике.
+      let reviewSha = null
       // Сторож пустого круга. Если разработчик закончил ход, не запушив коммит, а
       // метку for-code-review переставил, ревьюер увидел бы ту же ревизию, что и в
       // прошлый раз: круг без нового коммита не тратит ни ревью, ни бюджет
       // доработок, а доработка уходит владельцу замечаний.
       if (role === 'code-review') {
         const head = await reviewHead(project, issue)
-        if (head && head.same) {
-          st.noop[issue.number] = (st.noop[issue.number] || 0) + 1
+        if (head && head.same) {          st.noop[issue.number] = (st.noop[issue.number] || 0) + 1
           if (st.noop[issue.number] >= 2) {
             // Второй круг подряд: выдавать нечего, поэтому и обещания выдачи нет —
             // только комментарий о снятии, иначе в тикете остались бы два
@@ -1739,11 +1757,7 @@ export default {
           st.rework[issue.number] = Math.max(0, (st.rework[issue.number] || 0) - 1)
           return dispatch(project, { role: owner, issue: issue, kind: 'rework' })
         }
-        if (head) {
-          // Эту ревизию ревьюер увидит сейчас; новый коммит обнуляет пустые круги.
-          st.reviewedHead[issue.number] = head.sha
-          delete st.noop[issue.number]
-        }
+        if (head) reviewSha = head.sha
       }
       const attempts = (st.attempts[issue.number] || 0) + 1
       st.attempts[issue.number] = attempts
@@ -1848,6 +1862,12 @@ export default {
 
       if (role === 'code-review') {
         const sessionId = await startSession(project, 'code-review', reviewPrompt(project, issue, !!existingDialog(project, 'code-review', issue.number)), issue)
+        // Сессия создана — только теперь ревизия считается показанной ревьюеру;
+        // новый коммит обнуляет накопленные пустые круги.
+        if (reviewSha) {
+          st.reviewedHead[issue.number] = reviewSha
+          delete st.noop[issue.number]
+        }
         st.session = { role: 'code-review', issue: issue.number, title: issue.title, sessionId, startedAt: new Date().toISOString() }
         st.run.sessions = (st.run.sessions || 0) + 1
         return { action: 'dispatched', project: project.id, role: 'code-review', issue: issue.number, sessionId }

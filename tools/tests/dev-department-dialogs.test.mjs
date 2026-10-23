@@ -574,6 +574,36 @@ check('после паузы ревьюер позван снова', step.resul
 check('пустого круга не объявляли', comments.some((c) => c.number === 900 && c.body.includes('ветка не менялась с прошлого ревью')), false)
 check('бюджет доработок не тронут', step.state.projects.vahta.rework[900], undefined)
 
+console.log('\n=== сценарий 10: пути .tsx/.jsx не обрезаются до .ts/.js ===')
+// Фронтенд проекта — React + TypeScript, поэтому .tsx здесь норма. В alternation
+// расширений выигрывает первая ветвь: с `ts` раньше `tsx` путь обрывался до
+// несуществующего файла, и в тикете с заданием назывался файл, которого нет.
+reset({ number: 1000, title: 'Демо-тикет 1000', labels: ['ready-for-dev', 'area:frontend'], state: 'open' })
+pulls.clear()
+comments.length = 0
+pullFiles = []
+pulls.set(1000, { number: 1000, head: { ref: 'feature/1000-tsx', sha: 'sha-1000-1' } })
+app = await boot()
+step = await tick(app)
+check('разработчик взял тикет', step.result.action + ':' + step.result.role, 'dispatched:dev-frontend')
+const dev10 = step.result.sessionId
+endTurn(dev10)
+setLabels(1000, ['for-code-review', 'area:frontend'])
+await tick(app)
+step = await tick(app)
+check('ревьюер смотрит PR', step.result.action + ':' + step.result.role, 'dispatched:code-review')
+const review10 = step.result.sessionId
+reviewer(1000, 'FIX: 1\n\nfrontend/src/pages/Vacancy.tsx:41 — не показан признак отписки\nfrontend/src/components/Card.jsx — потерян key')
+endTurn(review10)
+setLabels(1000, ['ready-for-dev', 'area:frontend'])
+await tick(app)
+step = await tick(app)
+check('доработка ушла фронтендеру', step.result.action + ':' + step.result.role, 'dispatched:dev-frontend')
+check('в задании .tsx с номером строки', lastPrompt().text.includes('frontend/src/pages/Vacancy.tsx:41'), true)
+check('в задании .jsx', lastPrompt().text.includes('frontend/src/components/Card.jsx'), true)
+check('след в тикете без номера строки', comments.some((c) => c.number === 1000 && c.body.includes('→ dev-frontend: frontend/src/pages/Vacancy.tsx, frontend/src/components/Card.jsx')), true)
+check('обрезанных путей в тикете нет', comments.some((c) => c.number === 1000 && /frontend\/src\/pages\/Vacancy\.ts(?!x)/.test(c.body)), false)
+
 console.log('\n=== служебное ===')
 const ids = allRequestIds.map((p) => p.requestId)
 check('requestId уникальны', new Set(ids).size, ids.length)
