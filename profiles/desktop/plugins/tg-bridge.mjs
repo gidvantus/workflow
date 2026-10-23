@@ -110,7 +110,12 @@ function defaultProjectWorkspace() {
   return typeof workspace === 'string' ? workspace : ''
 }
 
-const TOOLS = 'D:/Development/VideCoding/Brain/.voice-tools'
+// Инструменты распознавания голосовых живут в пакете процесса — в каталоге
+// репозитория workflow, а не в рабочей области продукта. Путь переопределяется
+// переменной DSH_VOICE_TOOLS.
+const TOOLS = (process.env.DSH_VOICE_TOOLS || 'D:/Development/VideCoding/Workflow/.voice-tools')
+  .replace(/\\/g, '/')
+  .replace(/\/+$/, '')
 const FFMPEG = TOOLS + '/ffmpeg/ffmpeg.exe'
 const WHISPER = TOOLS + '/whisper/Release/whisper-cli.exe'
 const WHISPER_MODEL = TOOLS + '/models/ggml-small.bin'

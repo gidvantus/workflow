@@ -4,7 +4,12 @@
 import fs from 'node:fs'
 import { spawn } from 'node:child_process'
 
-const TOOLS = 'D:/Development/VideCoding/Brain/.voice-tools'
+// Инструменты распознавания (ffmpeg, whisper, модель) живут в пакете процесса —
+// в каталоге репозитория workflow, а не в рабочей области продукта. Путь можно
+// переопределить переменной DSH_VOICE_TOOLS, не правя плагин.
+const TOOLS = (process.env.DSH_VOICE_TOOLS || 'D:/Development/VideCoding/Workflow/.voice-tools')
+  .replace(/\\/g, '/')
+  .replace(/\/+$/, '')
 const FFMPEG = TOOLS + '/ffmpeg/ffmpeg.exe'
 const WHISPER = TOOLS + '/whisper/Release/whisper-cli.exe'
 const WHISPER_MODEL = TOOLS + '/models/ggml-small.bin'

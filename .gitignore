@@ -19,6 +19,13 @@
 # в ~/.dsh/.agent-presets. Боевой набор — agent-presets/, черновиков в git нет.
 _preset_staging/
 
+# Инструменты распознавания речи: ffmpeg (~145 МБ), модель whisper (~490 МБ) и
+# сборка whisper.cpp. Это установленные бинарники, а не исходники: в git не едут,
+# их ставит .voice-research. Плагины ищут их по DSH_VOICE_TOOLS или по этому пути.
+.voice-tools/
+# Разведка голосового ввода: разовые скрипты и дампы схем, история — не продукт.
+.voice-research/
+
 # Node
 node_modules/
 npm-debug.log*
