@@ -446,12 +446,13 @@ export default {
 
     const prTool = define(
       'gh_pr',
-      'Детали pull request. С files=true добавляет список изменённых файлов — обычно именно его нужно проверить tester.',
+      'Детали pull request. С files=true добавляет список изменённых файлов — обычно именно его нужно проверить tester. С comments=true добавляет обсуждение PR: там ответы автора на замечания ревьюера — читать их надо оттуда, а не домысливать.',
       {
         type: 'object',
         properties: {
           number: { type: 'integer', description: 'Номер PR' },
           files: { type: 'boolean', description: 'Добавить список изменённых файлов' },
+          comments: { type: 'boolean', description: 'Добавить комментарии обсуждения PR (ответы автора на замечания)' },
         },
         required: ['number'],
         additionalProperties: false,
@@ -466,6 +467,11 @@ export default {
             additions: f.additions,
             deletions: f.deletions,
           }))
+        }
+        if (a.comments) {
+          // Обсуждение PR живёт на issue-пути: pull request в API — тоже issue.
+          const rows = await api('GET', '/repos/' + p.repo + '/issues/' + a.number + '/comments?per_page=100')
+          view.comments = rows.map((c) => ({ author: c.user && c.user.login, body: c.body, at: c.created_at }))
         }
         return view
       },

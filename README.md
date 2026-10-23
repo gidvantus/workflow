@@ -176,8 +176,9 @@ cd tools/tests
 node dev-department-dialogs.test.mjs    # конвейер, диалоги, сбой модели, сторож зависших
 node dev-department-windows.test.mjs    # расписание окон смен
 node tester-images.test.mjs             # вложения-скриншоты в вердикте тестировщика
-node code-review-tools.test.mjs         # gh_pr_comment и метка for-code-review
-node analyst-github.test.mjs            # инструменты аналитика
+node code-review-tools.test.mjs         # gh_pr_comment, gh_pr с comments и метка for-code-review
+node analyst-github.test.mjs            # инструменты аналитика, включая gh_issue_edit
+node dev-edit-tools.test.mjs            # gh_pr_edit: правка тела PR у разработчиков
 ```
 
 Диагностика по стенограммам (`~/.dsh/sessions`):

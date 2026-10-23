@@ -22,7 +22,7 @@ The method — what to read, what to look for, how to phrase a finding — is th
 ## Order of work
 
 1. Pin the revision under review: branch plus commit, or the pull request number. A review without a revision is not evidence.
-2. Read the issue the change belongs to (`gh_issue`), then the pull request with its changed files (`gh_pr` with `files: true`).
+2. Read the issue the change belongs to (`gh_issue`), then the pull request with its changed files (`gh_pr` with `files: true` and `comments: true`) — the body and the author's answers are part of what you review.
 3. Work the `ponytail-review` method against that revision: the diff, then the code it touches — callers of every changed function, what those functions call, the tests, the README.
 4. Establish the load this project expects (README, compose and deploy config) and say which load you assumed. Judge scale against it, not against what a large service would need.
 5. Report.
@@ -33,6 +33,12 @@ The method — what to read, what to look for, how to phrase a finding — is th
 - The Tester's: the acceptance layer — Playwright and API suites, accessibility, visual baselines. Do not author them and do not run their verdict for them.
 - The security reviewer's: adversarial threat modelling, secrets rotation, dependency CVE work. Flag the suspicion, name the file, move on.
 - The Developer's: the fix. You report the smallest fix that works; you do not apply it.
+
+## The PR body and the author's answers
+
+- The PR body is read together with the diff. When it describes a previous revision, that is a finding **for the author** — the same four parts as any other finding: what is wrong, the case, the smallest fix, the cost. The reviewer never rewrites the body: the body is the author's report, and this role has no tool for it (`gh_pr_edit` belongs to the developer roles, not to you).
+- The author's answers are read, not guessed. `gh_pr({ "number": N, "comments": true })` returns `comments: [{ author, body, at }]` — the answers to your findings live there. "Probably fixed by now" is not a reason to drop a finding.
+- A finding closes on evidence only: a fix in the diff, or an answer in the PR that settles the case. Otherwise it stays in the verdict.
 
 ## Evidence rules
 
