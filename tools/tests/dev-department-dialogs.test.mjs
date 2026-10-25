@@ -604,6 +604,41 @@ check('в задании .jsx', lastPrompt().text.includes('frontend/src/compone
 check('след в тикете без номера строки', comments.some((c) => c.number === 1000 && c.body.includes('→ dev-frontend: frontend/src/pages/Vacancy.tsx, frontend/src/components/Card.jsx')), true)
 check('обрезанных путей в тикете нет', comments.some((c) => c.number === 1000 && /frontend\/src\/pages\/Vacancy\.ts(?!x)/.test(c.body)), false)
 
+console.log('\n=== сценарий 11: круг ревью в новом формате — заголовок у каждого замечания ===')
+// По правилу «заголовок роли в первой строке» у КАЖДОГО замечания свой
+// комментарий с заголовком, поэтому начало круга — последний комментарий
+// ревьюера СО СТРОКОЙ ВЕРДИКТА. Если брать просто последний комментарий с ролью,
+// круг схлопывается до последнего замечания и пути остальных (вместе с половиной
+// работы) теряются: ровно та ошибка, от которой защищает комментарий над
+// roleForRework.
+reset({ number: 1100, title: 'Демо-тикет 1100', labels: ['ready-for-dev', 'area:backend'], state: 'open' })
+pulls.clear()
+comments.length = 0
+pullFiles = []
+pulls.set(1100, { number: 1100, head: { ref: 'feature/1100-role-header', sha: 'sha-1100-1' } })
+app = await boot()
+step = await tick(app)
+check('разработчик взял тикет', step.result.action + ':' + step.result.role, 'dispatched:dev-backend')
+const dev11 = step.result.sessionId
+endTurn(dev11)
+setLabels(1100, ['for-code-review'])
+await tick(app)
+step = await tick(app)
+check('ревьюер смотрит PR', step.result.action + ':' + step.result.role, 'dispatched:code-review')
+const review11 = step.result.sessionId
+reviewer(1100, '**Роль:** код-ревьюер · вердикт FIX: два замечания\nFIX: 2\n\nbackend/app/api/orders.py:41 — пустой список\nfrontend/src/lib/vacancySubscription.js:41 — нет признака отписки')
+reviewer(1100, '**Роль:** код-ревьюер · замечание по пустому списку\n\nbackend/app/api/orders.py:41 — пустой список не отличим от 404')
+reviewer(1100, '**Роль:** код-ревьюер · замечание про признак отписки\n\nfrontend/src/lib/vacancySubscription.js:41 — нет признака отписки')
+endTurn(review11)
+setLabels(1100, ['ready-for-dev'])
+await tick(app)
+step = await tick(app)
+check('круг открыт вердиктом, а не последним замечанием', step.result.action + ':' + step.result.role, 'dispatched:dev-fullstack')
+check('в задании пути обеих половин', [
+  lastPrompt().text.includes('backend/app/api/orders.py'),
+  lastPrompt().text.includes('frontend/src/lib/vacancySubscription.js'),
+], [true, true])
+
 console.log('\n=== служебное ===')
 const ids = allRequestIds.map((p) => p.requestId)
 check('requestId уникальны', new Set(ids).size, ids.length)

@@ -85,9 +85,25 @@ function check(name, actual, expected) {
   console.log((ok ? 'ok    ' : 'ФЕЙЛ  ') + name + ' → ' + JSON.stringify(actual) + (ok ? '' : ' (ожидалось ' + JSON.stringify(expected) + ')'))
 }
 
+// ── заголовок роли проверяется до картинок и до сети ───────────────────────
+// Вложение подставляется ниже первой строки, поэтому проверка идёт по args.body:
+// иначе картинка сдвинула бы вердикт, и он не ушёл бы вовсе.
+calls.length = 0
+let refusal = null
+try {
+  await comment.execute({ number: 77, body: 'Вердикт: GREEN', images: ['.probe-a.png'] })
+} catch (e) { refusal = e.message }
+check('без заголовка роли — отказ', /первая строка комментария — заголовок роли/.test(refusal || ''), true)
+check('в отказе имя роли тестировщика', /Роль:\*\* тестировщик/.test(refusal || ''), true)
+check('отказ не дошёл ни до сети, ни до вложений', calls.length, 0)
+
 // ── две картинки: адреса вставляются в текст ───────────────────────────────
 calls.length = 0
-const first = JSON.parse(await comment.execute({ number: 77, body: 'Вердикт: GREEN', images: ['.probe-a.png', '.probe-b.png'] }))
+const first = JSON.parse(await comment.execute({
+  number: 77,
+  body: '**Роль:** тестировщик · вердикт GREEN по ветке\n\nВердикт: GREEN',
+  images: ['.probe-a.png', '.probe-b.png'],
+}))
 const uploads = calls.filter((c) => c.host === 'uploads.github.com')
 const idReads = calls.filter((c) => /\/repos\/[^/]+\/[^/]+$/.test(c.path) && c.method === 'GET')
 const posted = calls.filter((c) => /\/comments$/.test(c.path))[0]
@@ -107,7 +123,7 @@ check('результат вернул вложения', first.attached.length,
 calls.length = 0
 await comment.execute({
   number: 77,
-  body: 'Смотри ![до](.probe-a.png) и всё',
+  body: '**Роль:** тестировщик · вердикт RED по вложению\n\nСмотри ![до](.probe-a.png) и всё',
   images: ['.probe-a.png'],
 })
 const mdPosted = calls.filter((c) => /\/comments$/.test(c.path))[0]
@@ -118,7 +134,7 @@ check('вложение ушло ровно одно', calls.filter((c) => c.hos
 
 // ── не-картинка не съедает вердикт ────────────────────────────────────────
 calls.length = 0
-const withBad = JSON.parse(await comment.execute({ number: 77, body: 'Вердикт: RED', images: ['.probe.txt'] }))
+const withBad = JSON.parse(await comment.execute({ number: 77, body: '**Роль:** тестировщик · вердикт RED с мусором\n\nВердикт: RED', images: ['.probe.txt'] }))
 const postedBad = calls.filter((c) => /\/comments$/.test(c.path))[0]
 check('комментарий отправлен, несмотря на мусор', !!postedBad, true)
 check('в тексте отмечено, что не приложилось',
@@ -127,13 +143,18 @@ check('на не-картинку не было запроса в uploads', call
 
 // ── без картинок поведение прежнее ────────────────────────────────────────
 calls.length = 0
-await comment.execute({ number: 77, body: 'Просто текст' })
+const plainBody = '**Роль:** тестировщик · короткий комментарий без картинок\n\nПросто текст'
+await comment.execute({ number: 77, body: plainBody })
 check('без images нет ни одного запроса в uploads', calls.filter((c) => c.host === 'uploads.github.com').length, 0)
-check('текст ушёл как есть', calls.filter((c) => /\/comments$/.test(c.path))[0].body.body, 'Просто текст')
+check('текст ушёл как есть', calls.filter((c) => /\/comments$/.test(c.path))[0].body.body, plainBody)
 
 // ── защита от ведра картинок ──────────────────────────────────────────────
 try {
-  await comment.execute({ number: 77, body: 'x', images: new Array(7).fill('.probe-a.png') })
+  await comment.execute({
+    number: 77,
+    body: '**Роль:** тестировщик · проверка лимита картинок\n\nx',
+    images: new Array(7).fill('.probe-a.png'),
+  })
 } catch (error) {
   check('семь картинок отвергаются', /максимум 6/.test(error.message), true)
 }
