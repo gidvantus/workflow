@@ -81,9 +81,23 @@ check('gh_pr_comment есть', !!byName('gh_pr_comment'), true)
 check('тела PR ревьюер не правит', !!byName('gh_pr_edit'), false)
 check('gh_pr умеет comments', !!byName('gh_pr').parameters.properties.comments, true)
 
-const posted = JSON.parse(await byName('gh_pr_comment').execute({ number: 77, body: 'FIX: 1\n\napp/api/x.py:42 — пустой список' }))
+// Заголовок роли — первая строка комментария. Тело без него не уходит в GitHub
+// вовсе: проверка стоит до сетевого запроса, и это main-путь конвейера, а не
+// пожелание скилла — по заголовку диспетчер находит круг доработок.
+calls.length = 0
+let refusal = null
+try {
+  await byName('gh_pr_comment').execute({ number: 77, body: 'FIX: 1\n\napp/api/x.py:42 — пустой список' })
+} catch (e) { refusal = e.message }
+check('тело без заголовка роли — отказ', /первая строка комментария — заголовок роли/.test(refusal || ''), true)
+check('в отказе образец строки и имя роли', /Роль:\*\* код-ревьюер/.test(refusal || ''), true)
+check('отказ не дошёл до сети', calls.length, 0)
+
+calls.length = 0
+const verdictBody = '**Роль:** код-ревьюер · вердикт по пустому списку\nFIX: 1\n\napp/api/x.py:42 — пустой список'
+const posted = JSON.parse(await byName('gh_pr_comment').execute({ number: 77, body: verdictBody }))
 check('комментарий ушёл в обсуждение PR', [calls[0].method, calls[0].path], ['POST', '/repos/gidvantus/vahta/issues/77/comments'])
-check('текст уехал как есть', calls[0].body.body.startsWith('FIX: 1'), true)
+check('текст уехал как есть', calls[0].body.body, verdictBody)
 check('токен ушёл в заголовке', calls[0].auth, 'Bearer test-token')
 check('ответ разобран', [posted.commentId, typeof posted.url], [5, 'string'])
 check('токен не утёк в результат', JSON.stringify(posted).includes('test-token'), false)
@@ -154,7 +168,7 @@ status = 403
 response = { message: 'Resource not accessible by personal access token' }
 let error = null
 try {
-  await byName('gh_pr_comment').execute({ number: 77, body: 'x' })
+  await byName('gh_pr_comment').execute({ number: 77, body: '**Роль:** код-ревьюер · проверка ошибки GitHub' })
 } catch (e) { error = e.message }
 check('ошибка GitHub объясняется словами', /GitHub 403: Resource not accessible/.test(error || ''), true)
 

@@ -91,6 +91,16 @@ You are the `devops-delivery` role. Your output is automation that behaves the s
 - Always `docker compose -p <own project>`; without `-p` you touch the human's stand (the human's own stand). Never `compose down -v` outside your own project.
 - No destructive host maintenance as part of a task: no `docker system prune -a`, no volume deletion.
 
+## Заголовок комментария
+
+Первая строка каждого комментария в issue и PR — `**Роль:** <имя> · <о чём>`:
+
+```
+**Роль:** DevOps-инженер · PR слит, ветка удалена
+```
+
+Имя роли — ровно `DevOps-инженер`, без сокращений и переводов: по заголовку диспетчер отличает комментарии ролей от своих и находит круг ревью. После имени — ` · ` и 3–12 слов о том, зачем комментарий. `gh_issue_comment` проверяет первую строку **до** сетевого запроса: тело без заголовка не уходит, а в ошибке приходит образец строки.
+
 ## Hand-off
 
 Report the changed files, the exact commands with their observed result, the rollback for this change, and what you did NOT verify.

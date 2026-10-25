@@ -604,6 +604,93 @@ check('в задании .jsx', lastPrompt().text.includes('frontend/src/compone
 check('след в тикете без номера строки', comments.some((c) => c.number === 1000 && c.body.includes('→ dev-frontend: frontend/src/pages/Vacancy.tsx, frontend/src/components/Card.jsx')), true)
 check('обрезанных путей в тикете нет', comments.some((c) => c.number === 1000 && /frontend\/src\/pages\/Vacancy\.ts(?!x)/.test(c.body)), false)
 
+console.log('\n=== сценарий 11: круг ревью в новом формате — заголовок у каждого замечания ===')
+// По правилу «заголовок роли в первой строке» у КАЖДОГО замечания свой
+// комментарий с заголовком, поэтому начало круга — последний комментарий
+// ревьюера СО СТРОКОЙ ВЕРДИКТА в шапке. Если брать просто последний комментарий
+// с ролью, круг схлопывается до последнего замечания и пути остальных (вместе с
+// половиной работы) теряются: ровно та ошибка, от которой защищает комментарий
+// над roleForRework. Второй способ потерять круг — искать вердикт по всему телу:
+// замечание, которое цитирует строку вердикта (в тикетах про форматы это норма),
+// объявляло бы себя началом круга.
+reset({ number: 1100, title: 'Демо-тикет 1100', labels: ['ready-for-dev', 'area:backend'], state: 'open' })
+pulls.clear()
+comments.length = 0
+pullFiles = []
+pulls.set(1100, { number: 1100, head: { ref: 'feature/1100-role-header', sha: 'sha-1100-1' } })
+app = await boot()
+step = await tick(app)
+check('разработчик взял тикет', step.result.action + ':' + step.result.role, 'dispatched:dev-backend')
+const dev11 = step.result.sessionId
+endTurn(dev11)
+setLabels(1100, ['for-code-review'])
+await tick(app)
+step = await tick(app)
+check('ревьюер смотрит PR', step.result.action + ':' + step.result.role, 'dispatched:code-review')
+const review11 = step.result.sessionId
+reviewer(1100, '**Роль:** код-ревьюер · вердикт FIX: два замечания\nFIX: 2\n\nbackend/app/api/orders.py:41 — пустой список\nfrontend/src/lib/vacancySubscription.js:41 — нет признака отписки')
+reviewer(1100, '**Роль:** код-ревьюер · замечание по пустому списку\n\nbackend/app/api/orders.py:41 — пустой список не отличим от 404')
+reviewer(1100, '**Роль:** код-ревьюер · замечание про признак отписки\n\nfrontend/src/lib/vacancySubscription.js:41 — нет признака отписки')
+// Замечание с цитатой вердикта: строка `FIX: 2` стоит в теле с начала строки,
+// путей в нём нет. Началом круга оно быть не должно — вердикт читается в шапке.
+reviewer(1100, '**Роль:** код-ревьюер · замечание про формат строки вердикта\n\nВердикт пишется второй строкой, например:\n\n```\nFIX: 2\n```\n\nТак диспетчер находит начало круга.')
+endTurn(review11)
+// Метка маршрута остаётся на тикете, как в жизни: если круг разберётся неверно,
+// доработка уйдёт бэкенду по метке — ровно как в дефекте, который ловит тест.
+setLabels(1100, ['ready-for-dev', 'area:backend'])
+await tick(app)
+step = await tick(app)
+check('круг открыт вердиктом, а не последним замечанием и не цитатой', step.result.action + ':' + step.result.role, 'dispatched:dev-fullstack')
+check('в задании пути обеих половин', [
+  lastPrompt().text.includes('backend/app/api/orders.py'),
+  lastPrompt().text.includes('frontend/src/lib/vacancySubscription.js'),
+], [true, true])
+// След маршрута — только комментарии диспетчера: замечания ревьюера пути тоже
+// содержат, и проверка по всем комментариям проходила бы при любом разборе.
+const dispatcherComments = comments.filter((c) => c.number === 1100 && String(c.body).startsWith('**Роль:** диспетчер'))
+check('в следе тикета пути обеих половин', [
+  dispatcherComments.some((c) => c.body.includes('backend/app/api/orders.py')),
+  dispatcherComments.some((c) => c.body.includes('frontend/src/lib/vacancySubscription.js')),
+], [true, true])
+
+console.log('\n=== сценарий 12: вердикт назван прямо в заголовке ===')
+// Дословный приёмочный случай постановки: «reviewFindings() на комментарии
+// ревьюера, НАЧИНАЮЩЕМСЯ С `**Роль:** код-ревьюер · вердикт FIX: 3`, находит
+// круг». Отдельной строки вердикта здесь нет — он назван внутри «о чём», и
+// разбор обязан принять оба вида. Замечание без вердикта, пришедшее следом, круг
+// не открывает.
+reset({ number: 1200, title: 'Демо-тикет 1200', labels: ['ready-for-dev', 'area:backend'], state: 'open' })
+pulls.clear()
+comments.length = 0
+pullFiles = []
+pulls.set(1200, { number: 1200, head: { ref: 'feature/1200-header-verdict', sha: 'sha-1200-1' } })
+app = await boot()
+step = await tick(app)
+check('разработчик взял тикет', step.result.action + ':' + step.result.role, 'dispatched:dev-backend')
+const dev12 = step.result.sessionId
+endTurn(dev12)
+setLabels(1200, ['for-code-review'])
+await tick(app)
+step = await tick(app)
+check('ревьюер смотрит PR', step.result.action + ':' + step.result.role, 'dispatched:code-review')
+const review12 = step.result.sessionId
+reviewer(1200, '**Роль:** код-ревьюер · вердикт FIX: два замечания\n\nbackend/app/api/orders.py:41 — пустой список\nfrontend/src/lib/vacancySubscription.js:41 — нет признака отписки')
+reviewer(1200, '**Роль:** код-ревьюер · замечание по пустому списку\n\nbackend/app/api/orders.py:41 — пустой список не отличим от 404')
+endTurn(review12)
+setLabels(1200, ['ready-for-dev', 'area:backend'])
+await tick(app)
+step = await tick(app)
+check('вердикт из заголовка открывает круг', step.result.action + ':' + step.result.role, 'dispatched:dev-fullstack')
+check('в задании пути обеих половин из круга', [
+  lastPrompt().text.includes('backend/app/api/orders.py'),
+  lastPrompt().text.includes('frontend/src/lib/vacancySubscription.js'),
+], [true, true])
+const dispatcherComments12 = comments.filter((c) => c.number === 1200 && String(c.body).startsWith('**Роль:** диспетчер'))
+check('в следе тикета пути обеих половин', [
+  dispatcherComments12.some((c) => c.body.includes('backend/app/api/orders.py')),
+  dispatcherComments12.some((c) => c.body.includes('frontend/src/lib/vacancySubscription.js')),
+], [true, true])
+
 console.log('\n=== служебное ===')
 const ids = allRequestIds.map((p) => p.requestId)
 check('requestId уникальны', new Set(ids).size, ids.length)
