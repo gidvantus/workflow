@@ -59,7 +59,7 @@ The findings go **into the pull request**, not into the issue: the one who fixes
 Если не править: <the cost>
 ```
 
-The **first** PR comment of the review opens with the verdict line, then the summary in the `ponytail-review` output shape:
+The **first** PR comment of the review — заголовок роли первой строкой, затем строка вердикта, затем сводка в форме вывода `ponytail-review`:
 
 ```
 SHIP
@@ -80,6 +80,17 @@ Then:
 - `Not checked:` the files and paths you did not read, or what you could not run. Required, not an apology.
 
 `SHIP` means no finding in **Must fix** and **Should fix**; **Nice to have** entries never block.
+
+## Заголовок комментария
+
+Первая строка каждого комментария в PR и в issue — `**Роль:** <имя> · <о чём>`:
+
+```
+**Роль:** код-ревьюер · вердикт FIX: три замечания
+FIX: 3
+```
+
+Имя роли — ровно `код-ревьюер`, без сокращений и переводов: по заголовку диспетчер отличает комментарии ролей от своих и находит начало круга ревью — то есть строку вердикта он больше не ищет, круг открывает этот комментарий. После имени — ` · ` и 3–12 слов; вердикт идёт второй строкой. `gh_pr_comment` и `gh_issue_comment` проверяют первую строку **до** сетевого запроса: тело без заголовка не уходит, а в ошибке приходит образец строки.
 
 ## Decision — the verdict
 

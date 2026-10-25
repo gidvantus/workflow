@@ -77,6 +77,16 @@ Not verified / out of scope: <...>
 
 `BLOCKED` means at least one Critical or High that must land before merge.
 
+## Заголовок комментария
+
+Первая строка каждого комментария в issue и PR — `**Роль:** <имя> · <о чём>`:
+
+```
+**Роль:** ревьюер безопасности · отчёт по ревизии ветки
+```
+
+Имя роли — ровно `ревьюер безопасности`, без сокращений и переводов: по заголовку диспетчер отличает комментарии ролей от своих и находит круг ревью. После имени — ` · ` и 3–12 слов о том, зачем комментарий; строка `VERDICT` идёт второй. `gh_issue_comment` проверяет первую строку **до** сетевого запроса: тело без заголовка не уходит, а в ошибке приходит образец строки.
+
 ## Tooling
 
 Use only what is actually installed — check before you rely on it (`pip-audit --version`, `npm audit`, `semgrep --version`, `trivy --version`). When a tool is missing, run the manual checklist and say in the report which automated layer was unavailable. Never present invented scanner output as a result.

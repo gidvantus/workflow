@@ -229,6 +229,39 @@ function api(method, apiPath, body) {
   })
 }
 
+// ── Заголовок роли в первой строке комментария ──────────────────────────────
+// Диспетчер отдела разбирает историю тикета по первой строке: по заголовку роли
+// он отличает свои комментарии от ревьюерских и находит начало круга доработок.
+// Поэтому формат — часть контракта конвейера, а не пожелание скилла: тело без
+// заголовка не уходит в GitHub вовсе, и проверка стоит ДО сетевого запроса.
+//
+// Имя роли ниже — дословно то, что записано в скилле этой роли. Привязки к id
+// пресета в файле нет: таблицы «пресет → имя роли» здесь не появляется.
+const ROLE_NAME = 'разработчик (бэкенд)'
+
+const ROLE_LINE = /^\*\*Роль:\*\* (\S[^\n]*?) · (\S[^\n]*)$/
+
+function assertRoleHeader(body, role) {
+  const sample = '**Роль:** ' + role + ' · что сделано и как проверить'
+  const first = String(typeof body === 'string' ? body : '').split('\n')[0].replace(/\r$/, '')
+  const found = ROLE_LINE.exec(first)
+  if (!found) {
+    throw new Error('первая строка комментария — заголовок роли, например: ' + sample +
+      '. Роль в этом пресете — ' + role + '. Комментарий не отправлен: запроса в GitHub не было.')
+  }
+  const name = found[1].trim()
+  const words = found[2].trim().split(/\s+/).filter((word) => word !== '')
+  if (name.length < 2 || name.length > 80) {
+    throw new Error('имя роли в первой строке — от 2 до 80 символов, а не «' + name + '». Образец: ' +
+      sample + '. Комментарий не отправлен: запроса в GitHub не было.')
+  }
+  if (words.length < 3 || words.length > 12) {
+    throw new Error('«о чём» в первой строке — от 3 до 12 слов, а их ' + words.length + '. Образец: ' +
+      sample + '. Комментарий не отправлен: запроса в GitHub не было.')
+  }
+  return first
+}
+
 function labelNames(raw) {
   return (raw.labels || []).map((l) => (typeof l === 'string' ? l : l.name))
 }
@@ -355,7 +388,7 @@ export default {
 
     const commentTool = define(
       'gh_issue_comment',
-      'Добавить комментарий в issue. Так dev отчитывается о сделанном, а tester пишет вердикт с воспроизведением.',
+      'Добавить комментарий в issue. Так dev отчитывается о сделанном, а tester пишет вердикт с воспроизведением. Первая строка — заголовок роли: `**Роль:** <имя> · <о чём>`; без него инструмент отказывает до сетевого запроса.',
       {
         type: 'object',
         properties: {
@@ -366,6 +399,7 @@ export default {
         additionalProperties: false,
       },
       async (a, p) => {
+        assertRoleHeader(a.body, ROLE_NAME)
         const created = await api('POST', '/repos/' + p.repo + '/issues/' + a.number + '/comments', { body: a.body })
         return { commentId: created && created.id, url: created && created.html_url }
       },
