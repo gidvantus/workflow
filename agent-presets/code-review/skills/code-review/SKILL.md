@@ -37,7 +37,7 @@ The method — what to read, what to look for, how to phrase a finding — is th
 ## The PR body and the author's answers
 
 - The PR body is read together with the diff. When it describes a previous revision, that is a finding **for the author** — the same four parts as any other finding: what is wrong, the case, the smallest fix, the cost. The reviewer never rewrites the body: the body is the author's report, and this role has no tool for it (`gh_pr_edit` belongs to the developer roles, not to you).
-- The author's answers are read, not guessed. `gh_pr({ "number": N, "comments": true })` returns `comments: [{ author, body, at }]` — the answers to your findings live there. "Probably fixed by now" is not a reason to drop a finding.
+- The author's answers are read, not guessed. `gh_pr({ "number": N, "comments": true })` returns `comments: [{ id, author, body, at }]` — the answers to your findings live there. "Probably fixed by now" is not a reason to drop a finding.
 - A finding closes on evidence only: a fix in the diff, or an answer in the PR that settles the case. Otherwise it stays in the verdict.
 
 ## Evidence rules
@@ -49,37 +49,35 @@ The method — what to read, what to look for, how to phrase a finding — is th
 
 ## Report format
 
-The findings go **into the pull request**, not into the issue: the one who fixes reads them there. One `gh_pr_comment` per finding, so the author can answer each one point by point:
+Одно ревью — **один** комментарий в pull request, а не по комментарию на замечание: автор отвечает на замечания пунктами чеклиста, а россыпь комментариев через два круга уже не прочитать.
+
+Первая строка — заголовок роли, вторая — строка вердикта, дальше сводка в форме вывода `ponytail-review`, чеклист двумя секциями и «Не проверено»:
 
 ```
-<path:line> — <what is wrong>
-
-Случай: <this input or this situation leads to this wrong result>
-Правка: <the smallest fix>
-Если не править: <the cost>
-```
-
-The **first** PR comment of the review — заголовок роли первой строкой, затем строка вердикта, затем сводка в форме вывода `ponytail-review`:
-
-```
-SHIP
-```
-```
+**Роль:** код-ревьюер · вердикт FIX: 3
 FIX: 3
-```
-```
-BLOCKED — <why the revision could not be reviewed>
+
+**Что делает изменение.** Два-три предложения.
+
+**Вердикт.** `Verdict: fix 1 and 3 first.` · `Lean: -<N> lines possible.` — когда есть замечания по лишнему коду.
+
+### Бэкенд
+- [ ] Б1 · `backend/api/x.py:42` — что не так · Случай: … · Правка: … · Если не править: …
+### Фронтенд
+- [ ] Ф1 · `frontend/src/pages/Vacancy.tsx:41` — что не так · Случай: … · Правка: … · Если не править: …
+
+**Не проверено.** Файлы и пути, которые не читал, и команды, которые не запускал. Обязательный раздел, а не извинение.
 ```
 
-Then:
+- Нумерация пунктов — префикс половины и сквозной номер внутри секции: `Б1`, `Б2` в «Бэкенде», `Ф1`, `Ф2` во «Фронтенде». Пункт, не называющий путь ни одной половины, половины не имеет: он идёт абзацем до секций, без чекбокса.
+- Секцию без пунктов не пишешь: пустая секция — шум. Тяжесть замечания называешь в самом пункте (`Must fix` / `Should fix` / `Nice to have`), чтобы `FIX: <n>` считался по пунктам.
+- Пункт закрывает **автор** — галочкой в твоём же комментарии (`gh_comment_edit({ "comment_id": …, "tick": ["Б1"] })`). Ты галочки не ставишь и ответ автора не переписываешь.
+- Замечание, найденное позже (второй круг, ответ автора, найденное при повторном чтении), **дописывается новым пунктом в тот же комментарий** через `gh_comment_edit({ "comment_id": …, "body": <прочитанное тело с новым пунктом> })`. Новый комментарий для этого не открывается: маршрут доработки строится по непомеченным пунктам, и второй комментарий раздвоил бы чеклист.
+- `SHIP` — тот же единственный комментарий: вердикт и сводка, без пунктов и без секций.
 
-- `What this change does:` two or three sentences.
-- Findings in three groups, skip empty groups: **Must fix**, **Should fix**, **Nice to have**. Number them across all groups so the human can say "fix 2 and 5". Each finding has all four parts: what it is, the problem, the fix, what happens if it is skipped. The numbered list lives in this first comment; the per-finding comments carry the detail.
-- `Verdict: Ship.` or `Verdict: fix 1 and 3 first.`
-- `Lean: -<N> lines possible.` when leanness findings exist.
-- `Not checked:` the files and paths you did not read, or what you could not run. Required, not an apology.
+`SHIP` означает: в **Must fix** и **Should fix** пусто; **Nice to have** не блокирует никогда.
 
-`SHIP` means no finding in **Must fix** and **Should fix**; **Nice to have** entries never block.
+В issue — одна короткая строка, и ничего больше: `SHIP` — «ревью пройдено, PR #N»; `FIX` — «вернул: N пунктов в комментарии PR #N». Само ревью живёт в PR.
 
 ## Заголовок комментария
 
