@@ -267,13 +267,13 @@ function prView(raw) {
 // Шаблон пункта один на три стороны: его пишут ревьюер и тестировщик, по
 // непомеченным пунктам диспетчер строит маршрут доработки, а разработчик
 // закрывает пункт галочкой. Номер — слово сразу после маркера: `- [ ] Б1 · …`.
-const CHECKBOX_LINE = /^(\s*[-*+]\s+\[)([ xX])(\]\s*)(\S+)(.*)$/
+const CHECKBOX_LINE = /^(\s*[-*+]\s*\[)([ xX])(\]\s*)(\S+)(.*)$/
 
 function checklistItems(body) {
   const items = []
   String(body).split('\n').forEach((line, index) => {
     const found = CHECKBOX_LINE.exec(line.replace(/\r$/, ''))
-    if (found) items.push({ index, id: found[4], marker: found[2] })
+    if (found) items.push({ index, id: found[4] })
   })
   return items
 }
@@ -556,7 +556,7 @@ export default {
     // передаётся целиком, потому что PATCH заменяет его целиком.
     const commentEditTool = define(
       'gh_comment_edit',
-      'Изменить комментарий issue или PR: body — тело целиком, tick — галочки в чеклисте. tick: ["Б1","Ф2"] переводит `- [ ] Б1` в `- [x] Б1` и не меняет остальное тело ни на байт (вложения сохраняются). Метки, состояние PR и чужие комментарии не трогает. comment_id берётся из прочитанного обсуждения: gh_pr({comments:true}) или gh_issue({comments:true}).',
+      'Изменить комментарий issue или PR: body — тело целиком, tick — галочки в чеклисте. tick: ["Б1","Ф2"] переводит `- [ ] Б1` в `- [x] Б1` и не меняет остальное тело ни на байт (вложения сохраняются). Метки и состояние PR не трогает, а чужие комментарии отклоняет: автор сверяется с учёткой токена до PATCH. comment_id берётся из прочитанного обсуждения: gh_pr({comments:true}) или gh_issue({comments:true}).',
       {
         type: 'object',
         properties: {
@@ -582,21 +582,34 @@ export default {
           throw new Error('передайте body (тело целиком) или tick (номера пунктов чеклиста): пустой вызов ничего не меняет, а сетевой запрос не нужен.')
         }
         const at = '/repos/' + p.repo + '/issues/comments/' + commentId
-        if (wantsBody) {
-          const updated = await api('PATCH', at, { body: a.body })
-          return { commentId: updated && updated.id, url: updated && updated.html_url, ticked: [], missing: [] }
-        }
+        // Аргументы проверяются до сети: пустой tick и `body` вместе с `tick`
+        // отклоняются выше, запроса в GitHub не бывает.
         const ids = (Array.isArray(a.tick) ? a.tick : []).map((id) => String(id).trim()).filter((id) => id !== '')
-        if (ids.length === 0) {
+        if (wantsTick && ids.length === 0) {
           throw new Error('tick пуст: отмечать нечего, а сетевой запрос не нужен. Перечисли номера пунктов, например ["Б1"].')
         }
-        // Тело читается здесь же: правка идёт по актуальному тексту, а не по
-        // копии из истории диалога — иначе чужой PATCH между чтением и записью
-        // стёр бы свежие пункты.
+        // Одно чтение даёт и автора, и актуальное тело: правка идёт по тексту,
+        // прочитанному здесь, а не по копии из истории диалога — иначе PATCH
+        // между чтением и записью стёр бы свежие пункты.
         const current = await api('GET', at)
-        const body = tickChecklist(current && current.body, ids)
+        // Автор сверяется с учёткой токена ДО `PATCH`: описание обещает не
+        // трогать чужие комментарии, а промах на соседнюю строку в списке молча
+        // переписал бы реплику человека — `200` об этом не скажет.
+        const me = await api('GET', '/user')
+        const owner = (current && current.user && current.user.login) || ''
+        const login = (me && me.login) || ''
+        if (!login || owner !== login) {
+          throw new Error('комментарий ' + commentId + ' написан не твоей учёткой (' + (owner || 'автор не прочитан') +
+            (login ? '; учётка токена — ' + login : '') + '). Правка не отправлена: чужие комментарии инструмент не трогает.')
+        }
+        const body = wantsBody ? a.body : tickChecklist(current && current.body, ids)
         const updated = await api('PATCH', at, { body })
-        return { commentId: updated && updated.id, url: updated && updated.html_url, ticked: ids, missing: [] }
+        return {
+          commentId: updated && updated.id,
+          url: updated && updated.html_url,
+          ticked: wantsBody ? [] : ids,
+          missing: [],
+        }
       },
     )
     ctx.effect(() => tools.register(issueTool), 'github:gh_issue')
