@@ -180,6 +180,7 @@ node tester-images.test.mjs             # вложения-скриншоты в
 node code-review-tools.test.mjs         # gh_pr_comment, gh_pr с comments и метка for-code-review
 node analyst-github.test.mjs            # инструменты аналитика, включая gh_issue_edit
 node dev-edit-tools.test.mjs            # gh_pr_edit: правка тела PR у разработчиков
+node comment-edit-tools.test.mjs        # gh_comment_edit: галочки в чеклисте, отказы до запроса, id комментария
 node github-probe.test.mjs              # github-probe.mjs: PATCH комментария, право и побайтовый возврат тела
 ```
 

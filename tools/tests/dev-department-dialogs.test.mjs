@@ -1,7 +1,9 @@
 // Интеграционный тест диспетчера отдела на РЕАЛЬНОМ модуле: поддельные сервисы,
 // поддельная сеть GitHub, поддельные часы. Проверяются: конвейер ролей, один
-// диалог на тикет, сторож зависшего хода и — отдельно — сбой модели, который
-// не должен тратить попытку задачи.
+// диалог на тикет, сторож зависшего хода, — отдельно — сбой модели, который
+// не должен тратить попытку задачи, и маршрут доработки по чеклисту ревьюера
+// (закрытые пункты в маршрут не попадают, комментарий без чекбоксов
+// разбирается как раньше).
 // Запуск: node .dev-department-dialogs-test.mjs
 import fs from 'node:fs'
 import os from 'node:os'
@@ -690,6 +692,124 @@ check('в следе тикета пути обеих половин', [
   dispatcherComments12.some((c) => c.body.includes('backend/app/api/orders.py')),
   dispatcherComments12.some((c) => c.body.includes('frontend/src/lib/vacancySubscription.js')),
 ], [true, true])
+
+console.log('\n=== сценарий 13: маршрут по НЕПОМЕЧЕННЫМ пунктам чеклиста ===')
+// Постановка #10: один комментарий-чеклист, закрытые пункты в маршрут не
+// попадают. Ревьюер вернул два пункта, разработчик закрыл бэкендовый Б1 и
+// оставил открытым фронтендовый Ф1 — доработка обязана уйти фронтендеру, хотя
+// метка маршрута на тикете area:backend.
+reset({ number: 1300, title: 'Демо-тикет 1300', labels: ['ready-for-dev', 'area:backend'], state: 'open' })
+pulls.clear()
+comments.length = 0
+pullFiles = []
+pulls.set(1300, { number: 1300, head: { ref: 'feature/1300-checklist', sha: 'sha-1300-1' } })
+app = await boot()
+step = await tick(app)
+check('разработчик взял тикет', step.result.action + ':' + step.result.role, 'dispatched:dev-backend')
+const dev13 = step.result.sessionId
+endTurn(dev13)
+setLabels(1300, ['for-code-review'])
+await tick(app)
+step = await tick(app)
+check('ревьюер смотрит PR', step.result.action + ':' + step.result.role, 'dispatched:code-review')
+const review13 = step.result.sessionId
+reviewer(1300, '**Роль:** код-ревьюер · вердикт FIX: два замечания\nFIX: 2\n\n**Что делает изменение.** Правит инструменты.\n\n### Бэкенд\n- [x] Б1 · `backend/app/api/orders.py:41` — пустой список не отличим от 404\n### Фронтенд\n- [ ] Ф1 · `frontend/src/lib/vacancySubscription.js:41` — нет признака отписки\n\n**Не проверено.** Стенд.')
+endTurn(review13)
+setLabels(1300, ['ready-for-dev', 'area:backend'])
+await tick(app)
+step = await tick(app)
+check('доработка ушла половине НЕпомеченного пункта', step.result.action + ':' + step.result.role, 'dispatched:dev-frontend')
+check('в задании путь открытого пункта', lastPrompt().text.includes('frontend/src/lib/vacancySubscription.js'), true)
+check('в задании нет пути закрытого пункта', lastPrompt().text.includes('backend/app/api/orders.py'), false)
+const dispatcher13 = comments.filter((c) => c.number === 1300 && String(c.body).startsWith('**Роль:** диспетчер'))
+check('след в тикете — только открытый пункт', [
+  dispatcher13.some((c) => c.body.includes('frontend/src/lib/vacancySubscription.js')),
+  dispatcher13.some((c) => c.body.includes('backend/app/api/orders.py')),
+], [true, false])
+
+console.log('\n=== сценарий 14: комментарий без чекбоксов — запасной путь как раньше ===')
+// Старый формат (тикет в полёте): чекбоксов нет вовсе, пути берутся из всего
+// текста круга, иначе такие возвраты потеряли бы маршрут.
+reset({ number: 1400, title: 'Демо-тикет 1400', labels: ['ready-for-dev', 'area:backend'], state: 'open' })
+pulls.clear()
+comments.length = 0
+pullFiles = []
+pulls.set(1400, { number: 1400, head: { ref: 'feature/1400-old-format', sha: 'sha-1400-1' } })
+app = await boot()
+step = await tick(app)
+check('разработчик взял тикет', step.result.action + ':' + step.result.role, 'dispatched:dev-backend')
+const dev14 = step.result.sessionId
+endTurn(dev14)
+setLabels(1400, ['for-code-review'])
+await tick(app)
+step = await tick(app)
+check('ревьюер смотрит PR', step.result.action + ':' + step.result.role, 'dispatched:code-review')
+const review14 = step.result.sessionId
+reviewer(1400, '**Роль:** код-ревьюер · вердикт FIX: два замечания\nFIX: 2\n\nbackend/app/api/orders.py:41 — пустой список\nfrontend/src/lib/vacancySubscription.js:41 — нет признака отписки')
+endTurn(review14)
+setLabels(1400, ['ready-for-dev', 'area:backend'])
+await tick(app)
+step = await tick(app)
+check('без чекбоксов маршрут по путям: обе половины', step.result.action + ':' + step.result.role, 'dispatched:dev-fullstack')
+
+console.log('\n=== сценарий 15: тексты заданий — один чеклист и галочки ===')
+reset({ number: 1500, title: 'Демо-тикет 1500', labels: ['ready-for-dev', 'area:backend'], state: 'open' })
+pulls.clear()
+comments.length = 0
+pullFiles = []
+pulls.set(1500, { number: 1500, head: { ref: 'feature/1500-prompts', sha: 'sha-1500-1' } })
+app = await boot()
+step = await tick(app)
+const dev15 = step.result.sessionId
+endTurn(dev15)
+setLabels(1500, ['for-code-review'])
+await tick(app)
+step = await tick(app)
+const review15 = step.result.sessionId
+const reviewPrompt = lastPrompt().text
+check('задание ревьюеру: один комментарий', reviewPrompt.includes('ОДНИМ комментарием'), true)
+check('задание ревьюеру: секция Бэкенд', reviewPrompt.includes('### Бэкенд'), true)
+check('задание ревьюеру: секция Фронтенд', reviewPrompt.includes('### Фронтенд'), true)
+check('задание ревьюеру: дописать пункт в тот же комментарий', reviewPrompt.includes('gh_comment_edit'), true)
+check('задание ревьюеру: одна строка в issue', reviewPrompt.includes('одна короткая строка'), true)
+check('задание ревьюеру: нет старого «по одному, чтобы автор ответил точечно»', reviewPrompt.includes('чтобы автор мог ответить точечно'), false)
+reviewer(1500, '**Роль:** код-ревьюер · вердикт FIX: один пункт\nFIX: 1\n\n### Фронтенд\n- [ ] Ф1 · `frontend/src/lib/vacancySubscription.js:41` — нет признака отписки')
+endTurn(review15)
+setLabels(1500, ['ready-for-dev', 'area:backend'])
+await tick(app)
+step = await tick(app)
+const reworkPrompt = lastPrompt().text
+check('доработка ушла фронтендеру', step.result.action + ':' + step.result.role, 'dispatched:dev-frontend')
+check('в задании доработки: галочки через gh_comment_edit', reworkPrompt.includes('gh_comment_edit'), true)
+check('в задании доработки: tick по номеру', reworkPrompt.includes('"tick"'), true)
+check('в задании доработки: одна строка в issue и sha', reworkPrompt.includes('одна короткая строка') && reworkPrompt.includes('коммит <sha>'), true)
+check('в задании доработки: не согласен — в тело PR', reworkPrompt.includes('gh_pr_edit'), true)
+
+console.log('\n=== сценарий 16: отклонение формата `-[ ] Б1` — пункт у обеих сторон ===')
+// Шов постановки #10: шаблон пункта один у диспетчера и у `gh_comment_edit`.
+// Дефис без пробела — обычное отклонение от формата у модели; такой пункт
+// обязан остаться пунктом и для маршрута, иначе закрыть его будет нечем.
+reset({ number: 1600, title: 'Демо-тикет 1600', labels: ['ready-for-dev', 'area:backend'], state: 'open' })
+pulls.clear()
+comments.length = 0
+pullFiles = []
+pulls.set(1600, { number: 1600, head: { ref: 'feature/1600-seam', sha: 'sha-1600-1' } })
+app = await boot()
+step = await tick(app)
+const dev16 = step.result.sessionId
+endTurn(dev16)
+setLabels(1600, ['for-code-review'])
+await tick(app)
+step = await tick(app)
+const review16 = step.result.sessionId
+reviewer(1600, '**Роль:** код-ревьюер · вердикт FIX: два замечания\nFIX: 2\n\n### Бэкенд\n- [x] Б1 · `tools/a.mjs:12` — закрыт\n### Фронтенд\n-[ ] Ф1 · `frontend/src/lib/a.js:5` — открыт, но без пробела после дефиса')
+endTurn(review16)
+setLabels(1600, ['ready-for-dev', 'area:backend'])
+await tick(app)
+step = await tick(app)
+check('пункт без пробела после дефиса виден маршруту', step.result.action + ':' + step.result.role, 'dispatched:dev-frontend')
+check('в задании путь открытого пункта', lastPrompt().text.includes('frontend/src/lib/a.js'), true)
+check('в задании нет пути закрытого пункта', lastPrompt().text.includes('tools/a.mjs'), false)
 
 console.log('\n=== служебное ===')
 const ids = allRequestIds.map((p) => p.requestId)

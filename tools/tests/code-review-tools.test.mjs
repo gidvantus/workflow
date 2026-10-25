@@ -73,10 +73,11 @@ function check(name, actual, expected) {
 }
 const byName = (n) => tools.find((t) => t.name === n)
 
-check('пресет зарегистрировал 9 инструментов', tools.map((t) => t.name).sort(), [
-  'gh_issue', 'gh_issue_comment', 'gh_issue_labels', 'gh_issues',
+check('пресет зарегистрировал 10 инструментов', tools.map((t) => t.name).sort(), [
+  'gh_comment_edit', 'gh_issue', 'gh_issue_comment', 'gh_issue_labels', 'gh_issues',
   'gh_pr', 'gh_pr_comment', 'gh_pr_create', 'gh_prs', 'project_info',
 ])
+check('gh_comment_edit есть', !!byName('gh_comment_edit'), true)
 check('gh_pr_comment есть', !!byName('gh_pr_comment'), true)
 check('тела PR ревьюер не правит', !!byName('gh_pr_edit'), false)
 check('gh_pr умеет comments', !!byName('gh_pr').parameters.properties.comments, true)
@@ -125,8 +126,8 @@ check('детали PR читаются с пути pull request', [calls[0].met
 // Первый запрос — сам PR, второй — его обсуждение; сеть поддельная, поэтому
 // Первый запрос — сам PR, второй — его обсуждение; ответ выбирается по пути.
 const replies = [
-  { user: { login: 'dev-fullstack' }, body: 'Поправил: тело PR обновлено под дифф', created_at: '2026-10-20T10:00:00Z' },
-  { user: { login: 'code-review' }, body: 'FIX: 1\n\napp/api/x.py:42 — пустой список', created_at: '2026-10-20T09:00:00Z' },
+  { id: 902, user: { login: 'dev-fullstack' }, body: 'Поправил: тело PR обновлено под дифф', created_at: '2026-10-20T10:00:00Z' },
+  { id: 901, user: { login: 'code-review' }, body: 'FIX: 1\n\napp/api/x.py:42 — пустой список', created_at: '2026-10-20T09:00:00Z' },
 ]
 response = (requestPath) => (requestPath.indexOf('/comments') !== -1 ? replies : prRow)
 const byPathRequest = https.request
@@ -140,10 +141,13 @@ check('обсуждение запрашивается на issue-пути', [
   ['GET', '/repos/gidvantus/vahta/issues/77/comments?per_page=100'],
 ])
 check('ответы автора пришли списком', Array.isArray(withComments.comments), true)
-check('каждый ответ — author, body, at', withComments.comments.map((c) => Object.keys(c).sort()).every((k) => JSON.stringify(k) === '["at","author","body"]'), true)
+check('каждый ответ — id, author, body, at', withComments.comments.map((c) => Object.keys(c).sort()).every((k) => JSON.stringify(k) === '["at","author","body","id"]'), true)
 check('ответ автора разобран', withComments.comments[0], {
-  author: 'dev-fullstack', body: 'Поправил: тело PR обновлено под дифф', at: '2026-10-20T10:00:00Z',
+  id: 902, author: 'dev-fullstack', body: 'Поправил: тело PR обновлено под дифф', at: '2026-10-20T10:00:00Z',
 })
+// id — не украшение: по нему разработчик ставит галочку в чеклисте ревьюера
+// (gh_comment_edit), поэтому он обязан быть в каждом комментарии обсуждения.
+check('id комментария в обсуждении взят из ответа', withComments.comments.map((c) => c.id), [902, 901])
 check('детали и обсуждение в одном ответе', [withComments.title, withComments.comments.length], ['Отписка (#77)', 2])
 check('токен не утёк в обсуждение', JSON.stringify(withComments).includes('test-token'), false)
 https.request = byPathRequest
