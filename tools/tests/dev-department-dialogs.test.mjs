@@ -653,6 +653,44 @@ check('в следе тикета пути обеих половин', [
   dispatcherComments.some((c) => c.body.includes('frontend/src/lib/vacancySubscription.js')),
 ], [true, true])
 
+console.log('\n=== сценарий 12: вердикт назван прямо в заголовке ===')
+// Дословный приёмочный случай постановки: «reviewFindings() на комментарии
+// ревьюера, НАЧИНАЮЩЕМСЯ С `**Роль:** код-ревьюер · вердикт FIX: 3`, находит
+// круг». Отдельной строки вердикта здесь нет — он назван внутри «о чём», и
+// разбор обязан принять оба вида. Замечание без вердикта, пришедшее следом, круг
+// не открывает.
+reset({ number: 1200, title: 'Демо-тикет 1200', labels: ['ready-for-dev', 'area:backend'], state: 'open' })
+pulls.clear()
+comments.length = 0
+pullFiles = []
+pulls.set(1200, { number: 1200, head: { ref: 'feature/1200-header-verdict', sha: 'sha-1200-1' } })
+app = await boot()
+step = await tick(app)
+check('разработчик взял тикет', step.result.action + ':' + step.result.role, 'dispatched:dev-backend')
+const dev12 = step.result.sessionId
+endTurn(dev12)
+setLabels(1200, ['for-code-review'])
+await tick(app)
+step = await tick(app)
+check('ревьюер смотрит PR', step.result.action + ':' + step.result.role, 'dispatched:code-review')
+const review12 = step.result.sessionId
+reviewer(1200, '**Роль:** код-ревьюер · вердикт FIX: два замечания\n\nbackend/app/api/orders.py:41 — пустой список\nfrontend/src/lib/vacancySubscription.js:41 — нет признака отписки')
+reviewer(1200, '**Роль:** код-ревьюер · замечание по пустому списку\n\nbackend/app/api/orders.py:41 — пустой список не отличим от 404')
+endTurn(review12)
+setLabels(1200, ['ready-for-dev', 'area:backend'])
+await tick(app)
+step = await tick(app)
+check('вердикт из заголовка открывает круг', step.result.action + ':' + step.result.role, 'dispatched:dev-fullstack')
+check('в задании пути обеих половин из круга', [
+  lastPrompt().text.includes('backend/app/api/orders.py'),
+  lastPrompt().text.includes('frontend/src/lib/vacancySubscription.js'),
+], [true, true])
+const dispatcherComments12 = comments.filter((c) => c.number === 1200 && String(c.body).startsWith('**Роль:** диспетчер'))
+check('в следе тикета пути обеих половин', [
+  dispatcherComments12.some((c) => c.body.includes('backend/app/api/orders.py')),
+  dispatcherComments12.some((c) => c.body.includes('frontend/src/lib/vacancySubscription.js')),
+], [true, true])
+
 console.log('\n=== служебное ===')
 const ids = allRequestIds.map((p) => p.requestId)
 check('requestId уникальны', new Set(ids).size, ids.length)
