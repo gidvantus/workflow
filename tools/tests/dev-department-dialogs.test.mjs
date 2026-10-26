@@ -1,9 +1,10 @@
 // Интеграционный тест диспетчера отдела на РЕАЛЬНОМ модуле: поддельные сервисы,
 // поддельная сеть GitHub, поддельные часы. Проверяются: конвейер ролей, один
 // диалог на тикет, сторож зависшего хода, — отдельно — сбой модели, который
-// не должен тратить попытку задачи, и маршрут доработки по чеклисту ревьюера
+// не должен тратить попытку задачи, маршрут доработки по чеклисту ревьюера
 // (закрытые пункты в маршрут не попадают, комментарий без чекбоксов
-// разбирается как раньше).
+// разбирается как раньше) и маршрут после test-failed по чеклисту тестировщика
+// в issue.
 // Запуск: node .dev-department-dialogs-test.mjs
 import fs from 'node:fs'
 import os from 'node:os'
@@ -810,6 +811,111 @@ step = await tick(app)
 check('пункт без пробела после дефиса виден маршруту', step.result.action + ':' + step.result.role, 'dispatched:dev-frontend')
 check('в задании путь открытого пункта', lastPrompt().text.includes('frontend/src/lib/a.js'), true)
 check('в задании нет пути закрытого пункта', lastPrompt().text.includes('tools/a.mjs'), false)
+
+console.log('\n=== сценарий 17: после test-failed маршрут читает чеклист тестировщика из issue ===')
+// Дефект из возврата №1: ревьюер в PR уже сказал SHIP и путей не назвал, метка
+// маршрута — area:backend, а тестировщик вернул тикет с ФРОНТЕНД-дефектом в
+// чеклисте issue. Маршрут обязан прочитать issue: без этого фронтенд-дефект
+// уезжает бэкендеру по метке и доработка заканчивается без коммита.
+reset({ number: 1700, title: 'Демо-тикет 1700', labels: ['ready-for-dev', 'area:backend'], state: 'open' })
+pulls.clear()
+comments.length = 0
+pullFiles = []
+pulls.set(1700, { number: 1700, head: { ref: 'feature/1700-test-list', sha: 'sha-1700-1' } })
+app = await boot()
+step = await tick(app)
+check('разработчик взял тикет', step.result.action + ':' + step.result.role, 'dispatched:dev-backend')
+const dev17 = step.result.sessionId
+endTurn(dev17)
+setLabels(1700, ['for-code-review', 'area:backend'])
+await tick(app)
+step = await tick(app)
+const review17 = step.result.sessionId
+reviewer(1700, '**Роль:** код-ревьюер · вердикт SHIP\nSHIP\n\nПроверено, замечаний нет.')
+endTurn(review17)
+setLabels(1700, ['ready-for-test', 'area:backend'])
+await tick(app)
+step = await tick(app)
+const tester17 = step.result.sessionId
+check('тестировщик получил тикет', step.result.action + ':' + step.result.role, 'dispatched:tester')
+// Вердикт тестировщика — в ISSUE. Бэкенд-дефект закрыт галочкой, фронтенд-дефект
+// открыт: в маршрут должен попасть только он.
+comments.push({
+  number: 1700,
+  user: 'tester',
+  body: '**Роль:** тестировщик · вердикт RED: дефект на экране\nVERDICT: RED\n\n### Бэкенд\n- [x] Б1 · `backend/app/api/orders.py:41` — пустой список не отличим от 404\n### Фронтенд\n- [ ] Ф1 · `frontend/src/pages/Vacancy.tsx:41` — нет признака отписки\n\n![Скриншот](https://example.test/red.png)',
+})
+endTurn(tester17)
+setLabels(1700, ['test-failed', 'area:backend'])
+await tick(app)
+step = await tick(app)
+check('доработка по чеклисту тестировщика ушла фронтендеру', step.result.action + ':' + step.result.role, 'dispatched:dev-frontend')
+check('в задании путь открытого пункта тестировщика', lastPrompt().text.includes('frontend/src/pages/Vacancy.tsx:41'), true)
+check('в задании нет пути закрытого пункта', lastPrompt().text.includes('backend/app/api/orders.py'), false)
+check('в задании назван источник — тестировщик', lastPrompt().text.includes('Замечания тестировщика'), true)
+const dispatcher17 = comments.filter((c) => c.number === 1700 && String(c.body).startsWith('**Роль:** диспетчер'))
+check('след в тикете — путь тестировщика', [
+  dispatcher17.some((c) => c.body.includes('frontend/src/pages/Vacancy.tsx')),
+  dispatcher17.some((c) => c.body.includes('backend/app/api/orders.py')),
+], [true, false])
+
+console.log('\n=== сценарий 18: вердикт тестировщика без чекбоксов — пути из всего текста ===')
+// Старый формат вердикта: чекбоксов нет вовсе, дефект назван прозой. Такой
+// комментарий разбирается целиком — иначе возврат после теста потерял бы пути.
+reset({ number: 1800, title: 'Демо-тикет 1800', labels: ['ready-for-dev', 'area:backend'], state: 'open' })
+pulls.clear()
+comments.length = 0
+pullFiles = []
+pulls.set(1800, { number: 1800, head: { ref: 'feature/1800-prose', sha: 'sha-1800-1' } })
+app = await boot()
+step = await tick(app)
+const dev18 = step.result.sessionId
+endTurn(dev18)
+setLabels(1800, ['for-code-review', 'area:backend'])
+await tick(app)
+step = await tick(app)
+const review18 = step.result.sessionId
+endTurn(review18)
+setLabels(1800, ['ready-for-test', 'area:backend'])
+await tick(app)
+step = await tick(app)
+const tester18 = step.result.sessionId
+comments.push({
+  number: 1800,
+  user: 'tester',
+  body: '**Роль:** тестировщик · вердикт RED: нет признака отписки\nVERDICT: RED\n\nfrontend/src/lib/vacancySubscription.js:41 — признак отписки не показан на карточке.',
+})
+endTurn(tester18)
+setLabels(1800, ['test-failed', 'area:backend'])
+await tick(app)
+step = await tick(app)
+check('без чекбоксов маршрут по путям вердикта', step.result.action + ':' + step.result.role, 'dispatched:dev-frontend')
+check('в задании путь из прозы тестировщика', lastPrompt().text.includes('frontend/src/lib/vacancySubscription.js:41'), true)
+
+console.log('\n=== сценарий 19: без вердикта тестировщика маршрут прежний — круг ревьюера ===')
+// Тикет в полёте: вердикта тестировщика в issue нет (старый формат). Маршрут не
+// меняется — его по-прежнему решает круг ревьюера в PR, а без путей и там — метка.
+reset({ number: 1900, title: 'Демо-тикет 1900', labels: ['ready-for-dev', 'area:frontend'], state: 'open' })
+pulls.clear()
+comments.length = 0
+pullFiles = []
+pulls.set(1900, { number: 1900, head: { ref: 'feature/1900-old-test', sha: 'sha-1900-1' } })
+app = await boot()
+step = await tick(app)
+check('разработчик взял тикет', step.result.action + ':' + step.result.role, 'dispatched:dev-frontend')
+const dev19 = step.result.sessionId
+endTurn(dev19)
+setLabels(1900, ['for-code-review', 'area:frontend'])
+await tick(app)
+step = await tick(app)
+const review19 = step.result.sessionId
+reviewer(1900, '**Роль:** код-ревьюер · вердикт FIX: один пункт\nFIX: 1\n\nbackend/app/api/orders.py:41 — пустой список не отличим от 404')
+endTurn(review19)
+setLabels(1900, ['test-failed', 'area:frontend'])
+await tick(app)
+step = await tick(app)
+check('без вердикта тестировщика решает круг ревьюера', step.result.action + ':' + step.result.role, 'dispatched:dev-backend')
+check('в задании назван источник — ревьюер', lastPrompt().text.includes('Замечания ревьюера'), true)
 
 console.log('\n=== служебное ===')
 const ids = allRequestIds.map((p) => p.requestId)
