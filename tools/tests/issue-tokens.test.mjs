@@ -11,9 +11,10 @@
 // `tokenUsage` (stateVersion 2, `usage-projection.ts`): `llm/retry-started`
 // закрывает только слот замены потока, поэтому повторная попытка
 // **добавляется** к итогу (700 + 800 = 1500 на логе из S1), а `assistant/attempt`
-// тоже даёт вклад — usage из последнего чанка его потока. Двойного счёта при этом
-// нет по другой причине: повторная выборка той же попытки с теми же числами
-// заменяет прежнюю, а не прибавляется (проверяется на S11 и S12).
+// тоже даёт вклад — usage из последнего usage-чанка его потока, записанного
+// формой DSH `{ type: 'chunk', chunk: { type: 'usage', usage: {…} } }`. Двойного
+// счёта при этом нет по другой причине: повторная выборка той же попытки с теми
+// же числами заменяет прежнюю, а не прибавляется (проверяется на S12 и S13).
 //
 // Песочный каталог установки, книга и стенограммы — в песочнице, боевой ~/.dsh
 // не читается; сам модуль учёта проверяется отдельным набором своей половины.
@@ -83,17 +84,24 @@ const addReplacing = (totals, previous, next) => ({
   cacheWriteTokens: totals.cacheWriteTokens - (previous ? previous.cacheWriteTokens : 0) + next.cacheWriteTokens,
 })
 
-// usage попытки: у assistant/message — data.usage, иначе последний чанк потока.
+// Последняя запись потока нужного вида — как lastAssistantStreamChunk в DSH:
+// запись лежит на двух уровнях, record.chunk.type. Настоящая форма записи в
+// стенограмме DSH: { type: 'chunk', time, chunk: { type: 'usage', usage: {…} } }.
+function lastStreamChunk(stream, type) {
+  for (let i = stream.length - 1; i >= 0; i -= 1) {
+    const record = stream[i]
+    if (record && record.type === 'chunk' && record.chunk && record.chunk.type === type) return record.chunk
+  }
+  return undefined
+}
+
+// usage попытки: у assistant/message — data.usage, иначе последний usage-чанк потока.
 function usageOf(event) {
   const data = event.data || {}
   if (event.type === 'assistant/message' && data.usage !== undefined) return data.usage
-  const stream = data.stream
-  if (!Array.isArray(stream)) return undefined
-  for (let i = stream.length - 1; i >= 0; i -= 1) {
-    const chunk = stream[i]
-    if (chunk && chunk.usage !== undefined) return chunk.usage
-  }
-  return undefined
+  if (!Array.isArray(data.stream)) return undefined
+  const chunk = lastStreamChunk(data.stream, 'usage')
+  return chunk === undefined ? undefined : chunk.usage
 }
 
 export function usageOfEvents(events) {
@@ -171,6 +179,19 @@ const S10 = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
 const S11 = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
 const S12 = 'cccccccc-cccc-cccc-cccc-cccccccccccc'
 const S13 = 'dddddddd-dddd-dddd-dddd-dddddddddddd'
+const S14 = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee'
+
+// Песочница «модуль учёта нарушил контракт ведра»: такой модуль отчёт обязан
+// отвергнуть ошибкой, а не показать нули под чужими именами.
+const homeBadContract = path.join(process.cwd(), '.issue-tokens-badcontract-home')
+fs.rmSync(homeBadContract, { recursive: true, force: true })
+fs.mkdirSync(path.join(homeBadContract, 'profiles', 'desktop', 'plugins'), { recursive: true })
+fs.writeFileSync(path.join(homeBadContract, 'profiles', 'desktop', 'plugins', 'usage-ledger.mjs'), [
+  'export function readLedger() { return [] }',
+  'export function usageOfEvents() { return { in: 0, out: 0, cacheRead: 0, cacheWrite: 0 } }',
+  '',
+].join('\n'))
+fs.writeFileSync(path.join(homeBadContract, 'projects.json'), JSON.stringify({ version: 1, projects: {} }))
 
 fs.rmSync(home, { recursive: true, force: true })
 fs.rmSync(homeNoModule, { recursive: true, force: true })
@@ -300,7 +321,22 @@ fs.mkdirSync(homeRule, { recursive: true })
 installLedger(homeRule)
 fs.writeFileSync(path.join(homeRule, 'projects.json'), fs.readFileSync(path.join(home, 'projects.json')))
 
+// Запись потока — в настоящей форме стенограммы DSH: { type: 'chunk', time,
+// chunk: { type: 'usage', usage: {…} } }. Выдуманная плоская форма { type: 'usage',
+// usage } в стенограммах DSH не встречается, и тест это отдельно проверяет (S14).
 const attemptUsage = (turn, step, input, output) => ({
+  type: 'assistant/attempt',
+  data: {
+    turn,
+    step,
+    stream: [
+      { type: 'chunk', time: 1, chunk: { type: 'text', text: '' } },
+      { type: 'chunk', time: 2, chunk: { type: 'usage', usage: { inputTokens: input, outputTokens: output } } },
+    ],
+  },
+})
+// Плоская запись потока: такой формы в стенограммах DSH нет, счёт по ней нулевой.
+const inventedAttemptUsage = (turn, step, input, output) => ({
   type: 'assistant/attempt',
   data: { turn, step, stream: [{ type: 'usage', usage: { inputTokens: input, outputTokens: output } }] },
 })
@@ -315,6 +351,10 @@ writeTranscript(homeRule, '--D-Agents-Workflow--', S12, 'Код-ревьюер [
 writeTranscript(homeRule, '--D-Agents-Workflow--', S13, 'Тестировщик [workflow] #16 — Поток', [
   attemptUsage(1, 1, 200, 20),
   msg(1, 1, 200, 20),
+])
+// S14: единственное событие попытки с плоской записью потока — в DSH такой нет.
+writeTranscript(homeRule, '--D-Agents-Workflow--', S14, 'Бэкенд-разработчик [workflow] #17 — Не форма DSH', [
+  inventedAttemptUsage(1, 1, 900, 90),
 ])
 
 const mod = await import('file:///' + cli.replace(/\\/g, '/') + '?v=' + Date.now())
@@ -345,6 +385,15 @@ check('четыре годные записи, повтор схлопнут', [
 check('битая запись отброшена и посчитана', normalized.broken, 1)
 check('префикс session- убран', normalized.entries[0].session, S1)
 check('форма { entries: [...] } тоже принимается', mod.normalizeLedger({ entries: book }).entries.length, 4)
+check('мёртвого problems в книге нет', Object.keys(normalized).sort(), ['broken', 'duplicates', 'entries'])
+
+console.log('\n=== контракт ведра модуля учёта ===')
+check('контрактные имена ведра переводятся в колонки', mod.normalizeUsage({
+  uncachedInputTokens: 1, outputTokens: 2, cacheReadTokens: 3, cacheWriteTokens: 4,
+}), { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 })
+check('чужие имена ведра не принимаются молча', mod.normalizeUsage({
+  in: 10, out: 20, cacheRead: 30, cacheWrite: 40,
+}), { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })
 
 // ── отчёт по тикету ─────────────────────────────────────────────────────────
 
@@ -418,9 +467,18 @@ const ruleRow = (id) => ((rule.tickets[0] && rule.tickets[0].rows.find((row) => 
 check('та же попытка с теми же числами не посчитана дважды', ruleRow(S12).usage.input, 1500)
 check('выход по тому же правилу', ruleRow(S12).usage.output, 150)
 check('usage из потока assistant/attempt входит в итог', ruleRow(S13).usage.input, 200)
+check('выход по тому же правилу', ruleRow(S13).usage.output, 20)
 check('и повтор сообщения его не удваивает', ruleRow(S13).usage.output, 20)
 check('итог тикета сложен из строк', rule.tickets[0] && rule.tickets[0].totals,
   { input: 1700, output: 170, cacheRead: 0, cacheWrite: 0 })
+
+// Б8: в стенограмме DSH запись потока — { type: 'chunk', chunk: { type: 'usage', … } },
+// поэтому плоская форма { type: 'usage', usage } не должна давать вклад: иначе
+// эталон разойдётся с проекцией tokenUsage и половина `profiles/` повторит ошибку.
+const legacy = await mod.buildReport({ dshHome: homeRule, project: 'workflow', issue: 17 })
+const legacyRow = (legacy.tickets[0] && legacy.tickets[0].rows.find((row) => row.id === S14)) || {}
+check('плоская запись потока из выдуманной формы не считается', [legacyRow.usage.input, legacyRow.usage.output], [0, 0])
+check('и тикет при этом виден', legacy.tickets.map((t) => t.project + '#' + t.issue), ['workflow#17'])
 
 // ── сбои разбора стенограммы ────────────────────────────────────────────────
 
@@ -501,6 +559,10 @@ checkText('справка печатается', usage.out, 'node tools/issue-to
 const noModule = runCli(['--dsh-home', homeNoModule, 'workflow'])
 check('без модуля учёта — код 2', noModule.status, 2)
 checkText('и объяснение, чего не хватает', noModule.err, 'модуль учёта не найден')
+// Модуль с чужим именем ведра — честная ошибка на контракте, а не нули в отчёте.
+const badContract = runCli(['--dsh-home', homeBadContract, 'workflow'])
+check('нарушенный контракт ведра — код 2', badContract.status, 2)
+checkText('и названы пропавшие имена', badContract.err, 'нет контрактных имён: uncachedInputTokens')
 // Живой запуск на повреждённых стенограммах: сбой виден человеку, а не только тесту.
 const liveBroken = runCli(['--dsh-home', homeBroken, 'workflow', '14'])
 check('с повреждёнными стенограммами отчёт всё равно печатается', liveBroken.status, 0)
@@ -511,4 +573,5 @@ fs.rmSync(home, { recursive: true, force: true })
 fs.rmSync(homeNoModule, { recursive: true, force: true })
 fs.rmSync(homeBroken, { recursive: true, force: true })
 fs.rmSync(homeRule, { recursive: true, force: true })
+fs.rmSync(homeBadContract, { recursive: true, force: true })
 process.exit(failures === 0 ? 0 : 1)

@@ -40,13 +40,14 @@ const LEDGER_MODULE = path.join('profiles', 'desktop', 'plugins', 'usage-ledger.
 const LEDGER_FILE = 'dev-department-usage.json'
 // Заголовок сессии конвейера: «Код-ревьюер [workflow] #14 — …».
 const TITLE_PATTERN = /\[([\w-]+)\]\s*#(\d+)/
-// Одна и та же величина может называться по-разному: полное имя из проекции
-// DSH tokenUsage, короткое имя из отчёта, вход модели. Читаем все три.
-const USAGE_ALIASES = {
-  input: ['uncachedInputTokens', 'in', 'inputTokens'],
-  output: ['outputTokens', 'out'],
-  cacheRead: ['cacheReadTokens', 'cacheRead'],
-  cacheWrite: ['cacheWriteTokens', 'cacheWrite'],
+// Контракт модуля учёта зафиксирован: ведра проекции tokenUsage называются ровно
+// так, и других имён отчёт не принимает — иначе переименование ведра в модуле
+// молча превратится в нули вместо честного расхождения на контракте.
+const USAGE_FIELDS = {
+  input: 'uncachedInputTokens',
+  output: 'outputTokens',
+  cacheRead: 'cacheReadTokens',
+  cacheWrite: 'cacheWriteTokens',
 }
 
 const zeroUsage = () => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 })
@@ -173,19 +174,15 @@ function turnsOf(rows) {
   return started
 }
 
-// Модуль учёта отдаёт ведра проекции tokenUsage; имена коротких полей из отчёта
-// тоже принимаем, чтобы расхождение в имени не превратилось в «нули».
+// Модуль учёта отдаёт ведра проекции tokenUsage под их контрактными именами;
+// отчёт переводит их в короткие имена своих колонок.
 export function normalizeUsage(usage) {
   const source = usage && typeof usage === 'object' ? usage : {}
-  const pick = (aliases) => {
-    for (const alias of aliases) if (typeof source[alias] === 'number') return num(source[alias])
-    return 0
-  }
   return {
-    input: pick(USAGE_ALIASES.input),
-    output: pick(USAGE_ALIASES.output),
-    cacheRead: pick(USAGE_ALIASES.cacheRead),
-    cacheWrite: pick(USAGE_ALIASES.cacheWrite),
+    input: num(source[USAGE_FIELDS.input]),
+    output: num(source[USAGE_FIELDS.output]),
+    cacheRead: num(source[USAGE_FIELDS.cacheRead]),
+    cacheWrite: num(source[USAGE_FIELDS.cacheWrite]),
   }
 }
 
@@ -221,6 +218,18 @@ export async function loadLedgerModule(dshHome) {
       throw new Error('в модуле учёта нет функции ' + name + ': ' + found)
     }
   }
+  // Контракт ведра проверяем сразу, пробным вызовом: иначе переименованное ведро
+  // в модуле стало бы нулями в готовом отчёте, а не честной ошибкой на контракте.
+  let probe
+  try {
+    probe = module.usageOfEvents([])
+  } catch (error) {
+    throw new Error('модуль учёта не отвечает на usageOfEvents([]): ' + error.message + ' · ' + found)
+  }
+  const missing = Object.values(USAGE_FIELDS).filter((field) => typeof probe[field] !== 'number')
+  if (missing.length > 0) {
+    throw new Error('в ведре модуля учёта нет контрактных имён: ' + missing.join(', ') + ' · ' + found)
+  }
   return { module, file: found }
 }
 
@@ -231,7 +240,6 @@ export function normalizeLedger(raw) {
   const list = Array.isArray(raw) ? raw : (raw && Array.isArray(raw.entries) ? raw.entries : [])
   const entries = []
   const seen = new Set()
-  const problems = []
   let duplicates = 0
   let broken = 0
   for (const entry of list) {
@@ -253,7 +261,7 @@ export function normalizeLedger(raw) {
       source: typeof entry.source === 'string' ? entry.source : null,
     })
   }
-  return { entries, problems, duplicates, broken }
+  return { entries, duplicates, broken }
 }
 
 // Книга и каталог сессий называют сессию по-разному: с префиксом session- и без.
@@ -452,7 +460,6 @@ export async function buildReport({ dshHome, project, issue } = {}) {
     problems.push('книга привязок не читается: ' + ledgerPath + ' — ' + error.message)
   }
   const book = normalizeLedger(rawLedger)
-  problems.push(...book.problems)
 
   const registry = workspaceIndex(path.join(home, 'projects.json'))
   problems.push(...registry.problems)
