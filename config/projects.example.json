@@ -71,6 +71,10 @@
       "workspace": "D:\\Agents\\Workflow",
       "humanClone": "D:\\Development\\VideCoding\\Workflow",
       "composeProject": "workflow-agent",
+	  "areas": {
+  "backend":  ["tools/"],
+  "frontend": ["agent-presets/", "docs/", "profiles/"]
+},
       "department": {
         "enabled": true,
         "windows": [

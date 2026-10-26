@@ -225,6 +225,7 @@ async function boot() {
   return {
     tick: () => localTools.find((t) => t.name === 'dev_department_tick').execute({}),
     status: async () => JSON.parse(await localTools.find((t) => t.name === 'dev_department_status').execute({})),
+    workspaces: async () => JSON.parse(await localTools.find((t) => t.name === 'dev_department_workspaces').execute({})),
   }
 }
 
@@ -916,6 +917,21 @@ await tick(app)
 step = await tick(app)
 check('без вердикта тестировщика решает круг ревьюера', step.result.action + ':' + step.result.role, 'dispatched:dev-backend')
 check('в задании назван источник — ревьюер', lastPrompt().text.includes('Замечания ревьюера'), true)
+console.log('\n=== сценарий 20: рабочие области агентов заводятся по реестру, а не только при выдаче ===')
+// До первой выдачи задачи рабочей области проекта в реестре DSH нет: её
+// заводит сам диспетчер в момент старта исполнителя. Ручная сессия роли по
+// явному пути и список рабочих областей в GUI до этого пусты, поэтому область
+// заводится отдельным инструментом — идемпотентно и без сессий.
+ownedPaths.clear()
+createdWorkspaces.length = 0
+reset()
+app = await boot()
+const ws1 = await app.workspaces()
+check('область заведена с заголовком роли', createdWorkspaces, [{ path: WORKSPACE, title: 'Тест — отдел' }])
+check('результат называет проект заведённым', ws1.projects.map((p) => p.id + ':' + p.result), ['vahta:заведена'])
+check('инструмент не создаёт сессий и заданий', [created.length, prompts.length], [0, 0])
+const ws2 = await app.workspaces()
+check('повторный вызов не дублирует область', [ws2.projects.map((p) => p.id + ':' + p.result), createdWorkspaces.length], [['vahta:уже заведена'], 1])
 
 console.log('\n=== служебное ===')
 const ids = allRequestIds.map((p) => p.requestId)
