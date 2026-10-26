@@ -64,6 +64,7 @@ const PRESETS = ['analyst', 'code-review', 'design', 'dev-backend', 'dev-fronten
 const HOST_FILES = [
   'profiles/desktop/cordis.patch.yml',
   'profiles/desktop/plugins/dev-department.mjs',
+  'profiles/desktop/plugins/usage-ledger.mjs',
   'profiles/desktop/plugins/role-sessions.mjs',
   'profiles/desktop/plugins/role-permissions.mjs',
   'profiles/desktop/plugins/tg-bridge.mjs',

@@ -26,6 +26,7 @@ profiles/                       хост-плоскость DSH: процесс�
     cordis.patch.yml            подключение плагинов к профилю desktop
     plugins/
       dev-department.mjs        диспетчер отдела: роли, окна смен, Telegram-сводка
+      usage-ledger.mjs          книга привязок «сессия → тикет» и счёт токенов
       role-sessions.mjs         инструменты open_role_session / list_agent_presets
       role-permissions.mjs      роли получают danger-full-access (без запросов)
       tg-bridge.mjs             мост в Telegram
@@ -52,6 +53,7 @@ config/
 
 tools/
   tests/                        регрессионные наборы на реальных модулях
+  issue-tokens.mjs              отчёт по токенам на тикет: роли, сессии, итоги
   session-errors.mjs            здоровье потока модели по стенограммам
   session-tail.mjs              хвост стенограммы сессии роли
   github-probe.mjs              права токена GitHub, в т.ч. правка комментария
@@ -219,6 +221,8 @@ node analyst-github.test.mjs            # инструменты аналити�
 node dev-edit-tools.test.mjs            # gh_pr_edit: правка тела PR у разработчиков
 node comment-edit-tools.test.mjs        # gh_comment_edit: галочки в чеклисте, отказы до запроса, id комментария
 node github-probe.test.mjs              # github-probe.mjs: PATCH комментария, право и побайтовый возврат тела
+node usage-ledger.test.mjs              # книга учёта токенов, правило повтора, счёт по стенограмме
+node dev-department-usage.test.mjs      # привязка при выдаче роли, карточка usage в статусе, сводка смены
 ```
 
 Живая проба GitHub (`tools/github-probe.mjs`) — единственный инструмент набора,
@@ -232,6 +236,7 @@ node github-probe.test.mjs              # github-probe.mjs: PATCH коммент
 ```powershell
 node tools/session-errors.mjs 24     # ходы, завершившиеся ошибкой, за сутки
 node tools/session-tail.mjs <часть-id-сессии> [сколько событий]
+node tools/issue-tokens.mjs workflow 14   # токены по тикету: роли, сессии, итоги
 ```
 
 ## Метки конвейера

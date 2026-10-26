@@ -529,14 +529,14 @@ checkText('пустой тикет — не пустой вывод', emptyText,
 
 // Вывод перенаправляем в файлы, а не в канал: так запуск работает и там, где
 // каналы между процессами запрещены.
-function runCli(args, budget = 20000) {
+function runCli(args, budget = 20000, cliPath = cli) {
   const outFile = path.join(home, 'cli-out.txt')
   const errFile = path.join(home, 'cli-err.txt')
   fs.rmSync(outFile, { force: true })
   fs.rmSync(errFile, { force: true })
   const out = fs.openSync(outFile, 'w')
   const err = fs.openSync(errFile, 'w')
-  const result = spawnSync(process.execPath, [cli, ...args], { stdio: ['ignore', out, err], timeout: budget })
+  const result = spawnSync(process.execPath, [cliPath, ...args], { stdio: ['ignore', out, err], timeout: budget })
   fs.closeSync(out)
   fs.closeSync(err)
   return {
@@ -545,6 +545,17 @@ function runCli(args, budget = 20000) {
     err: fs.existsSync(errFile) ? fs.readFileSync(errFile, 'utf8') : '',
   }
 }
+
+// «Модуля учёта нет» проверяется в каталоге, где его нет вовсе. В песочнице
+// каталога установки модуль отсутствует, но отчёт ищет запасной кандидат рядом с
+// собой, а половина `profiles/` уже положила туда настоящий модуль — поэтому
+// запускаем копию отчёта со своим хелпером кадров из каталога без `profiles/`.
+const bareDir = path.join(process.cwd(), '.issue-tokens-bare')
+fs.rmSync(bareDir, { recursive: true, force: true })
+fs.mkdirSync(bareDir, { recursive: true })
+fs.copyFileSync(cli, path.join(bareDir, 'issue-tokens.mjs'))
+fs.copyFileSync(path.join(process.cwd(), '..', 'zstd-frames.mjs'), path.join(bareDir, 'zstd-frames.mjs'))
+const bareCli = path.join(bareDir, 'issue-tokens.mjs')
 
 console.log('\n=== запуск node tools/issue-tokens.mjs ===')
 const live = runCli(['--dsh-home', home, 'workflow', '14'])
@@ -556,7 +567,7 @@ check('тикет без сессий — тоже успех', none.status, 0)
 checkText('и об этом сказано', none.out, 'тикетов не найдено')
 const usage = runCli(['--help'])
 checkText('справка печатается', usage.out, 'node tools/issue-tokens.mjs [проект] [номер]')
-const noModule = runCli(['--dsh-home', homeNoModule, 'workflow'])
+const noModule = runCli(['--dsh-home', homeNoModule, 'workflow'], 20000, bareCli)
 check('без модуля учёта — код 2', noModule.status, 2)
 checkText('и объяснение, чего не хватает', noModule.err, 'модуль учёта не найден')
 // Модуль с чужим именем ведра — честная ошибка на контракте, а не нули в отчёте.
@@ -574,4 +585,5 @@ fs.rmSync(homeNoModule, { recursive: true, force: true })
 fs.rmSync(homeBroken, { recursive: true, force: true })
 fs.rmSync(homeRule, { recursive: true, force: true })
 fs.rmSync(homeBadContract, { recursive: true, force: true })
+fs.rmSync(bareDir, { recursive: true, force: true })
 process.exit(failures === 0 ? 0 : 1)

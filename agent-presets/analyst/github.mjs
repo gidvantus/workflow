@@ -305,6 +305,79 @@ export default {
       return pickProject(readRegistry(), callerCwd(exec))
     }
 
+    // ── книга учёта токенов ────────────────────────────────────────────────
+    // Аналитик — такая же роль конвейера, и токены, потраченные на постановку,
+    // принадлежат тикету. Но его сессию открывает человек, номера тикета в её
+    // заголовке ещё нет: единственный момент, когда привязка известна, — создание
+    // issue. Поэтому запись пишется здесь.
+    //
+    // Модуль учёта (profiles/desktop/plugins/usage-ledger.mjs) импортировать
+    // нельзя: пресеты раскладываются в ~/.dsh/.agent-presets, а плагины — в
+    // ~/.dsh/profiles. Поэтому запись повторяет форму модуля здесь: читать книгу,
+    // дописать, записать целиком. Нечитаемую книгу НЕ перезаписываем — иначе
+    // теряется вся история привязок, а тикет всё равно создан.
+    const LEDGER_FILE_NAME = 'dev-department-usage.json'
+
+    function writeLedger(file, entries) {
+      fs.mkdirSync(path.dirname(file), { recursive: true })
+      const text = JSON.stringify(entries, null, 2) + '\n'
+      const tmp = file + '.analyst.tmp'
+      fs.writeFileSync(tmp, text)
+      try {
+        fs.renameSync(tmp, file)
+      } catch (error) {
+        // Windows иногда отказывает в переименовании поверх занятого файла.
+        fs.writeFileSync(file, text)
+        try { fs.rmSync(tmp, { force: true }) } catch (cleanup) { /* сам уберётся */ }
+      }
+    }
+
+    function recordIssueCreated(p, issueNumber, exec) {
+      const agent = exec && exec.agent
+      const sessionId = agent && typeof agent.id === 'string' ? agent.id.trim() : ''
+      if (sessionId === '') {
+        return { recorded: false, reason: 'номер сессии неизвестен: привязка не записана, счёт по аналитику не пойдёт' }
+      }
+      const file = path.join(dshHomeDir(), LEDGER_FILE_NAME)
+      let entries = []
+      let text
+      try {
+        text = fs.readFileSync(file, 'utf8')
+      } catch (error) {
+        if (!error || error.code !== 'ENOENT') {
+          return { recorded: false, reason: 'книга учёта не читается: ' + file + ' — привязка не записана, файл не перезаписан' }
+        }
+      }
+      if (text !== undefined) {
+        try {
+          const data = JSON.parse(stripBom(text))
+          entries = Array.isArray(data) ? data : (data && Array.isArray(data.entries) ? data.entries : [])
+        } catch (error) {
+          return { recorded: false, reason: 'книга учёта повреждена: ' + file + ' — привязка не записана, файл не перезаписан' }
+        }
+      }
+      const bare = sessionId.replace(/^session-/, '')
+      const duplicate = entries.some((entry) => entry && entry.project === p.id &&
+        Number(entry.issue) === Number(issueNumber) &&
+        String(entry.session || '').replace(/^session-/, '') === bare)
+      if (duplicate) return { recorded: false, reason: null, duplicate: true }
+      entries.push({
+        at: new Date().toISOString(),
+        project: p.id,
+        issue: issueNumber,
+        role: 'analyst',
+        session: sessionId,
+        attempt: null,
+        source: 'issue-created',
+      })
+      try {
+        writeLedger(file, entries)
+      } catch (error) {
+        return { recorded: false, reason: 'книга учёта не записалась: ' + file + ' — ' + (error && error.message ? error.message : String(error)) }
+      }
+      return { recorded: true, file }
+    }
+
     function define(name, description, parameters, run) {
       return {
         name,
@@ -322,7 +395,9 @@ export default {
           if (!p.repo && name !== 'project_info') {
             throw new Error('у проекта ' + p.id + ' не задан repo в ~/.dsh/projects.json — инструменты GitHub для него недоступны')
           }
-          return JSON.stringify(await run(args || {}, p), null, 2)
+          // exec передаётся третьим аргументом: из него gh_issue_create берёт
+          // номер сессии-создателя. Прочие run его просто не используют.
+          return JSON.stringify(await run(args || {}, p, exec), null, 2)
         },
       }
     }
@@ -523,9 +598,16 @@ export default {
         required: ['title', 'body'],
         additionalProperties: false,
       },
-      async (a, p) => {
+      async (a, p, exec) => {
         const created = await api('POST', '/repos/' + p.repo + '/issues', { title: a.title, body: a.body })
-        return issueView(created)
+        const view = issueView(created)
+        // Тикет уже создан: сбой учёта не отменяет постановку, но и молчать о нём
+        // нельзя — иначе аналитик будет думать, что его расход попал в счёт.
+        const usage = recordIssueCreated(p, view.number, exec)
+        view.usageLedger = usage.recorded
+          ? { recorded: true, source: 'issue-created' }
+          : { recorded: false, reason: usage.reason || 'повторная запись не добавлена' }
+        return view
       },
     )
 
