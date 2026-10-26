@@ -2496,9 +2496,65 @@ export default {
       },
     )
 
+    // Рабочие области агентов. Диспетчер заводит область проекта сам, но
+    // только в момент выдачи первой задачи (projectWorkspace): до неё области
+    // нет ни в списке рабочих областей GUI, ни у ручных сессий ролей, открытых
+    // по явному пути. Инструмент заводит их все сразу — по реестру проектов,
+    // включая проекты с выключенным отделом, — и заодно говорит, чему на диске
+    // ещё не место. Задачи не берёт, смену не открывает, сессий не создаёт:
+    // workspaceRegistry.create идемпотентен и возвращает уже заведённую область.
+    const workspacesTool = define(
+      'dev_department_workspaces',
+      'Завести рабочие области агентов в реестре рабочих областей DSH для всех проектов из ~/.dsh/projects.json (включая проекты с выключенным отделом) и сказать, у какого проекта нет каталога или git-клона. Повторный вызов ничего не дублирует: заведённая область возвращается как есть.',
+      { type: 'object', properties: {}, additionalProperties: false },
+      async () => {
+        config = loadConfig()
+        let registry
+        try {
+          registry = readRegistry()
+        } catch (error) {
+          return { error: error && error.message ? error.message : String(error), projects: [] }
+        }
+        const rows = []
+        for (const id of registry.ids) {
+          const project = projectRow(registry, id, config.values)
+          const row = {
+            id,
+            title: project.title,
+            workspace: project.workspace,
+            department: project.department.enabled,
+            result: null,
+            workspaceTitle: null,
+          }
+          if (!project.workspace) { row.result = 'пропущен: не задан workspace'; rows.push(row); continue }
+          if (!fs.existsSync(project.workspace)) { row.result = 'пропущен: каталога нет — сначала склонируйте репозиторий'; rows.push(row); continue }
+          if (!fs.existsSync(path.join(project.workspace, '.git'))) { row.result = 'пропущен: каталог не git-клон'; rows.push(row); continue }
+          try {
+            const existing = await workspaceRegistry.resolveByPath(project.workspace)
+            if (existing) {
+              row.result = 'уже заведена'
+              row.workspaceTitle = existing.title
+            } else {
+              const created = await workspaceRegistry.create(project.workspace, project.title + ' — отдел')
+              row.result = 'заведена'
+              row.workspaceTitle = created && created.title ? created.title : project.title + ' — отдел'
+            }
+          } catch (error) {
+            row.result = 'ошибка: ' + (error && error.message ? error.message : String(error))
+          }
+          rows.push(row)
+        }
+        return {
+          served: rows.filter((r) => r.result === 'уже заведена' || r.result === 'заведена').length,
+          projects: rows,
+        }
+      },
+    )
+
     ctx.effect(() => tools.register(statusTool), 'dev-department:status')
     ctx.effect(() => tools.register(tickTool), 'dev-department:tick')
     ctx.effect(() => tools.register(summaryTool), 'dev-department:summary')
+    ctx.effect(() => tools.register(workspacesTool), 'dev-department:workspaces')
 
     ctx.effect(() => ctx.interval(() => {
       step({}).catch((error) => { state.lastError = String(error && error.message ? error.message : error) })

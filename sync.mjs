@@ -74,6 +74,29 @@ const HOST_FILES = [
   'profiles/web/plugins/role-sessions.mjs',
 ]
 
+// Файлы, у которых путь в каталоге установки не совпадает с путём в репозитории.
+// Расписание смен и лимиты диспетчер читает из ~/.dsh/dev-department.json, а в
+// репозитории они лежат в config/ рядом с образцом реестра проектов.
+const HOME_FILES = [
+  { repo: 'config/dev-department.json', home: 'dev-department.json' },
+]
+
+// Файлы профиля раскладываются только в СУЩЕСТВУЮЩИЙ профиль. Каталог
+// profiles/<имя> — это профиль DSH с манифестом package.json; изготовить его
+// наполовину (только патч и плагины) значит получить профиль без манифеста,
+// который DSH покажет недоступным, а `dsh <имя>` — не запустит. Пока профиля
+// нет, раскладывать его файлы некуда: сам профиль создаёт DSH.
+function profileOf(rel) {
+  const m = /^profiles[\\/]([^\\/]+)[\\/]/.exec(rel)
+  return m ? m[1] : null
+}
+
+function hasProfile(rel) {
+  const name = profileOf(rel)
+  if (!name) return true
+  return fs.existsSync(path.join(dshHome, 'profiles', name))
+}
+
 // docs/ и tools/ живут только в репозитории: это документация процесса и
 // инструменты проверки, а не надстройка каталога установки. В ~/.dsh они не
 // кладутся и обратно не раскладываются. Раньше их источник задавался полем
@@ -166,12 +189,25 @@ function prune(roots) {
 function pairs() {
   const list = []
   for (const rel of HOST_FILES) {
-    list.push({ from: path.join(dshHome, rel), to: path.join(repo, rel) })
+    list.push({ from: path.join(dshHome, rel), to: path.join(repo, rel), rel })
+  }
+  for (const { repo: rel, home } of HOME_FILES) {
+    list.push({ from: path.join(dshHome, home), to: path.join(repo, rel), rel })
   }
   for (const preset of PRESETS) {
     const fromRoot = path.join(dshHome, '.agent-presets', preset)
-    for (const rel of walk(fromRoot)) {
-      list.push({ from: path.join(fromRoot, rel), to: path.join(repo, 'agent-presets', preset, rel) })
+    const toRoot = path.join(repo, 'agent-presets', preset)
+    // Перечисляем ОБЕ стороны: на новой машине пресетов в каталоге установки
+    // ещё нет, и файлы приезжают только со стороны репозитория. Раньше список
+    // строился по одной стороне, и `apply` на чистой машине не создавал ни
+    // одного агента отдела.
+    const rels = new Set([...walk(fromRoot), ...walk(toRoot)])
+    for (const rel of rels) {
+      list.push({
+        from: path.join(fromRoot, rel),
+        to: path.join(toRoot, rel),
+        rel: 'agent-presets/' + preset + '/' + rel.split(path.sep).join('/'),
+      })
     }
   }
   return list
@@ -240,15 +276,29 @@ const list = pairs()
 if (mode === 'status') {
   let same = 0
   let diff = 0
-  let missing = 0
+  let missingRepo = 0
+  let missingHome = 0
+  let skipped = 0
   for (const pair of list) {
-    const target = hash(pair.to)
-    if (target === null) {
-      missing += 1
-      console.log('  нет в репо   ' + short(pair.to))
-    } else if (target !== hash(pair.from)) {
+    const inRepo = hash(pair.to)
+    const inHome = hash(pair.from)
+    if (!hasProfile(pair.rel)) {
+      if (inRepo !== null) {
+        skipped += 1
+        console.log('  профиля нет  ' + pair.rel)
+      }
+      continue
+    }
+    if (inHome === null && inRepo === null) continue
+    if (inRepo === null) {
+      missingRepo += 1
+      console.log('  нет в репо   ' + pair.rel)
+    } else if (inHome === null) {
+      missingHome += 1
+      console.log('  не разложено ' + pair.rel)
+    } else if (inHome !== inRepo) {
       diff += 1
-      console.log('  различается  ' + short(pair.to))
+      console.log('  различается  ' + pair.rel)
     } else same += 1
   }
   console.log('')
@@ -261,12 +311,14 @@ if (mode === 'status') {
       console.log('  лишнее      ' + short(path.join(root.target, rel)))
     }
   }
-  console.log('совпадает: ' + same + ', различается: ' + diff + ', нет в репозитории: ' + missing + ', лишнего: ' + extra)
+  console.log('совпадает: ' + same + ', различается: ' + diff + ', нет в репозитории: ' + missingRepo +
+    ', не разложено: ' + missingHome + ', профиля нет: ' + skipped + ', лишнего: ' + extra)
 }
 
 if (mode === 'collect') {
   let copied = 0
   for (const pair of list) {
+    if (!hasProfile(pair.rel)) continue
     if (!fs.existsSync(pair.from)) {
       console.log('  пропуск (нет боевого файла): ' + pair.from)
       continue
@@ -287,7 +339,17 @@ if (mode === 'collect') {
 
 if (mode === 'apply') {
   let copied = 0
+  const noProfile = new Set()
   for (const pair of list) {
+    if (!hasProfile(pair.rel)) {
+      const name = profileOf(pair.rel)
+      if (name && !noProfile.has(name)) {
+        noProfile.add(name)
+        console.log('  пропуск (профиля ' + name + ' в каталоге установки нет — его создаёт сам DSH): ' +
+          name + '/')
+      }
+      continue
+    }
     if (!fs.existsSync(pair.to)) continue
     if (hash(pair.to) !== hash(pair.from)) {
       copyOne(pair.to, pair.from)
