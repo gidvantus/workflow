@@ -111,6 +111,9 @@ const S4 = '44444444-4444-4444-4444-444444444444'
 const S5 = '55555555-5555-5555-5555-555555555555'
 const S6 = '66666666-6666-6666-6666-666666666666'
 const S7 = '77777777-7777-7777-7777-777777777777'
+const S8 = '88888888-8888-8888-8888-888888888888'
+const S9 = '99999999-9999-9999-9999-999999999999'
+const S10 = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
 
 fs.rmSync(home, { recursive: true, force: true })
 fs.rmSync(homeNoModule, { recursive: true, force: true })
@@ -151,6 +154,9 @@ writeTranscript(home, '--D-Agents-Workflow--', S1, 'Бэкенд-разрабо�
 writeTranscript(home, '--D-Agents-Workflow--', S2, 'Код-ревьюер [workflow] #14 — Обновление кэша', [msg(1, 1, 2000, 20, 100, 0)])
 // S3: в книге нет — тикет виден только по заголовку.
 writeTranscript(home, '--D-Agents-Workflow--', S3, 'Тестировщик [workflow] #14 — Обновление кэша', [msg(1, 1, 400, 4, 0, 0)])
+// S8: второй тикет того же проекта — сверка при запуске с номером тикета не
+// должна принимать его сессии за потерянные.
+writeTranscript(home, '--D-Agents-Workflow--', S8, 'Девопс-доставка [workflow] #15 — Выкатка', [msg(1, 1, 60, 6, 0, 0)])
 // S4: номер в заголовке не назван — «не привязано», проект из рабочей области.
 writeTranscript(home, '--D-Agents-Workflow--', S4, 'Подсчёт токенов по задачам', [msg(1, 1, 100, 1, 10, 0)])
 // S5: каталог сессии не из реестра проектов — проект неизвестен.
@@ -159,6 +165,49 @@ writeTranscript(home, '--D-Elsewhere--', S5, null, [msg(1, 1, 50, 0, 0, 0)])
 writeTranscript(home, '--D-Agents-Vahta--', S6, 'Бэкенд-разработчик [vahta] #193 — Подписка', [msg(1, 1, 90, 9, 0, 0)])
 // S7: запись книги без стенограммы.
 fs.mkdirSync(homeNoModule, { recursive: true })
+
+// ── песочница с повреждёнными стенограммами ─────────────────────────────────
+// Сбои разбора (битый кадр, неразобранная строка, пустой разбор) не должны
+// проглатываться: иначе отчёт показывает заниженные числа как полные.
+const homeBroken = path.join(process.cwd(), '.issue-tokens-broken-home')
+fs.rmSync(homeBroken, { recursive: true, force: true })
+fs.mkdirSync(path.join(homeBroken, 'profiles', 'desktop', 'plugins'), { recursive: true })
+fs.writeFileSync(path.join(homeBroken, 'profiles', 'desktop', 'plugins', 'usage-ledger.mjs'), REFERENCE_MODULE)
+fs.writeFileSync(path.join(homeBroken, 'projects.json'), fs.readFileSync(path.join(home, 'projects.json')))
+
+function transcriptDir(base, workspace, id) {
+  const dir = path.join(base, 'sessions', workspace, 'session-' + id)
+  fs.mkdirSync(dir, { recursive: true })
+  return dir
+}
+
+// S9: первый кадр цел, но в нём неразобранная строка; второй кадр — мусор после
+// магического числа zstd, распаковать его нельзя.
+{
+  const dir = transcriptDir(homeBroken, '--D-Agents-Workflow--', S9)
+  const head = [
+    { type: 'session', version: 3, id: 'session-' + S9 },
+    { type: 'session/title', seq: 1, time: 1, data: { title: 'Бэкенд-разработчик [workflow] #14 — Обрыв', messageSeqs: [] } },
+    msg(1, 1, 100, 10),
+  ].map((row) => JSON.stringify(row) + '\n').join('')
+  const first = zlib.zstdCompressSync(Buffer.from(head + '{ это не json\n', 'utf8'))
+  const junkFrame = Buffer.concat([Buffer.from([0x28, 0xb5, 0x2f, 0xfd]), Buffer.from('junkjunkjunk')])
+  fs.writeFileSync(path.join(dir, 'session.v3.jsonl.zstd'), Buffer.concat([first, junkFrame]))
+}
+
+// S10: последний кадр оборван посреди записи — zstd отдаёт из него пустоту и не
+// падает, поэтому ноль событий тоже обязан стать замечанием.
+{
+  const dir = transcriptDir(homeBroken, '--D-Agents-Workflow--', S10)
+  const rows = [
+    { type: 'session', version: 3, id: 'session-' + S10 },
+    { type: 'session/title', seq: 1, time: 1, data: { title: 'Тестировщик [workflow] #15 — Оборванная запись', messageSeqs: [] } },
+    msg(1, 1, 700, 70),
+    msg(2, 1, 300, 30),
+  ].map((row) => JSON.stringify(row) + '\n').join('')
+  const whole = zlib.zstdCompressSync(Buffer.from(rows, 'utf8'))
+  fs.writeFileSync(path.join(dir, 'session.v3.jsonl.zstd'), whole.subarray(0, Math.floor(whole.length / 2)))
+}
 
 const mod = await import('file:///' + cli.replace(/\\/g, '/') + '?v=' + Date.now())
 
@@ -223,19 +272,49 @@ check('запись книги без стенограммы посчитана 
 
 console.log('\n=== сверка чисел ===')
 check('привязанные + не привязанные = все стенограммы проекта',
-  [report.counts.attached, report.counts.unbound, report.counts.diskInScope], [3, 1, 4])
+  [report.counts.attached, report.counts.unbound, report.counts.diskInScope], [4, 1, 5])
 check('ни одна сессия не выпала', report.problems.filter((p) => p.includes('выпала')), [])
+
+// Запуск с номером тикета сужает только таблицы: сессии других тикетов того же
+// проекта посчитаны и названы «вне отчёта», а не потеряны (возврат Б1).
+const scoped = await mod.buildReport({ dshHome: home, project: 'workflow', issue: 14 })
+const scopedText = mod.formatReport(scoped)
+console.log('\n=== запуск с номером тикета ===')
+check('сессии другого тикета проекта не объявлены потерей',
+  scoped.problems.filter((p) => p.includes('выпала')), [])
+check('сверка сходится по всему проекту',
+  [scoped.counts.attached, scoped.counts.unbound, scoped.counts.diskInScope], [4, 1, 5])
+checkText('в сводке галочка, а не расхождение', scopedText, '4+1=5 ✓')
+check('крестика расхождения нет', scopedText.includes('✗'), false)
+checkText('сужение названо строкой «вне отчёта»', scopedText, 'вне отчёта:')
+checkText('в таблице только запрошенный тикет', scopedText, '=== workflow #14 — Обновление кэша ===')
+check('таблица второго тикета не напечатана', scopedText.includes('=== workflow #15'), false)
 
 const full = await mod.buildReport({ dshHome: home })
 console.log('\n=== без фильтра по проекту ===')
-check('тикеты двух проектов', full.tickets.map((t) => t.project + '#' + t.issue), ['vahta#193', 'workflow#14'])
-check('все стенограммы посчитаны', [full.counts.attached + full.counts.unbound, full.counts.diskInScope], [6, 6])
+check('тикеты двух проектов', full.tickets.map((t) => t.project + '#' + t.issue), ['vahta#193', 'workflow#14', 'workflow#15'])
+check('все стенограммы посчитаны', [full.counts.attached + full.counts.unbound, full.counts.diskInScope], [7, 7])
 check('непривязанные — только сессии без тикета',
   full.unbound.rows.map((row) => row.id).sort(), [S4, S5].sort())
 check('проект неизвестной сессии не выдуман', (full.unbound.rows.find((row) => row.id === S5) || {}).project, null)
 
 const onlyIssue = await mod.buildReport({ dshHome: home, project: 'workflow' })
-check('фильтр без номера — один тикет проекта', onlyIssue.tickets.map((t) => t.project + '#' + t.issue), ['workflow#14'])
+check('фильтр без номера — два тикета проекта', onlyIssue.tickets.map((t) => t.project + '#' + t.issue), ['workflow#14', 'workflow#15'])
+
+// ── сбои разбора стенограммы ────────────────────────────────────────────────
+
+const broken = await mod.buildReport({ dshHome: homeBroken, project: 'workflow', issue: 14 })
+const brokenText = mod.formatReport(broken)
+const brokenRow = (id) => (broken.tickets.flatMap((ticket) => ticket.rows).find((row) => row.id === id)) || {}
+console.log('\n=== повреждённая стенограмма ===')
+check('битый кадр посчитан', brokenRow(S9).brokenFrames, 1)
+check('неразобранная строка посчитана', brokenRow(S9).droppedLines, 1)
+check('целые события битого кадра всё равно посчитаны', brokenRow(S9).usage.input, 100)
+check('замечание про кадр есть', broken.problems.filter((p) => p.includes('кадр стенограммы не распаковался')).length, 1)
+check('замечание про строку есть', broken.problems.filter((p) => p.includes('строка стенограммы не разобралась')).length, 1)
+check('оборванный кадр без событий назван', broken.problems.filter((p) => p.includes(S10) || p.includes('не дала ни одного события')).length, 1)
+checkText('замечания доходят до печати', brokenText, '=== замечания ===')
+checkText('в печати назван битый кадр', brokenText, 'кадр стенограммы не распаковался')
 
 // ── печать ──────────────────────────────────────────────────────────────────
 
@@ -255,7 +334,7 @@ checkText('кэш-запись отдельной величиной', text, 'к
 checkText('блок «не привязано»', text, '=== не привязано ===')
 checkText('блок «восстановлено по заголовку»', text, '=== восстановлено по заголовку ===')
 checkText('пометка привязки по заголовку', text, 'привязка по заголовку, не из книги')
-checkText('сверка сошлась', text, '3+1=4 ✓')
+checkText('сверка сошлась', text, '4+1=5 ✓')
 checkText('запись без стенограммы названа', text, 'только в книге, без стенограммы: 1')
 const emptyText = mod.formatReport(await mod.buildReport({ dshHome: home, project: 'workflow', issue: 99 }))
 checkText('пустой тикет — не пустой вывод', emptyText, 'тикетов не найдено')
@@ -294,8 +373,13 @@ checkText('справка печатается', usage.out, 'node tools/issue-to
 const noModule = runCli(['--dsh-home', homeNoModule, 'workflow'])
 check('без модуля учёта — код 2', noModule.status, 2)
 checkText('и объяснение, чего не хватает', noModule.err, 'модуль учёта не найден')
+// Живой запуск на повреждённых стенограммах: сбой виден человеку, а не только тесту.
+const liveBroken = runCli(['--dsh-home', homeBroken, 'workflow', '14'])
+check('с повреждёнными стенограммами отчёт всё равно печатается', liveBroken.status, 0)
+checkText('и говорит о недосчёте', liveBroken.out, 'строка стенограммы не разобралась')
 
 console.log(failures === 0 ? '\nВСЕ ПРОВЕРКИ ПРОШЛИ' : '\nПРОВАЛОВ: ' + failures)
 fs.rmSync(home, { recursive: true, force: true })
 fs.rmSync(homeNoModule, { recursive: true, force: true })
+fs.rmSync(homeBroken, { recursive: true, force: true })
 process.exit(failures === 0 ? 0 : 1)

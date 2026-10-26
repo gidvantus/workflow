@@ -27,9 +27,9 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import zlib from 'node:zlib'
 import process from 'node:process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { readTranscript } from './zstd-frames.mjs'
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = path.dirname(SCRIPT_DIR)
@@ -147,33 +147,8 @@ export function workspaceDirName(workspace) {
 
 // ── стенограммы ─────────────────────────────────────────────────────────────
 
-// Стенограмма пишется несколькими кадрами zstd — распаковываем каждый кадр.
-// Тот же приём, что в tools/session-tail.mjs.
-function unzstd(file) {
-  const bytes = fs.readFileSync(file)
-  const parts = []
-  let start = -1
-  for (let i = 0; i + 4 <= bytes.length; i += 1) {
-    const magic = bytes[i] === 0x28 && bytes[i + 1] === 0xb5 && bytes[i + 2] === 0x2f && bytes[i + 3] === 0xfd
-    if (!magic) continue
-    if (start >= 0) {
-      try { parts.push(zlib.zstdDecompressSync(bytes.subarray(start, i)).toString('utf8')) } catch (error) { /* неполный кадр */ }
-    }
-    start = i
-  }
-  if (start >= 0) {
-    try { parts.push(zlib.zstdDecompressSync(bytes.subarray(start)).toString('utf8')) } catch (error) { /* неполный кадр */ }
-  }
-  return parts.join('\n')
-}
-
-export function readRows(file) {
-  return unzstd(file)
-    .split('\n')
-    .filter((line) => line.trim() !== '')
-    .map((line) => { try { return JSON.parse(line) } catch (error) { return null } })
-    .filter(Boolean)
-}
+// Кадры zstd и разбор строк — общий хелпер `tools/zstd-frames.mjs` (тот же, что
+// в `tools/session-tail.mjs`): один разбор на два инструмента, один счётчик сбоев.
 
 // Заголовок сессии — последнее событие session/title: человек мог переименовать.
 function titleOf(rows) {
@@ -310,20 +285,42 @@ export function collectSessions(dshHome, usageOfEvents, workspaceProject) {
         turns: 0,
         usage: zeroUsage(),
         hasTranscript: fs.existsSync(file),
+        brokenFrames: 0,
+        droppedLines: 0,
       }
       if (!session.hasTranscript) {
         problems.push('нет стенограммы: ' + path.relative(root, dir))
         sessions.push(session)
         continue
       }
-      let rows
+      let parsed
       try {
-        rows = readRows(file)
+        parsed = readTranscript(file)
       } catch (error) {
         problems.push('стенограмма не читается: ' + path.relative(root, dir) + ' — ' + error.message)
         sessions.push(session)
         continue
       }
+      // Сбой разбора — это недосчёт, а не «полные цифры»: такой сессии верим
+      // меньше, и в замечаниях отчёта это сказано прямо.
+      const where = path.relative(root, dir)
+      session.brokenFrames = parsed.brokenFrames
+      session.droppedLines = parsed.droppedLines
+      if (parsed.brokenFrames > 0) {
+        problems.push('кадр стенограммы не распаковался: ' + where + ' — кадров: ' + parsed.brokenFrames +
+          '; события из них в сумму не попали, числа по сессии меньше настоящих')
+      }
+      if (parsed.droppedLines > 0) {
+        problems.push('строка стенограммы не разобралась: ' + where + ' — строк: ' + parsed.droppedLines +
+          '; стенограмма оборвана или повреждена, числа по сессии меньше настоящих')
+      }
+      const silentEmpty = parsed.brokenFrames === 0 && parsed.droppedLines === 0 &&
+        parsed.rows.length === 0 && fs.statSync(file).size > 0
+      if (silentEmpty) {
+        problems.push('стенограмма не дала ни одного события: ' + where +
+          ' — файл повреждён или ещё дописывается, числа по сессии неполные')
+      }
+      const rows = parsed.rows
       session.title = titleOf(rows)
       session.turns = turnsOf(rows)
       try {
@@ -500,11 +497,14 @@ export async function buildReport({ dshHome, project, issue } = {}) {
   const recovered = tickets.filter((row) => row.source === 'title').sort(byRow)
 
   // Сверка: каждая стенограмма проекта попала либо в таблицу тикета, либо в
-  // «не привязано» — суммы обязаны сойтись. Право на расхождение остаётся только
-  // у записи книги без стенограммы: её нет на диске, поэтому и в счёте диска нет.
+  // «не привязано» — суммы обязаны сойтись. Считаем по всем тикетам проекта, а не
+  // по напечатанным: номер тикета сужает только таблицы, иначе при запуске
+  // `workflow 14` сессии тикета #15 объявлялись бы потерей раскладки.
+  // Право на расхождение остаётся только у записи книги без стенограммы: её нет
+  // на диске, поэтому и в счёте диска нет.
   const diskInScope = collected.sessions.filter((session) => project === undefined || session.project === project)
-  const attached = tickets.filter((row) => row.missing !== true)
-  const accounted = new Set([...attached, ...unboundRows].map((row) => row.id))
+  const attachedInScope = allTickets.filter((row) => inScope(row) && row.missing !== true)
+  const accounted = new Set([...attachedInScope, ...unboundRows].map((row) => row.id))
   const lost = diskInScope.filter((session) => !accounted.has(session.id))
   for (const session of lost) problems.push('сессия выпала из отчёта: ' + session.id + ' — ошибка раскладки, а не данных')
 
@@ -520,7 +520,7 @@ export async function buildReport({ dshHome, project, issue } = {}) {
     counts: {
       disk: collected.sessions.length,
       diskInScope: diskInScope.length,
-      attached: attached.length,
+      attached: attachedInScope.length,
       unbound: unboundRows.length,
       unboundOutside,
       ledgerOnly: attributed.ledgerOnly.filter((row) => inScope(row)).length,
