@@ -54,7 +54,8 @@ tools/
   tests/                        регрессионные наборы на реальных модулях
   session-errors.mjs            здоровье потока модели по стенограммам
   session-tail.mjs              хвост стенограммы сессии роли
-  github-probe.mjs              точечная проверка прав токена GitHub
+  github-probe.mjs              права токена GitHub, в т.ч. правка комментария
+                                (повторяет тело своего же, самого давнего — проба пишет)
   yaml-block-check.mjs          грубая проверка блоков `|` в композициях пресетов
   legacy/                       снятые с работы инструменты (в т.ч. метки субролей)
 
@@ -179,7 +180,15 @@ node tester-images.test.mjs             # вложения-скриншоты в
 node code-review-tools.test.mjs         # gh_pr_comment, gh_pr с comments и метка for-code-review
 node analyst-github.test.mjs            # инструменты аналитика, включая gh_issue_edit
 node dev-edit-tools.test.mjs            # gh_pr_edit: правка тела PR у разработчиков
+node comment-edit-tools.test.mjs        # gh_comment_edit: галочки в чеклисте, отказы до запроса, id комментария
+node github-probe.test.mjs              # github-probe.mjs: PATCH комментария, право и побайтовый возврат тела
 ```
+
+Живая проба GitHub (`tools/github-probe.mjs`) — единственный инструмент набора,
+который **пишет**: третий сценарий повторяет тело своего же самого давнего
+комментария и потому двигает у него дату правки. Первые два сценария ничего не
+меняют. Нечитаемый реестр проектов — отказ с кодом 2, а не запасной список
+репозиториев.
 
 Диагностика по стенограммам (`~/.dsh/sessions`):
 

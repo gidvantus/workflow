@@ -82,10 +82,11 @@ function check(name, actual, expected) {
 }
 const byName = (n) => tools.find((t) => t.name === n)
 
-check('пресет зарегистрировал 9 инструментов', tools.map((t) => t.name).sort(), [
-  'gh_issue', 'gh_issue_comment', 'gh_issue_labels', 'gh_issues',
+check('пресет зарегистрировал 10 инструментов', tools.map((t) => t.name).sort(), [
+  'gh_comment_edit', 'gh_issue', 'gh_issue_comment', 'gh_issue_labels', 'gh_issues',
   'gh_pr', 'gh_pr_create', 'gh_pr_edit', 'gh_prs', 'project_info',
 ])
+check('gh_comment_edit есть', !!byName('gh_comment_edit'), true)
 check('gh_pr_edit есть', !!byName('gh_pr_edit'), true)
 check('gh_pr_edit обязателен только number', byName('gh_pr_edit').parameters.required, ['number'])
 check('gh_pr_edit не принимает лишних полей', byName('gh_pr_edit').parameters.additionalProperties, false)

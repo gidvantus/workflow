@@ -807,6 +807,13 @@ export default {
       return roleOf(text) === 'код-ревьюер'
     }
 
+    // Вердикт тестировщика живёт комментарием в ISSUE, а не в PR: при
+    // `test-failed` маршрут доработки строится по его чеклисту, иначе
+    // фронтенд-дефект уезжает половине из метки `area:*` (дефект из разбора #10).
+    function isTesterComment(text) {
+      return roleOf(text) === 'тестировщик'
+    }
+
     function isDispatcherComment(text) {
       return roleOf(text) === 'диспетчер' || /^\s*Отдел разработки:/.test(String(text || ''))
     }
@@ -905,18 +912,38 @@ export default {
     // закрывает тот же случай вторым способом — на случай нового расширения.
     const FINDING_PATH = /[A-Za-z0-9_@~$][A-Za-z0-9_@~$/.-]*\.(?:tsx|jsx|mjs|py|sql|js|ts|css|scss|vue|svelte|html)(?![A-Za-z0-9])(?::[0-9]+(?:-[0-9]+)?)?/g
 
+    // Пункт чеклиста ревьюера или тестировщика: `- [ ] Б1 · <path:line> — …`.
+    // Галочку в нём закрывает разработчик, поэтому отмеченный пункт — уже
+    // отработанное замечание и в маршрут доработки не попадает. Шаблон здесь и
+    // в `gh_comment_edit` — дословно один и тот же: диспетчер берёт из строки
+    // маркер, инструмент подменяет его. Расхождение ломает либо галочку, либо
+    // маршрут (пункт `-[ ] Б1` без пробела обязан быть пунктом у обоих).
+    const CHECKLIST_LINE = /^(\s*[-*+]\s*\[)([ xX])(\]\s*)(\S+)(.*)$/
+
+    // Что из комментария идёт в разбор путей. Комментарий с чеклистом отдаёт
+    // только непомеченные пункты — проза вокруг и закрытые пункты маршрута не
+    // касаются. Комментарий без чекбоксов (старый формат, тикет в полёте)
+    // разбирается как раньше, целиком: иначе старые тикеты потеряли бы путь.
+    function checklistPart(text) {
+      const lines = String(text).split('\n')
+      const items = lines.filter((line) => CHECKLIST_LINE.test(line))
+      if (items.length === 0) return String(text)
+      return items.filter((line) => (CHECKLIST_LINE.exec(line) || [])[2] === ' ').join('\n')
+    }
+
     // Круг ревью начинается вердиктом: всё, что выше последнего вердикта, — уже
     // закрытая история и к текущему возврату отношения не имеет. Заголовок роли
     // в первой строке — основной признак; регулярка ниже остаётся запасным
     // путём для тикетов, начатых до выкатки заголовка.
     const ROUND_START = /^(FIX:|SHIP\b|BLOCKED\b)/
 
-    // Строка вердикта в ШАПКЕ комментария. Отдельно от ROUND_START, потому что по
-    // новому правилу заголовок роли стоит у КАЖДОГО замечания (одно замечание —
-    // один комментарий): «последний комментарий ревьюера» — это последнее
-    // замечание, а не начало круга, и круг схлопывался до него, теряя пути
-    // остальных. Круг открывает последний комментарий с ролью и вердиктом —
-    // вердикт всегда содержит список путей по обеим половинам.
+    // Строка вердикта в ШАПКЕ комментария. Отдельно от ROUND_START, потому что
+    // по правилу «заголовок роли в первой строке» тело комментария начинается с
+    // `**Роль:** …`, и ROUND_START такую строку не поймает: начало круга осталось
+    // бы `-1`, обе половины пустыми, и каждый возврат из ревью поехал бы по
+    // метке `area:*` вместо путей. Поэтому вердикт ищется в шапке самого
+    // комментария — к этому же правилу пришёл возврат №3 по #9. Правило несущее,
+    // хотя комментариев в круге теперь один: именно он и открывает круг.
     const ROUND_VERDICT = /^(FIX:|SHIP\b|BLOCKED\b)/m
 
     // Вердикт ищется только в шапке (первые три строки: заголовок роли, вердикт,
@@ -946,10 +973,13 @@ export default {
       return /^вердикт(\s|:|$)/i.test(about.trim()) && VERDICT_TOKEN.test(about)
     }
 
-    // Комментарии PR. Их отдаёт тот же адрес, что и комментарии тикета: PR — это
-    // issue. По 100 на страницу, поэтому дочитываем, пока страница полная: иначе
+    // Комментарии тикета. Тем же адресом отдаются комментарии PR: PR — это issue.
+    // Диспетчеру нужны оба списка — вердикт ревьюера живёт в PR, вердикт
+    // тестировщика в issue, и после `test-failed` маршрут доработки обязан читать
+    // фронтенд-дефект из чеклиста тестировщика, а не угадывать половину по метке.
+    // По 100 на страницу, поэтому дочитываем, пока страница полная: иначе
     // последний круг замечаний можно обрезать.
-    async function prComments(project, number) {
+    async function issueComments(project, number) {
       const all = []
       for (let page = 1; page <= 10; page += 1) {
         const rows = await github('GET', '/repos/' + project.repo + '/issues/' + number + '/comments?per_page=100&page=' + page)
@@ -960,48 +990,18 @@ export default {
       return all
     }
 
-    // Замечания последнего круга, разложенные по половинам работы. Вердикт и
-    // замечания живут комментариями PR — инлайновых review-комментариев этот
-    // процесс не пишет. Ошибка сети или отсутствие PR — null, а не исключение:
-    // маршрут тогда честно решает метка area:*.
-    async function reviewFindings(project, issue) {
-      let pr = null
-      try {
-        pr = await findPr(project, issue.number)
-      } catch (error) {
-        state.lastError = 'PR #' + issue.number + ': ' + (error && error.message ? error.message : String(error))
-        return null
-      }
-      if (!pr) return null
-      let rows = null
-      try {
-        rows = await prComments(project, pr.number)
-      } catch (error) {
-        state.lastError = 'замечания PR #' + pr.number + ': ' + (error && error.message ? error.message : String(error))
-        return null
-      }
-      // Свои комментарии диспетчера — не замечания ревьюера: в них те же пути, и
-      // маршрут по ним замыкался бы сам на себя. Роль в заголовке — основной
-      // признак, префикс старого формата остаётся запасным.
-      const texts = rows
+    // Тексты чужих комментариев: свои комментарии диспетчера — не замечания
+    // ревьюера и не вердикт тестировщика. В них те же пути, и маршрут по ним
+    // замыкался бы сам на себя. Роль в заголовке — основной признак.
+    function commentTexts(rows) {
+      return (rows || [])
         .map((row) => String((row && row.body) || ''))
         .filter((text) => !isDispatcherComment(text))
-      // Начало круга — последний комментарий ревьюера со строкой вердикта: у
-      // каждого замечания теперь свой заголовок роли, и без этой приметы круг
-      // съезжал на последнее замечание. Комментарий старого формата (без
-      // заголовка) узнаётся запасным правилом: тикет, начатый до выкатки,
-      // обязан маршрутизироваться как раньше.
-      let from = -1
-      for (let i = 0; i < texts.length; i += 1) {
-        if (isReviewerVerdict(texts[i])) from = i
-      }
-      if (from < 0) {
-        for (let i = 0; i < texts.length; i += 1) {
-          if (ROUND_START.test(texts[i])) from = i
-        }
-      }
-      if (from < 0) return { backend: [], frontend: [] }
-      const round = texts.slice(from).join('\n')
+    }
+
+    // Пути замечаний из текста круга, разложенные по половинам работы. Источник
+    // идёт рядом с путями: задание исполнителю называет, чьи это замечания.
+    function collectFindings(project, round, source) {
       const areas = areasOf(project)
       const backend = []
       const frontend = []
@@ -1023,16 +1023,88 @@ export default {
         }
         match = FINDING_PATH.exec(round)
       }
-      return { backend, frontend }
+      return { backend, frontend, source }
+    }
+
+    // Замечания последнего круга ревью, разложенные по половинам работы. Вердикт
+    // и замечания живут комментариями PR — инлайновых review-комментариев этот
+    // процесс не пишет. Ошибка сети или отсутствие PR — null, а не исключение:
+    // маршрут тогда честно решает метка area:*.
+    async function reviewFindings(project, issue) {
+      let pr = null
+      try {
+        pr = await findPr(project, issue.number)
+      } catch (error) {
+        state.lastError = 'PR #' + issue.number + ': ' + (error && error.message ? error.message : String(error))
+        return null
+      }
+      if (!pr) return null
+      let rows = null
+      try {
+        rows = await issueComments(project, pr.number)
+      } catch (error) {
+        state.lastError = 'замечания PR #' + pr.number + ': ' + (error && error.message ? error.message : String(error))
+        return null
+      }
+      const texts = commentTexts(rows)
+      // Начало круга — последний комментарий ревьюера со строкой вердикта: у
+      // каждого замечания теперь свой заголовок роли, и без этой приметы круг
+      // съезжал на последнее замечание. Комментарий старого формата (без
+      // заголовка) узнаётся запасным правилом: тикет, начатый до выкатки,
+      // обязан маршрутизироваться как раньше.
+      let from = -1
+      for (let i = 0; i < texts.length; i += 1) {
+        if (isReviewerVerdict(texts[i])) from = i
+      }
+      if (from < 0) {
+        for (let i = 0; i < texts.length; i += 1) {
+          if (ROUND_START.test(texts[i])) from = i
+        }
+      }
+      if (from < 0) return { backend: [], frontend: [], source: 'ревьюера' }
+      const round = texts.slice(from).map(checklistPart).join('\n')
+      return collectFindings(project, round, 'ревьюера')
+    }
+
+    // Вердикт тестировщика пишется отдельной строкой, поэтому круг — ровно его
+    // комментарий: старые круги остаются в issue выше и в маршрут не попадают.
+    const TESTER_VERDICT = /^\s*VERDICT:\s*(?:GREEN|RED)\b/m
+
+    // Замечания тестировщика из чеклиста в ISSUE. Возврат null — вердикта
+    // тестировщика в issue нет вовсе (старый формат, тикет в полёте): тогда
+    // маршрут решает круг ревьюера, как раньше. Пустые половины — вердикт есть,
+    // путей в нём нет: половину честно решает метка area:*.
+    async function testFindings(project, issue) {
+      let rows = null
+      try {
+        rows = await issueComments(project, issue.number)
+      } catch (error) {
+        state.lastError = 'замечания тестировщика в #' + issue.number + ': ' + (error && error.message ? error.message : String(error))
+        return null
+      }
+      const texts = commentTexts(rows)
+      let last = -1
+      let verdict = -1
+      for (let i = 0; i < texts.length; i += 1) {
+        if (!isTesterComment(texts[i])) continue
+        last = i
+        if (TESTER_VERDICT.test(texts[i])) verdict = i
+      }
+      if (last < 0) return null
+      return collectFindings(project, checklistPart(texts[verdict >= 0 ? verdict : last]), 'тестировщика')
     }
 
     // Кому отдать доработку. Решают пути из замечаний: подсчёт файлов всего PR
     // врал — на vahta #193 фронтенд-замечания четыре раза подряд уходили
     // бэкендеру, потому что бэкенд-файлов в PR было больше, и три доработки
-    // закончились без единого коммита. Нет путей или PR не прочитан — решает
+    // закончились без единого коммита. Источник замечаний зависит от того, кто
+    // вернул тикет: после `test-failed` — чеклист тестировщика в issue (иначе
+    // фронтенд-дефект уезжал половине из метки `area:*`), после возврата из
+    // ревью — круг ревьюера в PR. Нет путей или ничего не прочитано — решает
     // метка маршрута, как раньше.
     async function roleForRework(project, issue, L) {
-      const findings = await reviewFindings(project, issue)
+      const findings = (has(issue, L.failed) ? await testFindings(project, issue) : null)
+        || await reviewFindings(project, issue)
       if (findings) projectState(project.id).findings[issue.number] = findings
       if (findings) {
         const backend = findings.backend.length > 0
@@ -1044,16 +1116,20 @@ export default {
       return implementer(issue, L)
     }
 
-    // Пути замечаний, относящиеся к половине исполнителя. Забрать их можно один
-    // раз: след маршрута в комментарии и строка в задании берут один и тот же
-    // список, а следующий возврат прочитает замечания заново.
+    // Пути замечаний, относящиеся к половине исполнителя, и источник, из которого
+    // они прочитаны (`тестировщика` или `ревьюера`). Забрать их можно один раз:
+    // след маршрута в комментарии и строка в задании берут один и тот же список, а
+    // следующий возврат прочитает замечания заново.
     function takeFindings(st, number, role) {
       const findings = st.findings[number]
       delete st.findings[number]
-      if (!findings) return []
-      if (role === 'dev-backend') return findings.backend
-      if (role === 'dev-frontend') return findings.frontend
-      return findings.backend.concat(findings.frontend)
+      if (!findings) return { paths: [], source: '' }
+      const paths = role === 'dev-backend'
+        ? findings.backend
+        : role === 'dev-frontend'
+          ? findings.frontend
+          : findings.backend.concat(findings.frontend)
+      return { paths: paths, source: findings.source || '' }
     }
 
     // След маршрута в тикете: половина и до трёх путей, по которым она выбрана.
@@ -1452,7 +1528,7 @@ export default {
     // фронтендер, — но путь, метки и отчёт у них общие: различаются границы
     // работы. Финальный шаг одинаков у всех — PR и for-code-review: передачу
     // полного стека фронтенду делает диспетчер по меткам, а не агент.
-    function implementerPrompt(project, issue, kind, repeat, role, findingPaths) {
+    function implementerPrompt(project, issue, kind, repeat, role, findingPaths, findingSource) {
       const L = project.labels
       const isBackend = role === 'dev-backend'
       const isFrontend = role === 'dev-frontend'
@@ -1508,11 +1584,18 @@ export default {
         lines.splice(4, 0, ...boundary)
       }
       if (kind === 'rework') lines.splice(2, 0, 'Начни с комментариев в issue и в PR этого тикета: там причина отказа, замечания и воспроизводящая команда.')
+      // Возврат закрывается галочками в чужом по роли чеклисте, а не ответными
+      // комментариями: инструмента `gh_pr_comment` у роли нет, а маршрут
+      // следующего круга читает именно непомеченные пункты.
+      if (kind === 'rework') lines.splice(2, 0, 'Свои пункты закрывай галочками в самом комментарии ревьюера или тестировщика: gh_comment_edit({ "comment_id": <id из gh_pr или gh_issue с comments: true>, "tick": ["Б1","Ф2"] }). Пункт, с которым не согласен, НЕ отмечай — аргумент идёт в тело PR через gh_pr_edit. В issue — одна короткая строка: «замечания ревью отработаны, PR #N, коммит <sha>» (после test-failed — «по замечаниям тестировщика отработано, коммит <sha>»).')
       if (kind === 'rework') lines.splice(2, 0, 'Это доработка №' + (projectState(project.id).rework[issue.number] || 0) + ' из ' + project.department.maxRework + ': её номер записан комментарием диспетчера в issue.')
       // Пути из замечаний — не украшение задания: по ним исполнитель сразу видит,
       // какие файлы его половины ревьюер назвал, и не ищет их в чужом дереве.
       if (kind === 'rework' && findingPaths && findingPaths.length > 0) {
-        lines.splice(2, 0, 'Замечания ревьюера — в твоей половине: ' + findingPaths.slice(0, 5).map(findingLabel).join(', '))
+        // Чьи это замечания, задание называет прямо и по факту прочитанного
+        // источника: после test-failed это обычно чеклист тестировщика в issue
+        // (а если его нет — круг ревьюера в PR), после ревью — комментарий в PR.
+        lines.splice(2, 0, 'Замечания ' + (findingSource || 'ревьюера') + ' — в твоей половине: ' + findingPaths.slice(0, 5).map(findingLabel).join(', '))
       }
       // Макет постановки — часть задания, а не украшение: раскладку, состояния и
       // тексты берут из него, чтобы фронтендер не придумывал их заново.
@@ -1566,6 +1649,11 @@ export default {
         'Вердикт — комментарий в issue, первой строкой — `**Роль:** тестировщик · <о чём>` (без заголовка инструмент откажет до сетевого запроса): прошло — метка ' + L.ok + '; не прошло — ' + L.failed + ' и наименьшая воспроизводящая команда. В обоих случаях сними ' + L.test + ': тикет не должен остаться в очереди тестировщика.',
         'Продуктовый код и PR не править, PR не мержить. Поставь себе цель, чтобы довести проверку до конца.',
       ]
+      // Дефекты — чеклистом в том же вердикте, теми же номерами, что у
+      // ревьюера: разработчик закрывает свои пункты галочками, а маршрут
+      // доработки читает непомеченные. Второй комментарий на дефект вернул бы
+      // россыпь, из-за которой затевался тикет.
+      lines.push('При `VERDICT: RED` дефекты идут чеклистом в ТОМ ЖЕ вердикте, двумя секциями `### Бэкенд` и `### Фронтенд`, пункты `- [ ] Б1 · <path:line> — что сломано · Случай: … · Правка: … · Воспроизведение: <команда>`: номер — префикс половины (Б/Ф) и сквозной номер по секции. Закрывать пункты будет разработчик галочками в твоём комментарии, поэтому по одному комментарию на дефект не пиши. `GREEN` — без пунктов и без секций.')
       if (repeat) {
         lines.splice(2, 0, 'Это тот же диалог, где ты уже проверял этот тикет: тикет возвращался в доработку. Сверься со своим прошлым вердиктом в комментариях и проверь в первую очередь то, что тогда сломалось.')
         lines.push('Если прошлый дефект исправлен и новых нет — метка ' + L.ok + '.')
@@ -1584,7 +1672,7 @@ export default {
       return 'Счётчик доработок по тикету: ' + rounds + ' из ' + limit + '. ' +
         (next > limit
           ? 'Если вернёшь — это будет возврат №' + next + ' при лимите ' + limit + ': диспетчер снимет тикет с конвейера и позовёт человека, поэтому в комментарии перечисли все правки сразу.'
-          : 'Если вернёшь — это будет возврат №' + next + ': укажи номер в комментарии в issue и что именно вернул.')
+          : 'Если вернёшь — это будет возврат №' + next + ': укажи номер в заголовке комментария-чеклиста и в короткой строке в issue.')
     }
 
     // Код-ревьюер: читает PR и код вокруг него, замечания пишет в PR, а решение
@@ -1596,8 +1684,8 @@ export default {
         '',
         projectHeader(project),
         'Действуй по скиллу code-review: найди PR через gh_prs({ "issue": ' + issue.number + ' }), прочитай изменённые файлы через gh_pr({ "number": <номер PR>, "files": true }), затем сам дифф и код вокруг него в рабочей копии отдела ' + project.workspace + '.',
-        'Замечания оставляй комментариями В PR: gh_pr_comment({ "number": <номер PR>, "body": "<вопрос>\\n\\npath:line — случай — минимальная правка" }), первой строкой — `**Роль:** код-ревьюер · <о чём>`. По одному комментарию на замечание, чтобы автор мог ответить точечно.',
-        'Обязательный финал: первой строкой комментария — `**Роль:** код-ревьюер · <о чём>` (без заголовка инструмент откажет до сетевого запроса), второй строкой — вердикт `SHIP` / `FIX: <n>` / `BLOCKED` (разбор примет его и в самом заголовке: `**Роль:** код-ревьюер · вердикт FIX: 2`); решение — меткой: принял → ' + L.test + ' и снять ' + L.review + '; нужны правки → ' + L.dev + ' и снять ' + L.review + ', плюс короткий комментарий в issue, что именно вернул.',
+        'Замечания — ОДНИМ комментарием В PR через gh_pr_comment({ "number": <номер PR>, "body": "<заголовок, вердикт, сводка, чеклист>" }), первой строкой — `**Роль:** код-ревьюер · <о чём>`, второй — строка вердикта. Внутри — чеклист двумя секциями `### Бэкенд` и `### Фронтенд`, пункты `- [ ] Б1 · <path:line> — что не так · Случай: … · Правка: … · Если не править: …`: номер — префикс половины (Б/Ф) и сквозной номер по секции. По одному комментарию на замечание НЕ пиши: по непомеченным пунктам этого одного комментария диспетчер строит маршрут доработки. Пункт, найденный позже, дописывай в ТОТ ЖЕ комментарий через gh_comment_edit({ "comment_id": <id из gh_pr({comments:true})>, "body": "<прочитанное тело с новым пунктом>" }).',
+        'Обязательный финал: первой строкой комментария — `**Роль:** код-ревьюер · <о чём>` (без заголовка инструмент откажет до сетевого запроса), второй строкой — вердикт `SHIP` / `FIX: <n>` / `BLOCKED` (разбор примет его и в самом заголовке: `**Роль:** код-ревьюер · вердикт FIX: 2`); решение — меткой: принял → ' + L.test + ' и снять ' + L.review + '; нужны правки → ' + L.dev + ' и снять ' + L.review + '. В issue — одна короткая строка, и ничего больше: «ревью пройдено, PR #<номер>» либо «вернул: <n> пунктов в комментарии PR #<номер>».',
         'Если в ветке PR есть макет постановки (mockups/<номер>/), сверь изменение с ним: раскладка, состояния и тексты из макета — часть задания, расхождение без объяснения в PR — замечание.',
         'Продуктовый код не править, PR не мержить, стенд не поднимать — прогон и приёмочные слои принадлежат тестировщику.',
         'В ' + project.base + ' и main не коммитить и не переключать ветки в рабочей копии: ревью читает, а не строит.' +
@@ -1884,7 +1972,8 @@ export default {
         // Пути из замечаний, по которым выбран маршрут: половина и до пяти путей
         // уходят в задание, до трёх — в комментарий тикета. След маршрута в тикете
         // один, и он же объясняет, почему доработка ушла этой роли.
-        const findingPaths = kind === 'rework' ? takeFindings(st, issue.number, role) : []
+        const findings = kind === 'rework' ? takeFindings(st, issue.number, role) : { paths: [], source: '' }
+        const findingPaths = findings.paths
         if (kind !== 'rework') delete st.findings[issue.number]
         // Счётчик доработок живёт в памяти диспетчера и в тикете нигде не
         // виден. Пишем номер круга в issue: по комментариям должно быть
@@ -1924,7 +2013,7 @@ export default {
             state.lastError = 'метка фазы фронтенда: ' + (error && error.message ? error.message : String(error))
           }
         }
-        const prompt = implementerPrompt(project, issue, kind, !!existingDialog(project, role, issue.number), role, findingPaths)
+        const prompt = implementerPrompt(project, issue, kind, !!existingDialog(project, role, issue.number), role, findingPaths, findings.source)
         const sessionId = await startSession(project, role, prompt, issue)
         st.session = { role: role, issue: issue.number, title: issue.title, sessionId, startedAt: new Date().toISOString() }
         st.run.sessions = (st.run.sessions || 0) + 1
