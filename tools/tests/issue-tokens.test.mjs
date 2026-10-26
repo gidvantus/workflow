@@ -1,12 +1,22 @@
 // Проверка отчёта по токенам на тикет: tools/issue-tokens.mjs.
 //
-// Модуль учёта (profiles/desktop/plugins/usage-ledger.mjs) — вторая половина
-// работы по issue #15, поэтому здесь лежит его эталон: каталог установки
-// поддельный, книга и стенограммы — в песочнице, боевой ~/.dsh не читается.
-// Эталон реализует ровно тот контракт, что описан в issue: readLedger() отдаёт
-// записи книги, usageOfEvents(events) суммирует data.usage и сбрасывает слот
-// (turn, step) на llm/retry-started. Отчёт проверяется на нём, а сам модуль —
-// отдельным набором другой половины.
+// Модуль учёта (profiles/desktop/plugins/usage-ledger.mjs) — половина `profiles/`
+// по issue #15. Пока его нет в репозитории, здесь лежит его эталон; как только
+// модуль появится, тест берёт настоящий файл вместо эталона: правило повтора
+// должно быть одно на тест, на отчёт и на карточку `dev_department_status`.
+//
+// **Какое правило принято.** Постановка противоречит себе: в теле сказано
+// «повторная попытка добавляется к итогу, а не удваивает его», а критерий 7
+// требует «ту же сумму, что лог без повтора». Принято правило проекции DSH
+// `tokenUsage` (stateVersion 2, `usage-projection.ts`): `llm/retry-started`
+// закрывает только слот замены потока, поэтому повторная попытка
+// **добавляется** к итогу (700 + 800 = 1500 на логе из S1), а `assistant/attempt`
+// тоже даёт вклад — usage из последнего чанка его потока. Двойного счёта при этом
+// нет по другой причине: повторная выборка той же попытки с теми же числами
+// заменяет прежнюю, а не прибавляется (проверяется на S11 и S12).
+//
+// Песочный каталог установки, книга и стенограммы — в песочнице, боевой ~/.dsh
+// не читается; сам модуль учёта проверяется отдельным набором своей половины.
 import fs from 'node:fs'
 import path from 'node:path'
 import zlib from 'node:zlib'
@@ -15,6 +25,8 @@ import { spawnSync } from 'node:child_process'
 const cli = path.join(process.cwd(), '..', 'issue-tokens.mjs')
 const home = path.join(process.cwd(), '.issue-tokens-home')
 const homeNoModule = path.join(process.cwd(), '.issue-tokens-nomodule-home')
+// Настоящий модуль половины `profiles/`: сильнее эталона, когда он есть.
+const REPO_LEDGER = path.join(process.cwd(), '..', '..', 'profiles', 'desktop', 'plugins', 'usage-ledger.mjs')
 
 let failures = 0
 function check(name, actual, expected) {
@@ -31,7 +43,9 @@ function checkText(name, haystack, needle) {
 // ── песочница ───────────────────────────────────────────────────────────────
 
 // Эталон контракта модуля учёта: тот же путь, куда его кладёт sync.mjs apply.
-const REFERENCE_MODULE = `// Эталон контракта usage-ledger для tools/tests: книга + правило повтора.
+// Повторяет apply() проекции tokenUsage из DSH один в один: totals + слот last,
+// замена выборки той же попытки, закрытие слота по llm/retry-started.
+const REFERENCE_MODULE = `// Эталон контракта usage-ledger для tools/tests: книга + проекция tokenUsage.
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -50,31 +64,71 @@ export function readLedger() {
 }
 
 const num = (value) => (typeof value === 'number' && Number.isFinite(value) ? value : 0)
-const keyOf = (data) => (data ? data.turn : '') + ':' + (data ? data.step : '')
+const zeroBuckets = () => ({ uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 })
+const bucketsFrom = (usage) => ({
+  uncachedInputTokens: num(usage.inputTokens),
+  outputTokens: num(usage.outputTokens),
+  cacheReadTokens: num(usage.cacheReadTokens),
+  cacheWriteTokens: num(usage.cacheWriteTokens),
+})
+const bucketsEqual = (left, right) =>
+  left.uncachedInputTokens === right.uncachedInputTokens &&
+  left.outputTokens === right.outputTokens &&
+  left.cacheReadTokens === right.cacheReadTokens &&
+  left.cacheWriteTokens === right.cacheWriteTokens
+const addReplacing = (totals, previous, next) => ({
+  uncachedInputTokens: totals.uncachedInputTokens - (previous ? previous.uncachedInputTokens : 0) + next.uncachedInputTokens,
+  outputTokens: totals.outputTokens - (previous ? previous.outputTokens : 0) + next.outputTokens,
+  cacheReadTokens: totals.cacheReadTokens - (previous ? previous.cacheReadTokens : 0) + next.cacheReadTokens,
+  cacheWriteTokens: totals.cacheWriteTokens - (previous ? previous.cacheWriteTokens : 0) + next.cacheWriteTokens,
+})
+
+// usage попытки: у assistant/message — data.usage, иначе последний чанк потока.
+function usageOf(event) {
+  const data = event.data || {}
+  if (event.type === 'assistant/message' && data.usage !== undefined) return data.usage
+  const stream = data.stream
+  if (!Array.isArray(stream)) return undefined
+  for (let i = stream.length - 1; i >= 0; i -= 1) {
+    const chunk = stream[i]
+    if (chunk && chunk.usage !== undefined) return chunk.usage
+  }
+  return undefined
+}
 
 export function usageOfEvents(events) {
-  const slots = new Map()
+  let totals = zeroBuckets()
+  let last = null
   for (const event of events) {
-    if (!event) continue
+    if (!event || typeof event !== 'object') continue
     if (event.type === 'llm/retry-started') {
-      slots.delete(keyOf(event.data))
+      const data = event.data || {}
+      if (last !== null && last.turn === data.turn && last.step === data.step) last = null
       continue
     }
-    if (event.type !== 'assistant/message') continue
-    const usage = event.data && event.data.usage
-    if (!usage) continue
-    slots.set(keyOf(event.data), {
-      uncachedInputTokens: num(usage.inputTokens),
-      outputTokens: num(usage.outputTokens),
-      cacheReadTokens: num(usage.cacheReadTokens),
-      cacheWriteTokens: num(usage.cacheWriteTokens),
-    })
+    if (event.type !== 'assistant/message' && event.type !== 'assistant/attempt') continue
+    const sample = usageOf(event)
+    if (sample === undefined) continue
+    const data = event.data || {}
+    const previous = last !== null && last.turn === data.turn && last.step === data.step ? last.buckets : undefined
+    const buckets = bucketsFrom(sample)
+    if (previous !== undefined && bucketsEqual(previous, buckets)) continue
+    totals = addReplacing(totals, previous, buckets)
+    last = { turn: data.turn, step: data.step, buckets }
   }
-  const total = { uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
-  for (const slot of slots.values()) for (const field of Object.keys(total)) total[field] += slot[field]
-  return total
+  return totals
 }
 `
+
+// Модуль учёта для песочницы: настоящий из репозитория, если он уже есть, иначе
+// эталон. Так тест не может разойтись с продуктом в правиле повтора.
+function installLedger(targetHome) {
+  const dir = path.join(targetHome, 'profiles', 'desktop', 'plugins')
+  fs.mkdirSync(dir, { recursive: true })
+  const source = fs.existsSync(REPO_LEDGER) ? fs.readFileSync(REPO_LEDGER, 'utf8') : REFERENCE_MODULE
+  fs.writeFileSync(path.join(dir, 'usage-ledger.mjs'), source)
+  return fs.existsSync(REPO_LEDGER) ? 'настоящий модуль репозитория' : 'эталон проекции в тесте'
+}
 
 const msg = (turn, step, input, output, cacheRead = 0, cacheWrite = 0) => ({
   type: 'assistant/message',
@@ -114,11 +168,13 @@ const S7 = '77777777-7777-7777-7777-777777777777'
 const S8 = '88888888-8888-8888-8888-888888888888'
 const S9 = '99999999-9999-9999-9999-999999999999'
 const S10 = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+const S11 = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
+const S12 = 'cccccccc-cccc-cccc-cccc-cccccccccccc'
+const S13 = 'dddddddd-dddd-dddd-dddd-dddddddddddd'
 
 fs.rmSync(home, { recursive: true, force: true })
 fs.rmSync(homeNoModule, { recursive: true, force: true })
-fs.mkdirSync(path.join(home, 'profiles', 'desktop', 'plugins'), { recursive: true })
-fs.writeFileSync(path.join(home, 'profiles', 'desktop', 'plugins', 'usage-ledger.mjs'), REFERENCE_MODULE)
+const ledgerSource = installLedger(home)
 fs.writeFileSync(path.join(home, 'projects.json'), JSON.stringify({
   version: 1,
   default: 'workflow',
@@ -171,8 +227,8 @@ fs.mkdirSync(homeNoModule, { recursive: true })
 // проглатываться: иначе отчёт показывает заниженные числа как полные.
 const homeBroken = path.join(process.cwd(), '.issue-tokens-broken-home')
 fs.rmSync(homeBroken, { recursive: true, force: true })
-fs.mkdirSync(path.join(homeBroken, 'profiles', 'desktop', 'plugins'), { recursive: true })
-fs.writeFileSync(path.join(homeBroken, 'profiles', 'desktop', 'plugins', 'usage-ledger.mjs'), REFERENCE_MODULE)
+fs.mkdirSync(homeBroken, { recursive: true })
+installLedger(homeBroken)
 fs.writeFileSync(path.join(homeBroken, 'projects.json'), fs.readFileSync(path.join(home, 'projects.json')))
 
 function transcriptDir(base, workspace, id) {
@@ -195,8 +251,8 @@ function transcriptDir(base, workspace, id) {
   fs.writeFileSync(path.join(dir, 'session.v3.jsonl.zstd'), Buffer.concat([first, junkFrame]))
 }
 
-// S10: последний кадр оборван посреди записи — zstd отдаёт из него пустоту и не
-// падает, поэтому ноль событий тоже обязан стать замечанием.
+// S10: единственный кадр оборван посреди записи — zstd отдаёт из него пустоту и
+// не падает, поэтому пустой разбор обязан стать замечанием.
 {
   const dir = transcriptDir(homeBroken, '--D-Agents-Workflow--', S10)
   const rows = [
@@ -208,6 +264,58 @@ function transcriptDir(base, workspace, id) {
   const whole = zlib.zstdCompressSync(Buffer.from(rows, 'utf8'))
   fs.writeFileSync(path.join(dir, 'session.v3.jsonl.zstd'), whole.subarray(0, Math.floor(whole.length / 2)))
 }
+
+// S11 (Б6): многокадровая стенограмма, целы только первые кадры, последний
+// оборван — ровно тот случай, когда DSH убит или диск кончился на дописи кадра.
+// Самые свежие события теряются, и отчёт обязан это сказать, а не показать
+// заниженные числа как полные.
+const S11_PARTIAL = 'недописанная запись, обрыв на середине'
+{
+  const dir = transcriptDir(homeBroken, '--D-Agents-Workflow--', S11)
+  const frame = (rows) => zlib.zstdCompressSync(Buffer.from(rows.map((row) => JSON.stringify(row) + '\n').join(''), 'utf8'))
+  const first = frame([
+    { type: 'session', version: 3, id: 'session-' + S11 },
+    { type: 'session/title', seq: 1, time: 1, data: { title: 'Бэкенд-разработчик [workflow] #14 — Длинная стенограмма', messageSeqs: [] } },
+    msg(1, 1, 1000, 10),
+  ])
+  const second = frame([msg(2, 1, 2000, 20)])
+  // Третий кадр с запасом по длине, чтобы обрыв дал непустой обрывок записи.
+  const third = frame([{
+    type: 'assistant/message',
+    seq: 3,
+    time: 3,
+    data: { turn: 3, step: 1, usage: { inputTokens: 4000, outputTokens: 40 }, pad: S11_PARTIAL.repeat(300) },
+  }])
+  fs.writeFileSync(path.join(dir, 'session.v3.jsonl.zstd'),
+    Buffer.concat([first, second, third.subarray(0, Math.floor(third.length * 0.6))]))
+}
+
+// ── песочница правила повтора ───────────────────────────────────────────────
+// Проекция tokenUsage не удваивает счёт так: повторная выборка той же попытки с
+// теми же числами заменяет прежнюю, а usage из потока assistant/attempt входит в
+// итог наравне с usage готового сообщения.
+const homeRule = path.join(process.cwd(), '.issue-tokens-rule-home')
+fs.rmSync(homeRule, { recursive: true, force: true })
+fs.mkdirSync(homeRule, { recursive: true })
+installLedger(homeRule)
+fs.writeFileSync(path.join(homeRule, 'projects.json'), fs.readFileSync(path.join(home, 'projects.json')))
+
+const attemptUsage = (turn, step, input, output) => ({
+  type: 'assistant/attempt',
+  data: { turn, step, stream: [{ type: 'usage', usage: { inputTokens: input, outputTokens: output } }] },
+})
+
+// S12: та же попытка пришла дважды с теми же числами — считается один раз.
+writeTranscript(homeRule, '--D-Agents-Workflow--', S12, 'Код-ревьюер [workflow] #16 — Двойной счёт', [
+  msg(1, 1, 1000, 100),
+  msg(1, 1, 1000, 100),
+  msg(2, 1, 500, 50),
+])
+// S13: usage шага пришёл потоком assistant/attempt и повторился готовым сообщением.
+writeTranscript(homeRule, '--D-Agents-Workflow--', S13, 'Тестировщик [workflow] #16 — Поток', [
+  attemptUsage(1, 1, 200, 20),
+  msg(1, 1, 200, 20),
+])
 
 const mod = await import('file:///' + cli.replace(/\\/g, '/') + '?v=' + Date.now())
 
@@ -250,8 +358,10 @@ const rowOf = (id) => tickets[0].rows.find((row) => row.id === id)
 const row = (id) => rowOf(id) || {}
 console.log('\n=== строки тикета ===')
 check('сессия из книги с префиксом session- найдена', [row(S1).role, row(S1).source], ['dev-backend', 'ledger'])
-check('повтор шага после llm/retry-started не удвоил счёт', row(S1).usage.input, 2600)
-check('выход по тому же правилу', row(S1).usage.output, 26)
+// Принятое правило — проекция tokenUsage: повтор шага после llm/retry-started
+// добавляет вторую попытку (700 + 800), а не заменяет первую.
+check('повтор шага добавляет вторую попытку, как проекция tokenUsage', row(S1).usage.input, 3300)
+check('выход по тому же правилу', row(S1).usage.output, 33)
 check('кэш-чтение и кэш-запись раздельно', [row(S1).usage.cacheRead, row(S1).usage.cacheWrite], [200, 50])
 check('ходов: три хода, а не шесть сообщений', row(S1).turns, 3)
 check('роль код-ревьюера из книги', row(S2).role, 'code-review')
@@ -259,7 +369,7 @@ check('сессия без записи в книге взята по загол
 check('у привязки по заголовку роль не выдумана', row(S3).role, null)
 check('запись книги без стенограммы видна в тикете', [row(S7).missing, row(S7).usage.input], [true, 0])
 check('чужая сессия в тикет не попала', row(S6), {})
-check('итоги тикета сложены из строк', tickets[0].totals, { input: 5000, output: 50, cacheRead: 300, cacheWrite: 50 })
+check('итоги тикета сложены из строк', tickets[0].totals, { input: 5700, output: 57, cacheRead: 300, cacheWrite: 50 })
 
 console.log('\n=== восстановлено по заголовку ===')
 check('в блоке ровно одна сессия', report.recovered.map((row) => row.id), [S3])
@@ -301,20 +411,38 @@ check('проект неизвестной сессии не выдуман', (f
 const onlyIssue = await mod.buildReport({ dshHome: home, project: 'workflow' })
 check('фильтр без номера — два тикета проекта', onlyIssue.tickets.map((t) => t.project + '#' + t.issue), ['workflow#14', 'workflow#15'])
 
+console.log('\n=== правило повтора (проекция tokenUsage) ===')
+console.log('источник правила: ' + ledgerSource)
+const rule = await mod.buildReport({ dshHome: homeRule, project: 'workflow', issue: 16 })
+const ruleRow = (id) => ((rule.tickets[0] && rule.tickets[0].rows.find((row) => row.id === id)) || {})
+check('та же попытка с теми же числами не посчитана дважды', ruleRow(S12).usage.input, 1500)
+check('выход по тому же правилу', ruleRow(S12).usage.output, 150)
+check('usage из потока assistant/attempt входит в итог', ruleRow(S13).usage.input, 200)
+check('и повтор сообщения его не удваивает', ruleRow(S13).usage.output, 20)
+check('итог тикета сложен из строк', rule.tickets[0] && rule.tickets[0].totals,
+  { input: 1700, output: 170, cacheRead: 0, cacheWrite: 0 })
+
 // ── сбои разбора стенограммы ────────────────────────────────────────────────
 
 const broken = await mod.buildReport({ dshHome: homeBroken, project: 'workflow', issue: 14 })
 const brokenText = mod.formatReport(broken)
 const brokenRow = (id) => (broken.tickets.flatMap((ticket) => ticket.rows).find((row) => row.id === id)) || {}
+const brokenProblem = (id, needle) => broken.problems.filter((p) => p.includes(id) && p.includes(needle)).length
 console.log('\n=== повреждённая стенограмма ===')
 check('битый кадр посчитан', brokenRow(S9).brokenFrames, 1)
 check('неразобранная строка посчитана', brokenRow(S9).droppedLines, 1)
 check('целые события битого кадра всё равно посчитаны', brokenRow(S9).usage.input, 100)
-check('замечание про кадр есть', broken.problems.filter((p) => p.includes('кадр стенограммы не распаковался')).length, 1)
-check('замечание про строку есть', broken.problems.filter((p) => p.includes('строка стенограммы не разобралась')).length, 1)
-check('оборванный кадр без событий назван', broken.problems.filter((p) => p.includes(S10) || p.includes('не дала ни одного события')).length, 1)
+check('замечание про кадр адресовано сессии', brokenProblem(S9, 'кадр стенограммы не разобран целиком'), 1)
+check('замечание про строку есть', brokenProblem(S9, 'строка стенограммы не разобралась'), 1)
+// Б6: оборванный последний кадр среди целых — zstd отдаёт из него пустоту или
+// обрывок записи и не бросает, поэтому детект держится на «текст не кончается \n».
+check('единственный оборванный кадр назван', brokenProblem(S10, 'кадр стенограммы не разобран целиком'), 1)
+check('последний кадр многокадровой стенограммы посчитан сбоем', brokenRow(S11).brokenFrames, 1)
+check('замечание по нему есть', brokenProblem(S11, 'кадр стенограммы не разобран целиком'), 1)
+check('числа по целым кадрам сохранены', brokenRow(S11).usage.input, 3000)
+check('выход по целым кадрам тоже сохранён', brokenRow(S11).usage.output, 30)
 checkText('замечания доходят до печати', brokenText, '=== замечания ===')
-checkText('в печати назван битый кадр', brokenText, 'кадр стенограммы не распаковался')
+checkText('в печати назван оборванный кадр', brokenText, 'кадр стенограммы не разобран целиком')
 
 // ── печать ──────────────────────────────────────────────────────────────────
 
@@ -329,7 +457,7 @@ checkText('колонка выход', text, 'выход')
 checkText('колонка кэш-чтение', text, 'кэш-чтение')
 checkText('заголовок тикета с названием', text, '=== workflow #14 — Обновление кэша ===')
 checkText('строка с числом сессий', text, '4 сессии')
-checkText('итоги тикета', text, 'итого: вход 5 000 · выход 50 · кэш-чтение 300')
+checkText('итоги тикета', text, 'итого: вход 5 700 · выход 57 · кэш-чтение 300')
 checkText('кэш-запись отдельной величиной', text, 'кэш-запись 50')
 checkText('блок «не привязано»', text, '=== не привязано ===')
 checkText('блок «восстановлено по заголовку»', text, '=== восстановлено по заголовку ===')
@@ -363,7 +491,7 @@ function runCli(args, budget = 20000) {
 console.log('\n=== запуск node tools/issue-tokens.mjs ===')
 const live = runCli(['--dsh-home', home, 'workflow', '14'])
 check('код возврата 0', live.status, 0)
-checkText('числа дошли до печати', live.out, 'итого: вход 5 000 · выход 50 · кэш-чтение 300')
+checkText('числа дошли до печати', live.out, 'итого: вход 5 700 · выход 57 · кэш-чтение 300')
 checkText('книга прочитана из --dsh-home', live.out, 'dev-department-usage.json')
 const none = runCli(['--dsh-home', home, 'workflow', '99'])
 check('тикет без сессий — тоже успех', none.status, 0)
@@ -376,10 +504,11 @@ checkText('и объяснение, чего не хватает', noModule.err,
 // Живой запуск на повреждённых стенограммах: сбой виден человеку, а не только тесту.
 const liveBroken = runCli(['--dsh-home', homeBroken, 'workflow', '14'])
 check('с повреждёнными стенограммами отчёт всё равно печатается', liveBroken.status, 0)
-checkText('и говорит о недосчёте', liveBroken.out, 'строка стенограммы не разобралась')
+checkText('и говорит о недосчёте', liveBroken.out, 'кадр стенограммы не разобран целиком')
 
 console.log(failures === 0 ? '\nВСЕ ПРОВЕРКИ ПРОШЛИ' : '\nПРОВАЛОВ: ' + failures)
 fs.rmSync(home, { recursive: true, force: true })
 fs.rmSync(homeNoModule, { recursive: true, force: true })
 fs.rmSync(homeBroken, { recursive: true, force: true })
+fs.rmSync(homeRule, { recursive: true, force: true })
 process.exit(failures === 0 ? 0 : 1)

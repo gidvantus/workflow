@@ -44,7 +44,7 @@ for (const dir of dirs) {
   }
   console.log('событий: ' + rows.length)
   // Молча потерянные события — это не «пусто», а недосчёт: говорим о них вслух.
-  if (brokenFrames > 0) console.log('! кадров не распаковано: ' + brokenFrames + ' — часть событий в хвост не попала')
+  if (brokenFrames > 0) console.log('! кадров разобрано не целиком: ' + brokenFrames + ' — часть событий в хвост не попала')
   if (droppedLines > 0) console.log('! строк не разобрано: ' + droppedLines + ' — стенограмма оборвана или повреждена')
   console.log(shown.slice(-limit).join('\n'))
 }

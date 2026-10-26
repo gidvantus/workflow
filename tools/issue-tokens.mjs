@@ -307,8 +307,8 @@ export function collectSessions(dshHome, usageOfEvents, workspaceProject) {
       session.brokenFrames = parsed.brokenFrames
       session.droppedLines = parsed.droppedLines
       if (parsed.brokenFrames > 0) {
-        problems.push('кадр стенограммы не распаковался: ' + where + ' — кадров: ' + parsed.brokenFrames +
-          '; события из них в сумму не попали, числа по сессии меньше настоящих')
+        problems.push('кадр стенограммы не разобран целиком: ' + where + ' — кадров: ' + parsed.brokenFrames +
+          '; события из них попали в сумму не полностью, числа по сессии меньше настоящих')
       }
       if (parsed.droppedLines > 0) {
         problems.push('строка стенограммы не разобралась: ' + where + ' — строк: ' + parsed.droppedLines +
