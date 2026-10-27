@@ -1515,8 +1515,9 @@ export default {
     // много заданий, а повторный id может быть отброшен как дубль. Одного
     // счётчика мало: после перезапуска приложения он начинается заново, и
     // продолжение диалога получило бы id, который уже выдавался до перезапуска.
-    async function promptSession(sessionId, prompt) {
+    async function promptSession(project, sessionId, prompt) {
       const token = Date.now().toString(36) + '-' + Math.random().toString(16).slice(2, 8)
+      notePromptedSession(project, sessionId)
       await sessionController.prompt({
         requestId: 'dev-department-' + sessionId + '-' + token,
         sessionId,
@@ -1555,6 +1556,18 @@ export default {
       })
       if (result && result.reason) state.lastError = 'книга учёта: ' + result.reason
       return result
+    }
+
+    // Смена помнит диалоги, которым она дала ход. Привязка в книге пишется один раз
+    // на диалог (дедуп по ключу «проект|тикет|сессия»), поэтому у доработки в тот же
+    // диалог `at` остаётся от прошлой смены — и по времени её расход в сводку не
+    // попал бы, хотя в эту смену он был. Набор живёт в состоянии смены и в книгу не
+    // пишется: это «что смена пнула», а не «когда родилась привязка».
+    function notePromptedSession(project, sessionId) {
+      const run = projectState(project.id).run
+      if (!run) return
+      if (!(run.prompted instanceof Set)) run.prompted = new Set()
+      run.prompted.add(String(sessionId))
     }
 
     function sessionWord(count) {
@@ -1618,9 +1631,12 @@ export default {
     // записи в книге — норма для тикетов, начатых до выкатки учёта, и об этом
     // говорит `note`, а не пустая карточка без объяснения.
     //
-    // `options.since` (ISO-время) сужает книгу до записей не раньше этого момента —
-    // так сводка смены считает только свои выдачи ролей, а не весь расход тикета за
-    // всё время. Карточка статуса зовёт без `since`: она про тикет, а не про смену.
+    // `options.since` (ISO-время) оставляет записи не раньше этого момента — так
+    // сводка смены считает свои выдачи ролей, а не весь расход тикета за всё время.
+    // `options.sessions` — диалоги, которым смена дала ход: их записи входят в карточку
+    // смены независимо от `at`, потому что привязка у диалога одна и у доработки в тот
+    // же диалог она осталась от прошлой смены. Карточка статуса зовёт без обоих
+    // аргументов: она про тикет, а не про смену.
     async function usageCard(project, issue, options) {
       const snapshotAt = new Date().toISOString()
       const since = options && options.since ? Date.parse(options.since) : NaN
@@ -1630,6 +1646,7 @@ export default {
           issue: issue.number,
           title: issue.title,
           sessions: [],
+          carried: 0,
           totals: { in: 0, out: 0, cacheRead: 0, cacheWrite: 0 },
           snapshotAt,
           note: 'счёт токенов недоступен: рядом с диспетчером нет модуля учёта' +
@@ -1645,14 +1662,23 @@ export default {
       } catch (error) {
         note = 'книга учёта не читается: ' + (error && error.message ? error.message : String(error))
       }
+      // Диалоги этой смены: id книги и id сессий пишутся по-разному (с префиксом
+      // session- и без), поэтому сравниваем нормализованные.
+      const prompted = new Set(((options && options.sessions) || []).map((id) => module.normalizeSessionId(id)))
+      const carriedEntry = (entry) => prompted.has(module.normalizeSessionId(entry.session))
       // Запись с неразбираемой датой не выбрасываем: потерять сессию хуже, чем
       // показать её в смене, к которой она могла не относиться.
-      entries = Number.isFinite(since)
-        ? bound.filter((entry) => {
-          const at = Date.parse(entry.at)
-          return !Number.isFinite(at) || at >= since
-        })
-        : bound
+      const freshEntry = (entry) => {
+        if (!Number.isFinite(since)) return true
+        const at = Date.parse(entry.at)
+        return !Number.isFinite(at) || at >= since
+      }
+      // Свежая привязка или диалог, которому ход дала эта смена. Второе нужно
+      // отдельно: у доработки в тот же диалог `at` остался от прошлой смены.
+      entries = bound.filter((entry) => freshEntry(entry) || carriedEntry(entry))
+      // Сколько строк вошло только как продолжение прежнего диалога — их и помечаем
+      // в сводке, чтобы дневная цифра не выдавала себя за полностью свежую.
+      const carried = entries.filter((entry) => carriedEntry(entry) && !freshEntry(entry)).length
       const summary = await module.summarizeIssue(entries, (entry) => usageOfSession(module, entry))
       const sessions = summary.sessions.map((row) => ({
         role: row.role,
@@ -1666,7 +1692,7 @@ export default {
       if (note === null) {
         if (entries.length === 0) {
           note = bound.length > 0
-            ? 'расход этой смены не выделен: сессии по тикету заведены раньше — в книге нет записи не раньше ' + String(options.since)
+            ? 'расход этой смены не выделен: сессии по тикету заведены раньше, и ход им давала не эта смена'
             : 'тикет не привязан: в книге учёта нет записи — счёт пойдёт со следующей выдачи роли'
         } else if (sessions.length > 0 && sessions.every((row) => row.turns === 0)) {
           note = 'сессии открыты, ходов ещё нет: ' +
@@ -1677,6 +1703,7 @@ export default {
         issue: issue.number,
         title: issue.title,
         sessions,
+        carried,
         totals: summary.totals,
         snapshotAt,
         note,
@@ -1692,7 +1719,7 @@ export default {
         // путях и до первого хода: возврат в доработку тоже расходует токены.
         try {
           await recordUsageBinding(project, presetId, issue, known)
-          await promptSession(known, prompt)
+          await promptSession(project, known, prompt)
           return known
         } catch (error) {
           // Диалог не ожил — смену не срываем, заводим новый.
@@ -1728,7 +1755,7 @@ export default {
       state.dialogs[key] = sessionId
       writeDialogs(state.dialogs)
       await recordUsageBinding(project, presetId, issue, sessionId)
-      await promptSession(sessionId, prompt)
+      await promptSession(project, sessionId, prompt)
       return sessionId
     }
 
@@ -2585,7 +2612,13 @@ export default {
           // Смена отчитывается за СВОИ выдачи ролей: в книге лежат и записи прошлых
           // смен, и прежние доработки того же тикета, и складывать их в дневную
           // цифру нельзя — иначе «потрачено» пухнет с каждым возвратом в доработку.
-          const card = await usageCard(project, { number, title }, { since: run ? run.startedAt : null })
+          // Но диалог, которому смена дала ход, — её расход, даже если привязка у него
+          // родилась в прошлой смене: доработка идёт в тот же диалог, и дедуп книги
+          // второй записи не делает. Такие сессии карточка берёт по набору смены.
+          const card = await usageCard(project, { number, title }, {
+            since: run ? run.startedAt : null,
+            sessions: run && run.prompted ? Array.from(run.prompted) : [],
+          })
           if (card.sessions.length === 0) {
             // Ноль вместо расхода не печатаем: у тикета, заведённого до книги, сессии
             // есть только в заголовках отчёта, и «смена потратила 0» — неправда.
@@ -2602,6 +2635,7 @@ export default {
           const price = usageModule.formatCost(usageModule.costOf(card.totals, rates))
           usageLines.push('потрачено #' + number + ': ' + usageModule.usageLine(card.totals) +
             ' (' + card.sessions.length + ' ' + sessionWord(card.sessions.length) + ')' +
+            (card.carried > 0 ? ' · в т.ч. продолженный диалог: ' + card.carried : '') +
             (price === null ? '' : ' · цена ' + price))
           for (const problem of card.problems || []) usageLines.push('  ! ' + problem)
         }

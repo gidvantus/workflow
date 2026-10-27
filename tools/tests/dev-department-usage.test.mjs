@@ -593,6 +593,56 @@ checkText('Ф3: строка смены говорит словами вмест
 check('Ф3: нулей в строке смены нет', noDataText.includes('вход 0'), false)
 check('Ф3: итог из нулей не печатается', noDataText.includes('Итого за смену'), false)
 
+// ── сценарий 9: доработка в том же диалоге на следующей смене ───────────────
+// Воспроизведение возврата ревьюера: привязка у диалога одна (дедуп книги), поэтому
+// у доработки `at` остаётся от прошлой смены, и отсечка по времени выбрасывала её из
+// дневной сводки — «потрачено» пропадало ровно на самом дорогом участке конвейера.
+
+console.log('\n=== сценарий 9: расход продолженного диалога попадает в свою смену ===')
+writeConfig()
+issues.clear()
+issues.set(30, {
+  number: 30, title: 'Доработка через сутки', state: 'open', body: 'постановка',
+  labels: ['ready-for-dev', 'area:frontend'], assignees: [],
+})
+writeBook([])
+surfaces.clear()
+app = await boot()
+step = await app.tick()
+check('смена 1 выдала роль', step.action + ':' + step.role, 'dispatched:dev-frontend')
+const carriedSession = step.sessionId
+surfaces.set(carriedSession, [msg(1, 1, 1000, 100)])
+endTurn(carriedSession)
+setLabels(30, ['for-code-review', 'area:frontend'])
+await app.tick()
+step = await app.tick()
+check('смена 1 довела до ревью', step.action + ':' + step.role, 'dispatched:code-review')
+surfaces.set(step.sessionId, [])
+endTurn(step.sessionId)
+const bookAfterShift1 = readBook().length
+check('в книге две привязки смены 1', bookAfterShift1, 2)
+await app.summary()
+
+// Сутки спустя: доработка идёт в ТОТ ЖЕ диалог разработчика. Дедуп книги второй
+// записи не делает, `at` остаётся от смены 1 — а расход в эту смену есть.
+advance(24 * 60 * 60 * 1000)
+setLabels(30, ['ready-for-dev', 'area:frontend'])
+surfaces.set(carriedSession, [msg(1, 1, 1000, 100), msg(2, 1, 1500, 150)])
+// Первый тик новой смены закрывает шаг, закончившийся до её начала; выдачу даёт
+// следующий — ровно как в сценарии 1.
+step = await app.tick()
+if (step.action === 'finished-session') step = await app.tick()
+check('смена 2 продолжила тот же диалог', step.action + ':' + step.role + ':' + step.sessionId,
+  'dispatched:dev-frontend:' + carriedSession)
+check('второй записи в книге нет', readBook().length, bookAfterShift1)
+telegram.length = 0
+await app.summary()
+const carriedText = telegram.join('\n')
+checkText('Ф1: расход продолженного диалога посчитан в своей смене', carriedText, 'потрачено #30: вход 2 500')
+checkText('Ф1: продолженный диалог назван пометкой', carriedText, 'в т.ч. продолженный диалог: 1')
+checkText('Ф1: итог смены напечатан', carriedText, 'Итого за смену: вход 2 500')
+check('Ф1: «не выделен» больше не печатается', carriedText.includes('не выделен'), false)
+
 console.log(failures === 0 ? '\nВСЕ ПРОВЕРКИ ПРОШЛИ' : '\nПРОВАЛОВ: ' + failures)
 fs.rmSync(home, { recursive: true, force: true })
 process.exit(failures === 0 ? 0 : 1)
