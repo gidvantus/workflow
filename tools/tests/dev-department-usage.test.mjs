@@ -207,17 +207,24 @@ const services = {
 }
 
 let generation = 0
-async function boot() {
+async function boot(options) {
   generation += 1
+  // `options.hide` — сервисов нет вовсе (сборка без sessionQuery): ctx.get отдаёт
+  // undefined, как в хосте без опубликованного сервиса.
+  const hidden = new Set((options && options.hide) || [])
   const mod = await import('file:///' + pluginFile.replace(/\\/g, '/') + '?v=' + generation)
   const localTools = []
   const localCtx = {
-    get: (n) => (n === 'tools' ? { register(t) { localTools.push(t) } } : services[n]),
+    get: (n) => {
+      if (hidden.has(n)) return undefined
+      return n === 'tools' ? { register(t) { localTools.push(t) } } : services[n]
+    },
     effect(fn) { fn(); return () => {} },
     interval() { return () => {} },
   }
   mod.default.apply(localCtx)
   return {
+    mod,
     tick: async () => {
       const parsed = JSON.parse(await localTools.find((t) => t.name === 'dev_department_tick').execute({}))
       const list = parsed.result && parsed.result.projects
@@ -364,6 +371,21 @@ check('итоги нулевые, а не отсутствующие', row.usage
 
 console.log('\n=== сценарий 3: сводка смены без тарифа и с тарифом ===')
 telegram.length = 0
+// Смена отчитывается за СВОИ выдачи ролей: возвращаем в книгу записи этой смены
+// (в сценарии 2 книгу по тикету чистили, проверяя «тикет не привязан») и одну
+// запись прошлой смены — в строку смены она попасть не должна, а в карточку
+// статуса должна: карточка про тикет, а не про смену.
+const OLD_SESSION = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
+surfaces.clear()
+surfaces.set(devSession, [msg(1, 1, 1000, 100), msg(2, 1, 500, 50), msg(3, 1, 400, 40)])
+surfaces.set(reviewSession, [msg(1, 1, 2000, 200)])
+surfaces.set(OLD_SESSION, [msg(1, 1, 70000, 700)])
+const shiftTime = new Date().toISOString()
+writeBook([
+  { at: shiftTime, project: 'workflow', issue: 15, role: 'dev-frontend', session: devSession, attempt: 1, source: 'dispatcher' },
+  { at: shiftTime, project: 'workflow', issue: 15, role: 'code-review', session: reviewSession, attempt: 1, source: 'dispatcher' },
+  { at: '2026-10-19T09:00:00.000Z', project: 'workflow', issue: 15, role: 'analyst', session: OLD_SESSION, attempt: null, source: 'issue-created' },
+])
 const closed = await app.summary()
 check('смена закрыта', [closed.sent, closed.closed], [true, ['workflow']])
 const summaryText = telegram.join('\n')
@@ -372,6 +394,14 @@ checkText('и общий итог смены', summaryText, 'Итого за с�
 check('без тарифа строки с ценой нет', summaryText.includes('цена '), false)
 checkText('строка расхода называет число сессий', summaryText, 'сесси')
 checkText('сводка по-прежнему печатает роли смены', summaryText, 'Сессий запущено:')
+// Ф2: в дневную цифру входят только выдачи этой смены (1900 + 2000), а запись
+// аналитика от 19.10 (70 000) — расход прошлой смены, её здесь нет.
+checkText('Ф2: в строку смены попали только её выдачи', summaryText, 'Итого за смену: вход 3 900 · выход 390')
+check('Ф2: расход прошлой смены в дневную цифру не попал', summaryText.includes('70 000'), false)
+// …а карточка статуса по тому же тикету видит весь тикет целиком.
+status = await app.status()
+check('Ф2: карточка статуса считает тикет целиком, а не смену', status.projects[0].usage.totals,
+  { in: 73900, out: 1090, cacheRead: 0, cacheWrite: 0 })
 
 // Тариф задан человеком — цена появляется; числа тарифа в коде не живут.
 writeConfig({ usageRates: { inputUsdPerM: 3, outputUsdPerM: 15, cacheReadUsdPerM: 0.3, cacheWriteUsdPerM: 3 } })
@@ -472,6 +502,96 @@ check('битая книга не перезаписана', fs.readFileSync(boo
 check('тикет всё равно создан', typeof brokenCreate.number, 'number')
 check('и инструмент сказал, что привязка не записана', [brokenCreate.usageLedger.recorded, /повреждена/.test(brokenCreate.usageLedger.reason)], [false, true])
 checkText('в причине назван файл', brokenCreate.usageLedger.reason, 'dev-department-usage.json')
+
+// ── сценарий 6: сжатая контекстом сессия (Ф1) ───────────────────────────────
+
+console.log('\n=== сценарий 6: сжатая поверхность читается по стенограмме ===')
+writeConfig()
+issues.clear()
+issues.set(20, {
+  number: 20, title: 'Сжатие контекста', state: 'open', body: 'постановка',
+  labels: ['ready-for-dev', 'area:frontend'], assignees: [],
+})
+writeBook([])
+surfaces.clear()
+app = await boot()
+step = await app.tick()
+check('тикет по сжатию выдан', step.action + ':' + step.role, 'dispatched:dev-frontend')
+const compressedSession = step.sessionId
+// Поверхность — то, что видит модель сейчас: прежние ходы вытеснены заменой
+// (`surfaceOp.op === 'replace'`), в ответе readSurface их уже нет. Сами события
+// `compaction/*` в поверхность не попадают никогда — она состоит из четырёх
+// видов сообщений, поэтому признак сжатия — метка замены.
+surfaces.set(compressedSession, [
+  {
+    type: 'user/message',
+    data: { message: { role: 'user', content: [] } },
+    surfaceOp: { op: 'replace', startSeq: 1, endSeq: 5 },
+  },
+  msg(6, 1, 250, 25),
+])
+writeTranscriptFor(compressedSession, [msg(1, 1, 1000, 100), msg(2, 1, 2000, 200), msg(6, 1, 250, 25)])
+status = await app.status()
+row = status.projects[0]
+const compactedRow = usageRow(row.usage, 'dev-frontend')
+check('Ф1: сжатая сессия посчитана по стенограмме, а не по короткой поверхности',
+  [compactedRow.turns, compactedRow.in, compactedRow.out], [3, 3250, 325])
+check('Ф1: целая стенограмма — замечаний нет', row.usage.problems, [])
+
+// Стенограммы ещё нет (свежая сессия не успела лечь на диск): числа поверхности
+// остаются, но карточка говорит, что они меньше настоящих, — молчаливых нулей нет.
+const compressedDir = path.join(home, 'sessions', '--D-Agents-Workflow--',
+  'session-' + compressedSession.replace(/^session-/, ''))
+fs.rmSync(compressedDir, { recursive: true, force: true })
+status = await app.status()
+row = status.projects[0]
+check('Ф1: без стенограммы числа поверхности не выброшены', usageRow(row.usage, 'dev-frontend').in, 250)
+checkText('Ф1: и о сжатии сказано человеку', (row.usage.problems || []).join(' '), 'сжата')
+
+// ── сценарий 7: сборка без sessionQuery (Ф4) ────────────────────────────────
+
+console.log('\n=== сценарий 7: sessionQuery не обязательная зависимость ===')
+issues.clear()
+issues.set(21, {
+  number: 21, title: 'Сборка без сервиса опроса', state: 'open', body: 'постановка',
+  labels: ['ready-for-dev', 'area:frontend'], assignees: [],
+})
+writeBook([])
+surfaces.clear()
+app = await boot({ hide: ['sessionQuery'] })
+check('Ф4: sessionQuery не объявлен в inject', app.mod.default.inject.includes('sessionQuery'), false)
+step = await app.tick()
+check('Ф4: без сервиса опроса отдел всё равно поднимается и выдаёт роль',
+  step.action + ':' + step.role, 'dispatched:dev-frontend')
+const noQuerySession = step.sessionId
+writeTranscriptFor(noQuerySession, [msg(1, 1, 400, 40)])
+status = await app.status()
+row = status.projects[0]
+check('Ф4: расход прочитан стенограммой', usageRow(row.usage, 'dev-frontend').in, 400)
+checkText('Ф4: карточка отдаётся, а не падает', JSON.stringify(row.usage.totals), '"in":400')
+
+// ── сценарий 8: в смене тикет без записи в книге (Ф3) ───────────────────────
+
+console.log('\n=== сценарий 8: нули вместо расхода не печатаются ===')
+issues.clear()
+issues.set(22, {
+  number: 22, title: 'Тикет, заведённый до книги', state: 'open', body: 'постановка',
+  labels: ['ready-for-dev', 'area:frontend'], assignees: [],
+})
+writeBook([])
+surfaces.clear()
+app = await boot()
+step = await app.tick()
+check('тикет без привязки выдан', step.action + ':' + step.role, 'dispatched:dev-frontend')
+surfaces.set(step.sessionId, [msg(1, 1, 900, 90)])
+// Книгу по тикету никто не писал: он заведён до выкатки учёта.
+writeBook([])
+telegram.length = 0
+await app.summary()
+const noDataText = telegram.join('\n')
+checkText('Ф3: строка смены говорит словами вместо нулей', noDataText, 'потрачено #22: тикет не привязан')
+check('Ф3: нулей в строке смены нет', noDataText.includes('вход 0'), false)
+check('Ф3: итог из нулей не печатается', noDataText.includes('Итого за смену'), false)
 
 console.log(failures === 0 ? '\nВСЕ ПРОВЕРКИ ПРОШЛИ' : '\nПРОВАЛОВ: ' + failures)
 fs.rmSync(home, { recursive: true, force: true })

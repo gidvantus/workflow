@@ -711,9 +711,13 @@ export default {
   // Явные зависимости: записи из cordis.patch.yml применяются раньше, чем
   // бандлы публикуют сервисы. Без inject плагин стартует в пустом окружении
   // и молча ничего не делает — на этом уже один раз обожглись.
-  // sessionQuery объявлен, но не входит в обязательные: без него расход читается
-  // запасным путём по стенограммам, а смена ролей идёт как раньше.
-  inject: ['timer', 'tools', 'agents', 'sessions', 'agentPresets', 'workspaceRegistry', 'sessionController', 'permissionPresets', 'sessionTitle', 'sessionQuery'],
+  // `sessionQuery` в этом списке НЕТ намеренно: запись в inject — это обязательная
+  // зависимость (объектная форма в этом cordis — intercept, а не «необязательная»),
+  // и сборка без сервиса опроса сессий не подняла бы отдел вовсе — ни тика, ни
+  // статуса, ни сводки. Спрашиваем сервис в момент вызова (см. `sessionQueryOf`):
+  // его нет — расход читается запасным путём по стенограммам, а смена ролей идёт
+  // как раньше. Запасному пути эта ветка и написана.
+  inject: ['timer', 'tools', 'agents', 'sessions', 'agentPresets', 'workspaceRegistry', 'sessionController', 'permissionPresets', 'sessionTitle'],
 
   apply(ctx) {
     const timer = ctx.get('timer')
@@ -725,7 +729,18 @@ export default {
     const sessionController = ctx.get('sessionController')
     const permissionPresets = ctx.get('permissionPresets')
     const sessionTitle = ctx.get('sessionTitle')
-    const sessionQuery = ctx.get('sessionQuery')
+
+    // Сервис опроса сессий спрашивается на каждом вызове, а не здесь: в inject его
+    // нет (см. выше), поэтому он может появиться позже и может не появиться вовсе.
+    // `ctx.get` без второго аргумента не бросает на неизвестном имени, но обёртка
+    // нужна: отказ сервиса не должен уносить карточку и сводку.
+    const sessionQueryOf = () => {
+      try {
+        return ctx.get('sessionQuery') || null
+      } catch (error) {
+        return null
+      }
+    }
 
     const missing = []
     if (!timer) missing.push('timer')
@@ -1551,30 +1566,64 @@ export default {
       return 'сессий'
     }
 
+    // Сжатие контекста видно на поверхности по метке замены: событие с `surfaceOp`
+    // вида `{ op: 'replace' }` вытеснило диапазон прежних ходов. Сами события
+    // `compaction/*` в поверхность не попадают — они только в журнале сессии
+    // (`SurfaceEventType` — закрытый набор из четырёх видов сообщений), поэтому
+    // искать в `events` надо метку замены, а не тип события.
+    const surfaceCompacted = (events) => (events || []).some((event) =>
+      !!event && typeof event === 'object' && !!event.surfaceOp &&
+      typeof event.surfaceOp === 'object' && event.surfaceOp.op === 'replace')
+
     // Счёт по одной сессии: живая поверхность (sessionQuery), а если её нет или
     // она не ответила (сессия прошлых смен, закрытое приложение) — стенограмма на
     // диске. Пустая поверхность — это сессия без ходов, а не повод идти на диск.
+    // Сжатая поверхность — наоборот, повод: `readSurface` отдаёт текущую модельную
+    // поверхность, вытесненные сжатием ходы в неё не входят, и сумма по ней меньше
+    // настоящей. Стенограмма хранит и вытесненное, поэтому такую сессию читаем с
+    // диска; не вышло (нет стенограммы, оборванный кадр) — оставляем числа
+    // поверхности и говорим о расхождении в `problems`, а не выбрасываем их.
     // Молчаливые нули не прячем: сбои разбора стенограммы идут в problems.
     async function usageOfSession(module, entry) {
-      if (sessionQuery) {
+      const fromDisk = () => {
+        const disk = module.readUsageFromDisk(dshHome(), entry.session)
+        return { usage: disk.usage, turns: disk.turns, events: disk.events || 0, problems: disk.problems || [] }
+      }
+      const live = sessionQueryOf()
+      if (live) {
         try {
-          const surface = await sessionQuery.readSurface(entry.session)
+          const surface = await live.readSurface(entry.session)
           const events = (surface && surface.events) || []
-          return { usage: module.usageOfEvents(events), turns: module.turnsOfEvents(events), problems: [] }
+          if (!surfaceCompacted(events)) {
+            return { usage: module.usageOfEvents(events), turns: module.turnsOfEvents(events), problems: [] }
+          }
+          const disk = fromDisk()
+          if (disk.events > 0 && disk.problems.length === 0) return disk
+          return {
+            usage: module.usageOfEvents(events),
+            turns: module.turnsOfEvents(events),
+            problems: ['сессия ' + entry.session + ' сжата (поверхность короче журнала), а стенограмма не прочиталась: ' +
+              (disk.problems.length > 0 ? disk.problems.join('; ') : 'событий в ней нет') +
+              ' — числа по сессии меньше настоящих'],
+          }
         } catch (error) {
           // Сессия недоступна живому чтению — читаем стенограмму.
         }
       }
-      const disk = module.readUsageFromDisk(dshHome(), entry.session)
-      return { usage: disk.usage, turns: disk.turns, problems: disk.problems || [] }
+      return fromDisk()
     }
 
     // Карточка расхода по тикету: строки по ролям и итог, как их хочет видеть
     // `dev_department_status`. Это заявление о данных, а не о работе: тикет без
     // записи в книге — норма для тикетов, начатых до выкатки учёта, и об этом
     // говорит `note`, а не пустая карточка без объяснения.
-    async function usageCard(project, issue) {
+    //
+    // `options.since` (ISO-время) сужает книгу до записей не раньше этого момента —
+    // так сводка смены считает только свои выдачи ролей, а не весь расход тикета за
+    // всё время. Карточка статуса зовёт без `since`: она про тикет, а не про смену.
+    async function usageCard(project, issue, options) {
       const snapshotAt = new Date().toISOString()
+      const since = options && options.since ? Date.parse(options.since) : NaN
       const module = await loadUsageLedger()
       if (module === null) {
         return {
@@ -1589,12 +1638,21 @@ export default {
         }
       }
       let entries = []
+      let bound = []
       let note = null
       try {
-        entries = module.readLedger().filter((entry) => entry.project === project.id && entry.issue === issue.number)
+        bound = module.readLedger().filter((entry) => entry.project === project.id && entry.issue === issue.number)
       } catch (error) {
         note = 'книга учёта не читается: ' + (error && error.message ? error.message : String(error))
       }
+      // Запись с неразбираемой датой не выбрасываем: потерять сессию хуже, чем
+      // показать её в смене, к которой она могла не относиться.
+      entries = Number.isFinite(since)
+        ? bound.filter((entry) => {
+          const at = Date.parse(entry.at)
+          return !Number.isFinite(at) || at >= since
+        })
+        : bound
       const summary = await module.summarizeIssue(entries, (entry) => usageOfSession(module, entry))
       const sessions = summary.sessions.map((row) => ({
         role: row.role,
@@ -1607,7 +1665,9 @@ export default {
       }))
       if (note === null) {
         if (entries.length === 0) {
-          note = 'тикет не привязан: в книге учёта нет записи — счёт пойдёт со следующей выдачи роли'
+          note = bound.length > 0
+            ? 'расход этой смены не выделен: сессии по тикету заведены раньше — в книге нет записи не раньше ' + String(options.since)
+            : 'тикет не привязан: в книге учёта нет записи — счёт пойдёт со следующей выдачи роли'
         } else if (sessions.length > 0 && sessions.every((row) => row.turns === 0)) {
           note = 'сессии открыты, ходов ещё нет: ' +
             sessions.map((row) => (row.role || 'роль') + ' ' + row.session.slice(0, 8)).join(', ')
@@ -2518,22 +2578,44 @@ export default {
         for (const entry of inShift) if (!numbers.includes(entry.number)) numbers.push(entry.number)
         const rates = (config.values && config.values.usageRates) || null
         const shiftTotals = { in: 0, out: 0, cacheRead: 0, cacheWrite: 0 }
-        lines.push('')
+        const usageLines = []
+        let counted = 0
         for (const number of numbers) {
           const title = (inShift.filter((entry) => entry.number === number)[0] || {}).title || ''
-          const card = await usageCard(project, { number, title })
+          // Смена отчитывается за СВОИ выдачи ролей: в книге лежат и записи прошлых
+          // смен, и прежние доработки того же тикета, и складывать их в дневную
+          // цифру нельзя — иначе «потрачено» пухнет с каждым возвратом в доработку.
+          const card = await usageCard(project, { number, title }, { since: run ? run.startedAt : null })
+          if (card.sessions.length === 0) {
+            // Ноль вместо расхода не печатаем: у тикета, заведённого до книги, сессии
+            // есть только в заголовках отчёта, и «смена потратила 0» — неправда.
+            // Говорим то же, что говорит карточка статуса, и её же замечания.
+            usageLines.push('потрачено #' + number + ': ' + (card.note || 'данных о расходе нет'))
+            for (const problem of card.problems || []) usageLines.push('  ! ' + problem)
+            continue
+          }
+          counted += 1
           shiftTotals.in += card.totals.in
           shiftTotals.out += card.totals.out
           shiftTotals.cacheRead += card.totals.cacheRead
           shiftTotals.cacheWrite += card.totals.cacheWrite
           const price = usageModule.formatCost(usageModule.costOf(card.totals, rates))
-          lines.push('потрачено #' + number + ': ' + usageModule.usageLine(card.totals) +
+          usageLines.push('потрачено #' + number + ': ' + usageModule.usageLine(card.totals) +
             ' (' + card.sessions.length + ' ' + sessionWord(card.sessions.length) + ')' +
             (price === null ? '' : ' · цена ' + price))
+          for (const problem of card.problems || []) usageLines.push('  ! ' + problem)
         }
-        const shiftPrice = usageModule.formatCost(usageModule.costOf(shiftTotals, rates))
-        lines.push('Итого за смену: ' + usageModule.usageLine(shiftTotals) +
-          (shiftPrice === null ? '' : ' · цена ' + shiftPrice))
+        // Итог печатается только когда есть что складывать: сумма нулей — та же
+        // неправда, что строка с нулями по тикету.
+        if (counted > 0) {
+          const shiftPrice = usageModule.formatCost(usageModule.costOf(shiftTotals, rates))
+          usageLines.push('Итого за смену: ' + usageModule.usageLine(shiftTotals) +
+            (shiftPrice === null ? '' : ' · цена ' + shiftPrice))
+        }
+        if (usageLines.length > 0) {
+          lines.push('')
+          for (const line of usageLines) lines.push(line)
+        }
       }
       if (state.lastError) lines.push('\n⚠️ Последняя ошибка: ' + state.lastError)
       const summaryText = lines.join('\n')
