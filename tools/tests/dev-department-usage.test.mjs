@@ -326,6 +326,17 @@ const msg = (turn, step, input, output, cacheRead = 0) => ({
   type: 'assistant/message',
   data: { turn, step, usage: { inputTokens: input, outputTokens: output, cacheReadTokens: cacheRead, cacheWriteTokens: 0 } },
 })
+// Упавшая попытка шага: usage приходит потоком, в настоящей форме стенограммы DSH
+// ({ type: 'chunk', chunk: { type: 'usage', usage: {…} } }).
+const attemptUsage = (turn, step, input, output) => ({
+  type: 'assistant/attempt',
+  data: {
+    turn,
+    step,
+    stream: [{ type: 'chunk', time: 1, chunk: { type: 'usage', usage: { inputTokens: input, outputTokens: output } } }],
+  },
+})
+const retryStarted = (turn, step) => ({ type: 'llm/retry-started', data: { retryId: 'r-1', turn, step, retry: 1 } })
 const usageRow = (card, role) => (card.sessions || []).find((row) => row.role === role) || {}
 
 // ── сценарий 1: привязка пишется до первого хода и не дублируется ───────────
@@ -397,6 +408,12 @@ check('строки по ролям, включая аналитика', row.usa
   ['analyst', 'code-review', 'dev-frontend', 'tester'])
 check('сессия аналитика не ушла в «не привязано», а считается в тикете',
   usageRow(row.usage, 'analyst').in, 300)
+// Б4: `source` записи книги доходит до строки карточки. На этой машине сессию
+// постановки открывает человек под пресетом `standard`, поэтому по одной роли её
+// от роли конвейера не отличить — признак живёт в `source`.
+check('Б4: origin записи книги виден в строке карточки',
+  [usageRow(row.usage, 'analyst').source, usageRow(row.usage, 'dev-frontend').source],
+  ['issue-created', 'dispatcher'])
 check('числа фронтенда сходятся с поверхностью сессии',
   [usageRow(row.usage, 'dev-frontend').turns, usageRow(row.usage, 'dev-frontend').in, usageRow(row.usage, 'dev-frontend').out],
   [3, 1900, 190])
@@ -425,7 +442,13 @@ check('CLI по тому же тикету считает те же числа',
   cacheRead: cliTicket.totals.cacheRead, cacheWrite: cliTicket.totals.cacheWrite,
 }, row.usage.totals)
 
-// Сессия без ходов: карточка говорит об этом, а не молчит.
+// Сессия без ходов: карточка говорит об этом, а не молчит. Стенограммы этих сессий
+// появились выше только для сверки с отчётом, и пока их нет, источник — живая
+// поверхность: свежая сессия ещё не легла на диск, и это нормальное состояние.
+for (const id of [devSession, reviewSession, ANALYST_SESSION]) {
+  fs.rmSync(path.join(home, 'sessions', '--D-Agents-Workflow--', 'session-' + id.replace(/^session-/, '')),
+    { recursive: true, force: true })
+}
 surfaces.clear()
 status = await app.status()
 row = status.projects[0]
@@ -654,15 +677,17 @@ check('Ф1: сжатая сессия посчитана по стенограм
   [compactedRow.turns, compactedRow.in, compactedRow.out], [3, 3250, 325])
 check('Ф1: целая стенограмма — замечаний нет', row.usage.problems, [])
 
-// Стенограммы ещё нет (свежая сессия не успела лечь на диск): числа поверхности
-// остаются, но карточка говорит, что они меньше настоящих, — молчаливых нулей нет.
+// Стенограммы ещё нет (свежая сессия не успела лечь на диск): источник — живая
+// поверхность, и это обычное состояние, а не сбой: отчёт по токенам эту сессию тоже
+// ещё не видит, поэтому расхождения «карточка ≠ отчёт» здесь нет. Молчаливых нулей
+// по-прежнему не бывает: числа поверхности не выбрасываются.
 const compressedDir = path.join(home, 'sessions', '--D-Agents-Workflow--',
   'session-' + compressedSession.replace(/^session-/, ''))
 fs.rmSync(compressedDir, { recursive: true, force: true })
 status = await app.status()
 row = status.projects[0]
-check('Ф1: без стенограммы числа поверхности не выброшены', usageRow(row.usage, 'dev-frontend').in, 250)
-checkText('Ф1: и о сжатии сказано человеку', (row.usage.problems || []).join(' '), 'сжата')
+check('Б3: без стенограммы живая поверхность — законный источник', usageRow(row.usage, 'dev-frontend').in, 250)
+check('Б3: и замечания об этом нет — это не недосчёт', row.usage.problems, [])
 
 // ── сценарий 7: сборка без sessionQuery (Ф4) ────────────────────────────────
 
@@ -758,6 +783,41 @@ checkText('Ф1: расход продолженного диалога посч�
 checkText('Ф1: продолженный диалог назван пометкой', carriedText, 'в т.ч. продолженный диалог: 1')
 checkText('Ф1: итог смены напечатан', carriedText, 'Итого за смену: вход 2 500')
 check('Ф1: «не выделен» больше не печатается', carriedText.includes('не выделен'), false)
+
+// ── сценарий 10: шаг с повтором — карточка считает как отчёт (Б3) ───────────
+// Живая поверхность состоит из четырёх видов сообщений (`SurfaceEventType`) и не
+// несёт ни `assistant/attempt`, ни `llm/retry-started`. Пока карточка читала
+// поверхность, шаг с повтором считался по ней короче, чем в стенограмме, и
+// «Готово, когда 5» (числа карточки равны числам CLI) ломалось ровно на повторах.
+// Теперь источник — стенограмма, а поверхность остаётся свежей сессии без файла.
+
+console.log('\n=== сценарий 10: повтор шага считается по стенограмме (Б3) ===')
+writeConfig()
+issues.clear()
+// `created_at` не задан — тикет не кандидат на привязку сессии постановки, и
+// единственная запись книги у него будет от диспетчера.
+issues.set(50, {
+  number: 50, title: 'Повтор шага', state: 'open', body: 'постановка',
+  labels: ['ready-for-dev', 'area:frontend'], assignees: [],
+})
+writeBook([])
+surfaces.clear()
+app = await boot()
+step = await app.tick()
+check('тикет с повтором выдан', step.action + ':' + step.role, 'dispatched:dev-frontend')
+const retrySession = step.sessionId
+// Поверхность: только готовое сообщение — попытки и события повтора в ней нет.
+surfaces.set(retrySession, [msg(1, 1, 800, 80)])
+writeTranscriptFor(retrySession, [attemptUsage(1, 1, 700, 70), retryStarted(1, 1), msg(1, 1, 800, 80)])
+status = await app.status()
+row = status.projects[0]
+check('Б3: карточка читает стенограмму, а не короткую поверхность',
+  [usageRow(row.usage, 'dev-frontend').in, usageRow(row.usage, 'dev-frontend').out], [1500, 150])
+check('Б3: целая стенограмма — замечаний нет', row.usage.problems, [])
+const retryReport = await cliModule.buildReport({ dshHome: home, project: 'workflow', issue: 50 })
+const retryTicket = retryReport.tickets.find((ticket) => ticket.issue === 50) || { totals: {} }
+check('Б3: числа карточки равны числам отчёта',
+  [retryTicket.totals.input, retryTicket.totals.output], [row.usage.totals.in, row.usage.totals.out])
 
 console.log(failures === 0 ? '\nВСЕ ПРОВЕРКИ ПРОШЛИ' : '\nПРОВАЛОВ: ' + failures)
 fs.rmSync(home, { recursive: true, force: true })

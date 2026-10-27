@@ -28,10 +28,14 @@
 // `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`. Отчёт по токенам проверяет
 // эти имена пробным вызовом: переименование ведра не должно молча стать нулями.
 //
-// Запасной путь — стенограмма на диске (`readUsageFromDisk`): он нужен сессиям, до
-// которых `sessionQuery.readSurface` не дотянулся (сессия прошлых смен, закрытое
-// приложение). Приём разбора кадров `zstd` повторяет `tools/zstd-frames.mjs`:
-// импортировать его отсюда нельзя, каталог `tools/` в установку не раскладывается.
+// Где читается расход: сначала стенограмма на диске (`readUsageFromDisk`), а живая
+// поверхность `sessionQuery.readSurface` — запасной путь для сессии, которой на
+// диске ещё нет. Причина в полноте: поверхность состоит из четырёх видов сообщений
+// (`SurfaceEventType`), в ней нет ни `assistant/attempt`, ни `llm/retry-started`, ни
+// вытесненных сжатием ходов, — а отчёт `tools/issue-tokens.mjs` читает стенограмму
+// целиком, и карточка со сводкой обязаны показывать те же числа, что он. Приём
+// разбора кадров `zstd` повторяет `tools/zstd-frames.mjs`: импортировать его отсюда
+// нельзя, каталог `tools/` в установку не раскладывается.
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -341,10 +345,17 @@ export function findTranscript(home, sessionId) {
 
 // Usage сессии по стенограмме. Сбои разбора не проглатываются: возвращаются
 // счётчиками, чтобы вызывающий сказал человеку, что числа меньше настоящих.
+// `missing: true` — стенограммы нет вовсе (свежая сессия или сессия прошлых смен):
+// это не сбой, а обычное состояние, и вызывающий вправе прочитать сессию живой
+// поверхностью. `missing: false` при непустых `problems` — стенограмма есть, но не
+// дочиталась: числа по ней занижены.
 export function readUsageFromDisk(home, sessionId) {
   const found = findTranscript(home, sessionId)
   if (found.file === null) {
-    return { usage: zeroBuckets(), turns: 0, events: 0, brokenFrames: 0, droppedLines: 0, problems: found.problems }
+    return {
+      usage: zeroBuckets(), turns: 0, events: 0, brokenFrames: 0, droppedLines: 0,
+      missing: true, problems: found.problems,
+    }
   }
   const problems = []
   let bytes
@@ -352,7 +363,7 @@ export function readUsageFromDisk(home, sessionId) {
     bytes = fs.readFileSync(found.file)
   } catch (error) {
     return {
-      usage: zeroBuckets(), turns: 0, events: 0, brokenFrames: 0, droppedLines: 0,
+      usage: zeroBuckets(), turns: 0, events: 0, brokenFrames: 0, droppedLines: 0, missing: false,
       problems: ['стенограмма не читается: ' + found.file + ' — ' + (error && error.message ? error.message : String(error))],
     }
   }
@@ -380,6 +391,7 @@ export function readUsageFromDisk(home, sessionId) {
     events: events.length,
     brokenFrames,
     droppedLines,
+    missing: false,
     problems,
     file: found.file,
   }

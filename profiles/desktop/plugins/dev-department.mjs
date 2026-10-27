@@ -1849,51 +1849,47 @@ export default {
       return 'сессий'
     }
 
-    // Сжатие контекста видно на поверхности по метке замены: событие с `surfaceOp`
-    // вида `{ op: 'replace' }` вытеснило диапазон прежних ходов. Сами события
-    // `compaction/*` в поверхность не попадают — они только в журнале сессии
-    // (`SurfaceEventType` — закрытый набор из четырёх видов сообщений), поэтому
-    // искать в `events` надо метку замены, а не тип события.
-    const surfaceCompacted = (events) => (events || []).some((event) =>
-      !!event && typeof event === 'object' && !!event.surfaceOp &&
-      typeof event.surfaceOp === 'object' && event.surfaceOp.op === 'replace')
-
-    // Счёт по одной сессии: живая поверхность (sessionQuery), а если её нет или
-    // она не ответила (сессия прошлых смен, закрытое приложение) — стенограмма на
-    // диске. Пустая поверхность — это сессия без ходов, а не повод идти на диск.
-    // Сжатая поверхность — наоборот, повод: `readSurface` отдаёт текущую модельную
-    // поверхность, вытесненные сжатием ходы в неё не входят, и сумма по ней меньше
-    // настоящей. Стенограмма хранит и вытесненное, поэтому такую сессию читаем с
-    // диска; не вышло (нет стенограммы, оборванный кадр) — оставляем числа
-    // поверхности и говорим о расхождении в `problems`, а не выбрасываем их.
+    // Счёт по одной сессии: сперва стенограмма на диске, а живая поверхность
+    // (`sessionQuery.readSurface`) — запасной путь для сессии, которой на диске ещё
+    // нет. Причина в полноте: поверхность состоит из четырёх видов сообщений
+    // (`SurfaceEventType`), в ней нет ни `assistant/attempt`, ни `llm/retry-started`,
+    // ни вытесненных сжатием ходов. Считать по ней значит разойтись с отчётом
+    // `tools/issue-tokens.mjs`, который читает стенограмму целиком: на шаге с
+    // повтором у провалившейся попытки свой usage, и поверхность покажет меньше.
     // Молчаливые нули не прячем: сбои разбора стенограммы идут в problems.
     async function usageOfSession(module, entry) {
-      const fromDisk = () => {
-        const disk = module.readUsageFromDisk(dshHome(), entry.session)
-        return { usage: disk.usage, turns: disk.turns, events: disk.events || 0, problems: disk.problems || [] }
-      }
+      const fromDisk = module.readUsageFromDisk(dshHome(), entry.session)
+      const diskNumbers = () => ({
+        usage: fromDisk.usage, turns: fromDisk.turns, events: fromDisk.events, problems: fromDisk.problems,
+      })
+      // Стенограмма есть и прочиталась целиком — другого источника не надо.
+      if (!fromDisk.missing && fromDisk.problems.length === 0) return diskNumbers()
       const live = sessionQueryOf()
       if (live) {
         try {
           const surface = await live.readSurface(entry.session)
           const events = (surface && surface.events) || []
-          if (!surfaceCompacted(events)) {
-            return { usage: module.usageOfEvents(events), turns: module.turnsOfEvents(events), problems: [] }
-          }
-          const disk = fromDisk()
-          if (disk.events > 0 && disk.problems.length === 0) return disk
-          return {
+          const numbers = {
             usage: module.usageOfEvents(events),
             turns: module.turnsOfEvents(events),
-            problems: ['сессия ' + entry.session + ' сжата (поверхность короче журнала), а стенограмма не прочиталась: ' +
-              (disk.problems.length > 0 ? disk.problems.join('; ') : 'событий в ней нет') +
-              ' — числа по сессии меньше настоящих'],
+            events: events.length,
+          }
+          // Стенограммы нет вовсе — это свежая сессия, и поверхность про неё полная:
+          // лучшее, что есть, без оговорок.
+          if (fromDisk.missing) return { ...numbers, problems: [] }
+          // Стенограмма есть, но не дочиталась: числа поверхности её короче, поэтому
+          // говорим об этом прямо, а не выдаём их за полные.
+          return {
+            ...numbers,
+            problems: ['сессия ' + entry.session + ': стенограмма не дочиталась (' +
+              fromDisk.problems.join('; ') + '), считаем по живой поверхности — в ней нет повторов шага и упавших' +
+              ' попыток, числа по сессии меньше настоящих'],
           }
         } catch (error) {
-          // Сессия недоступна живому чтению — читаем стенограмму.
+          // Сессия недоступна живому чтению — остаётся стенограмма.
         }
       }
-      return fromDisk()
+      return diskNumbers()
     }
 
     // Карточка расхода по тикету: строки по ролям и итог, как их хочет видеть
@@ -1950,9 +1946,13 @@ export default {
       // в сводке, чтобы дневная цифра не выдавала себя за полностью свежую.
       const carried = entries.filter((entry) => carriedEntry(entry) && !freshEntry(entry)).length
       const summary = await module.summarizeIssue(entries, (entry) => usageOfSession(module, entry))
+      // `source` не выбрасываем: на этой машине сессию постановки открывает человек
+      // под пресетом `standard`, и по одной роли строку «постановка» не отличить от
+      // обычной роли конвейера.
       const sessions = summary.sessions.map((row) => ({
         role: row.role,
         session: row.session,
+        source: row.source,
         turns: row.turns,
         in: row.in,
         out: row.out,

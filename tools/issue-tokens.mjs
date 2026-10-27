@@ -16,8 +16,10 @@
 // файлом: так отчёт работает в рабочей копии до раскладки.
 //
 // Привязка сессии к тикету, в порядке старшинства:
-//   1) запись книги ~/.dsh/dev-department-usage.json — её пишут диспетчер при
-//      запуске роли и аналитик при создании тикета;
+//   1) запись книги ~/.dsh/dev-department-usage.json — её пишет диспетчер: при
+//      запуске роли по тикету (`source: "dispatcher"`) и при рождении тикета
+//      (`source: "issue-created"` — сессия постановки, найденная по `created_at`
+//      тикета, потому что своего крючка «тикет создан» у отдела нет);
 //   2) заголовок сессии вида «Бэкенд-разработчик [workflow] #14 — …» (роли
 //      конвейера, но не аналитик: у него в заголовке нет номера) — такие строки
 //      дополнительно попадают в блок «восстановлено по заголовку»;
@@ -160,19 +162,10 @@ function titleOf(rows) {
   return title
 }
 
-// «ходов» — ходы, в которых модель что-то произвела: по событию assistant/message
-// на ход. Ход без единого сообщения токенов не тратит, поэтому его не считаем.
-function turnsOf(rows) {
-  const turns = new Set()
-  for (const row of rows) {
-    if (row.type !== 'assistant/message' || !row.data) continue
-    if (typeof row.data.turn === 'number') turns.add(row.data.turn)
-  }
-  if (turns.size > 0) return turns.size
-  let started = 0
-  for (const row of rows) if (row.type === 'turn/start') started += 1
-  return started
-}
+// «ходов» — ходы, в которых модель что-то произвела. Правило живёт в модуле учёта
+// (`turnsOfEvents`), как и правило повтора: одна правка правила не должна оставлять
+// колонку отчёта на старой версии, иначе карточка `dev_department_status` и этот
+// отчёт разойдутся по той же сессии.
 
 // Модуль учёта отдаёт ведра проекции tokenUsage под их контрактными именами;
 // отчёт переводит их в короткие имена своих колонок.
@@ -213,7 +206,7 @@ export async function loadLedgerModule(dshHome) {
   // импорта и не восстанавливаем: отчёт — короткий процесс с одним каталогом.
   process.env.DSH_HOME = dshHome
   const module = await import(pathToFileURL(found).href + '?v=' + Date.now())
-  for (const name of ['readLedger', 'usageOfEvents']) {
+  for (const name of ['readLedger', 'usageOfEvents', 'turnsOfEvents']) {
     if (typeof module[name] !== 'function') {
       throw new Error('в модуле учёта нет функции ' + name + ': ' + found)
     }
@@ -271,7 +264,7 @@ export function normalizeSessionId(session) {
 
 // ── сессии на диске ─────────────────────────────────────────────────────────
 
-export function collectSessions(dshHome, usageOfEvents, workspaceProject) {
+export function collectSessions(dshHome, ledgerModule, workspaceProject) {
   const root = path.join(dshHome, 'sessions')
   const sessions = []
   const problems = []
@@ -330,9 +323,13 @@ export function collectSessions(dshHome, usageOfEvents, workspaceProject) {
       }
       const rows = parsed.rows
       session.title = titleOf(rows)
-      session.turns = turnsOf(rows)
       try {
-        session.usage = normalizeUsage(usageOfEvents(rows))
+        session.turns = ledgerModule.turnsOfEvents(rows)
+      } catch (error) {
+        problems.push('модуль учёта не посчитал ходы сессии ' + id + ': ' + error.message)
+      }
+      try {
+        session.usage = normalizeUsage(ledgerModule.usageOfEvents(rows))
       } catch (error) {
         problems.push('модуль учёта не посчитал сессию ' + id + ': ' + error.message)
       }
@@ -372,7 +369,11 @@ export function attribute({ sessions, entries, problems }) {
         project: entry.project,
         issue: entry.issue,
         role: entry.role,
+        // `source` — это `ledger`/`title`/`none`, то есть откуда взята привязка.
+        // `origin` — поле `source` самой записи книги (`dispatcher`/`issue-created`):
+        // по нему видно строку постановки, у которой роль — пресет человека.
         source: 'ledger',
+        origin: entry.source,
         title: null,
         turns: 0,
         usage: zeroUsage(),
@@ -389,7 +390,7 @@ export function attribute({ sessions, entries, problems }) {
       }
       continue
     }
-    attachments.set(id, { project: entry.project, issue: entry.issue, role: entry.role, source: 'ledger' })
+    attachments.set(id, { project: entry.project, issue: entry.issue, role: entry.role, source: 'ledger', origin: entry.source })
   }
 
   const tickets = []
@@ -399,8 +400,8 @@ export function attribute({ sessions, entries, problems }) {
     const byTitle = TITLE_PATTERN.exec(session.title || '')
     if (attachment === undefined) {
       attachment = byTitle === null
-        ? { project: session.project, issue: null, role: null, source: 'none' }
-        : { project: byTitle[1], issue: Number(byTitle[2]), role: null, source: 'title' }
+        ? { project: session.project, issue: null, role: null, source: 'none', origin: null }
+        : { project: byTitle[1], issue: Number(byTitle[2]), role: null, source: 'title', origin: null }
     } else if (byTitle !== null && (byTitle[1] !== attachment.project || Number(byTitle[2]) !== attachment.issue)) {
       problems.push('книга и заголовок расходятся: сессия ' + session.id + ' — в книге ' +
         attachment.project + ' #' + attachment.issue + ', в заголовке ' + byTitle[1] + ' #' + byTitle[2] + '; считаем по книге')
@@ -411,6 +412,7 @@ export function attribute({ sessions, entries, problems }) {
       issue: attachment.issue,
       role: attachment.role,
       source: attachment.source,
+      origin: attachment.origin,
       title: session.title,
       missing: false,
     }
@@ -464,7 +466,7 @@ export async function buildReport({ dshHome, project, issue } = {}) {
   const registry = workspaceIndex(path.join(home, 'projects.json'))
   problems.push(...registry.problems)
 
-  const collected = collectSessions(home, ledger.module.usageOfEvents, registry.index)
+  const collected = collectSessions(home, ledger.module, registry.index)
   problems.push(...collected.problems)
 
   const attributed = attribute({ sessions: collected.sessions, entries: book.entries, problems })
@@ -550,9 +552,16 @@ export function formatReport(report) {
 
   const ticketHeader = ['тикет', 'роль', 'сессия', 'ходов', 'вход', 'выход', 'кэш-чтение']
   const ticketAlign = ['left', 'left', 'left', 'right', 'right', 'right', 'right']
+  // Строка постановки — не роль конвейера: её сессию открывает человек, и пресет у
+  // неё обычный (`standard`). Пометка берётся из `source` записи книги, иначе
+  // по `role` такую строку не отличить от роли.
+  const roleCell = (row) => {
+    const role = row.role === null || row.role === undefined ? '—' : row.role
+    return row.origin === 'issue-created' ? role + ' (постановка)' : role
+  }
   const rowsOf = (rows) => rows.map((row) => [
     row.project === null || row.project === undefined ? '—' : row.project + '#' + (row.issue === null ? '—' : row.issue),
-    row.role === null ? '—' : row.role,
+    roleCell(row),
     row.id.slice(0, 8),
     fmt(row.turns),
     fmt(row.usage.input),

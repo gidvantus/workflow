@@ -217,6 +217,11 @@ check('целая стенограмма — без замечаний', fromDis
 check('id с префиксом session- тоже находится', ledger.readUsageFromDisk(home, 'session-' + S1).usage.uncachedInputTokens, 1500)
 check('неизвестная сессия названа замечанием', ledger.readUsageFromDisk(home, S2).problems.length, 1)
 checkText('и причина названа', ledger.readUsageFromDisk(home, S2).problems[0], 'сессия не найдена')
+// `missing` различает «стенограммы ещё нет» (обычное состояние свежей сессии —
+// диспетчер читает её живой поверхностью) и «стенограмма есть, но не дочиталась»
+// (недосчёт, о котором надо сказать).
+check('стенограммы нет — missing', ledger.readUsageFromDisk(home, S2).missing, true)
+check('стенограмма прочиталась — не missing', fromDisk.missing, false)
 
 // Оборванный кадр: zstd отдаёт обрывок и не падает, поэтому сбой обязан стать
 // замечанием — иначе недосчёт выглядит как полные числа.
@@ -228,6 +233,7 @@ writeTranscript(home, '--D-Agents-Workflow--', S3, [
 const truncated = ledger.readUsageFromDisk(home, S3)
 checkText('обрыв стенограммы назван', (truncated.problems || []).join(' '), 'кадр стенограммы не разобран целиком')
 check('обрыв не превращается в падение', Array.isArray(truncated.problems), true)
+check('оборванная стенограмма — не missing: это недосчёт, а не отсутствие файла', truncated.missing, false)
 
 // ── сумма по тикету ─────────────────────────────────────────────────────────
 

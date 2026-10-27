@@ -126,6 +126,20 @@ export function usageOfEvents(events) {
   }
   return totals
 }
+
+// Правило «ходов» тоже живёт в модуле: отчёт берёт его отсюда, а не считает своё.
+export function turnsOfEvents(events) {
+  const turns = new Set()
+  let started = 0
+  for (const event of events || []) {
+    if (!event || typeof event !== 'object') continue
+    if (event.type === 'turn/start') started += 1
+    if (event.type !== 'assistant/message') continue
+    const turn = event.data && event.data.turn
+    if (typeof turn === 'number') turns.add(turn)
+  }
+  return turns.size > 0 ? turns.size : started
+}
 `
 
 // Модуль учёта для песочницы: настоящий из репозитория, если он уже есть, иначе
@@ -189,9 +203,23 @@ fs.mkdirSync(path.join(homeBadContract, 'profiles', 'desktop', 'plugins'), { rec
 fs.writeFileSync(path.join(homeBadContract, 'profiles', 'desktop', 'plugins', 'usage-ledger.mjs'), [
   'export function readLedger() { return [] }',
   'export function usageOfEvents() { return { in: 0, out: 0, cacheRead: 0, cacheWrite: 0 } }',
+  'export function turnsOfEvents() { return 0 }',
   '',
 ].join('\n'))
 fs.writeFileSync(path.join(homeBadContract, 'projects.json'), JSON.stringify({ version: 1, projects: {} }))
+
+// Песочница «в модуле учёта нет правила ходов»: отчёт обязан отказаться, а не
+// считать ходы по своей копии правила — иначе колонка «ходов» разойдётся с
+// карточкой `dev_department_status`, которая берёт правило из модуля (Б2).
+const homeNoTurns = path.join(process.cwd(), '.issue-tokens-noturns-home')
+fs.rmSync(homeNoTurns, { recursive: true, force: true })
+fs.mkdirSync(path.join(homeNoTurns, 'profiles', 'desktop', 'plugins'), { recursive: true })
+fs.writeFileSync(path.join(homeNoTurns, 'profiles', 'desktop', 'plugins', 'usage-ledger.mjs'), [
+  'export function readLedger() { return [] }',
+  'export function usageOfEvents() { return { uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 } }',
+  '',
+].join('\n'))
+fs.writeFileSync(path.join(homeNoTurns, 'projects.json'), JSON.stringify({ version: 1, projects: {} }))
 
 fs.rmSync(home, { recursive: true, force: true })
 fs.rmSync(homeNoModule, { recursive: true, force: true })
@@ -522,6 +550,12 @@ checkText('блок «восстановлено по заголовку»', tex
 checkText('пометка привязки по заголовку', text, 'привязка по заголовку, не из книги')
 checkText('сверка сошлась', text, '4+1=5 ✓')
 checkText('запись без стенограммы названа', text, 'только в книге, без стенограммы: 1')
+// Б4: строка постановки не выдаёт себя за роль конвейера. На живой машине сессию
+// постановки открывает человек под пресетом `standard`, поэтому признак — `source`
+// записи книги, а не роль.
+check('origin записи книги доходит до строки (Б4)', [row(S1).origin, row(S7).origin], ['dispatcher', 'issue-created'])
+checkText('строка постановки помечена (Б4)', text, 'analyst (постановка)')
+check('у роли конвейера пометки нет', text.includes('dev-backend (постановка)'), false)
 const emptyText = mod.formatReport(await mod.buildReport({ dshHome: home, project: 'workflow', issue: 99 }))
 checkText('пустой тикет — не пустой вывод', emptyText, 'тикетов не найдено')
 
@@ -574,6 +608,11 @@ checkText('и объяснение, чего не хватает', noModule.err,
 const badContract = runCli(['--dsh-home', homeBadContract, 'workflow'])
 check('нарушенный контракт ведра — код 2', badContract.status, 2)
 checkText('и названы пропавшие имена', badContract.err, 'нет контрактных имён: uncachedInputTokens')
+// Б2: правило «ходов» одно на отдел и живёт в модуле учёта; модуль без него отчёт
+// отвергает, а не считает своей копией правила.
+const noTurns = runCli(['--dsh-home', homeNoTurns, 'workflow'])
+check('модуль без правила ходов — код 2', noTurns.status, 2)
+checkText('и названа пропавшая функция', noTurns.err, 'нет функции turnsOfEvents')
 // Живой запуск на повреждённых стенограммах: сбой виден человеку, а не только тесту.
 const liveBroken = runCli(['--dsh-home', homeBroken, 'workflow', '14'])
 check('с повреждёнными стенограммами отчёт всё равно печатается', liveBroken.status, 0)
@@ -585,5 +624,6 @@ fs.rmSync(homeNoModule, { recursive: true, force: true })
 fs.rmSync(homeBroken, { recursive: true, force: true })
 fs.rmSync(homeRule, { recursive: true, force: true })
 fs.rmSync(homeBadContract, { recursive: true, force: true })
+fs.rmSync(homeNoTurns, { recursive: true, force: true })
 fs.rmSync(bareDir, { recursive: true, force: true })
 process.exit(failures === 0 ? 0 : 1)
