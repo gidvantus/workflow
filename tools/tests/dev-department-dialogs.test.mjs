@@ -4,7 +4,8 @@
 // не должен тратить попытку задачи, маршрут доработки по чеклисту ревьюера
 // (закрытые пункты в маршрут не попадают, комментарий без чекбоксов
 // разбирается как раньше) и маршрут после test-failed по чеклисту тестировщика
-// в issue.
+// в issue. Отдельно — сводка смены: боту проекта из реестра, а у проекта без
+// бота только в журнал (запроса на api.telegram.org нет, сбоя нет).
 // Запуск: node .dev-department-dialogs-test.mjs
 import fs from 'node:fs'
 import os from 'node:os'
@@ -27,23 +28,28 @@ fs.writeFileSync(path.join(home, 'dev-department.json'), JSON.stringify({
 }, null, 2))
 const WORKSPACE = path.join(home, 'workspace')
 fs.mkdirSync(path.join(WORKSPACE, '.git'), { recursive: true })
-fs.writeFileSync(path.join(home, 'projects.json'), JSON.stringify({
-  version: 1,
-  default: 'vahta',
-  projects: {
-    vahta: {
-      title: 'Тест',
-      repo: 'gidvantus/vahta',
-      base: 'develop-m',
-      workspace: WORKSPACE,
-      composeProject: 'vahta-agent',
-      department: { enabled: true },
-    },
-  },
-}, null, 2))
+// Бот проекта живёт только в реестре: общего файла бота в каталоге установки
+// больше нет, и файл с ботом в поддельном DSH_HOME никто не создаёт. Сценарии
+// 21 и 22 проверяют оба состояния — с ботом и без него.
+function writeRegistry({ withTelegram }) {
+  const project = {
+    title: 'Тест',
+    repo: 'gidvantus/vahta',
+    base: 'develop-m',
+    workspace: WORKSPACE,
+    composeProject: 'vahta-agent',
+    department: { enabled: true },
+  }
+  if (withTelegram) project.telegram = { token: 't', chatId: '1' }
+  fs.writeFileSync(path.join(home, 'projects.json'), JSON.stringify({
+    version: 1,
+    default: 'vahta',
+    projects: { vahta: project },
+  }, null, 2))
+}
+writeRegistry({ withTelegram: true })
 fs.mkdirSync(path.join(home, 'mcp', 'github-mcp-server'), { recursive: true })
 fs.writeFileSync(path.join(home, 'mcp', 'github-mcp-server', 'token'), 'test-token\n')
-fs.writeFileSync(path.join(home, 'telegram.json'), JSON.stringify({ token: 't', chatId: '1' }))
 process.env.DSH_HOME = home
 
 // ── поддельные часы ─────────────────────────────────────────────────────────
@@ -308,6 +314,7 @@ async function boot() {
     tick: () => localTools.find((t) => t.name === 'dev_department_tick').execute({}),
     status: async () => JSON.parse(await localTools.find((t) => t.name === 'dev_department_status').execute({})),
     workspaces: async () => JSON.parse(await localTools.find((t) => t.name === 'dev_department_workspaces').execute({})),
+    summary: async () => JSON.parse(await localTools.find((t) => t.name === 'dev_department_summary').execute({})),
   }
 }
 
@@ -1014,6 +1021,42 @@ check('результат называет проект заведённым', w
 check('инструмент не создаёт сессий и заданий', [created.length, prompts.length], [0, 0])
 const ws2 = await app.workspaces()
 check('повторный вызов не дублирует область', [ws2.projects.map((p) => p.id + ':' + p.result), createdWorkspaces.length], [['vahta:уже заведена'], 1])
+
+console.log('\n=== сценарий 21: сводка уходит боту проекта из реестра ===')
+// Единственный источник бота — projects.<id>.telegram: общего файла бота больше
+// нет. Бот в поддельном реестре — и есть проверка отправки.
+const shiftLog = path.join(home, 'dev-department.log')
+fs.rmSync(shiftLog, { force: true })
+writeRegistry({ withTelegram: true })
+telegram.length = 0
+reset({ number: 2100, title: 'Демо-тикет 2100', labels: ['ready-for-dev'], state: 'open' })
+app = await boot()
+step = await tick(app)
+check('смена открыта задачей', step.result.action, 'dispatched')
+const summary21 = await app.summary()
+check('сводка закрыла смену проекта', summary21.closed, ['vahta'])
+check('ровно один запрос — боту проекта', telegram.length, 1)
+check('в сводке нет служебной строки', telegram[0].includes('Telegram: не отправлено'), false)
+check('сводка подписана проектом', telegram[0].includes('Отдел разработки [vahta]'), true)
+check('в журнале тоже нет служебной строки', fs.readFileSync(shiftLog, 'utf8').includes('Telegram: не отправлено'), false)
+check('ошибка Telegram не записана', String((await app.status()).lastError || '').includes('Telegram'), false)
+
+console.log('\n=== сценарий 22: у проекта без бота сводка только в журнал ===')
+// Проект без telegram — нормальное состояние: запроса на api.telegram.org нет,
+// состояние не портится, а в тексте сводки и в журнале появляется служебная
+// строка о том, что сводка осталась только на диске.
+writeRegistry({ withTelegram: false })
+fs.rmSync(shiftLog, { force: true })
+telegram.length = 0
+reset({ number: 2200, title: 'Демо-тикет 2200', labels: ['ready-for-dev'], state: 'open' })
+app = await boot()
+step = await tick(app)
+check('смена открыта задачей', step.result.action, 'dispatched')
+const summary22 = await app.summary()
+check('сводка закрыла смену проекта', summary22.closed, ['vahta'])
+check('запроса на api.telegram.org нет', telegram.length, 0)
+check('служебная строка попала в журнал', fs.readFileSync(shiftLog, 'utf8').includes('Telegram: не отправлено — у проекта не задан telegram (только журнал).'), true)
+check('отсутствие бота не считается сбоем', String((await app.status()).lastError || '').includes('Telegram'), false)
 
 console.log('\n=== служебное ===')
 const ids = allRequestIds.map((p) => p.requestId)

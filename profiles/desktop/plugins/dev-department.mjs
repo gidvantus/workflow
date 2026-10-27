@@ -767,13 +767,6 @@ async function githubDropLabel(project, number, name) {
   }
 }
 
-function readTelegramConfig() {
-  const file = path.join(dshHome(), 'telegram.json')
-  const raw = JSON.parse(stripBom(fs.readFileSync(file, 'utf8')))
-  if (!raw || !raw.token || !raw.chatId) throw new Error('в ' + file + ' нужны поля token и chatId')
-  return { token: raw.token, chatId: raw.chatId }
-}
-
 function request(options, body) {
   return new Promise((resolve, reject) => {
     const payload = body === undefined ? null : JSON.stringify(body)
@@ -3026,16 +3019,24 @@ export default {
         }
       }
       if (state.lastError) lines.push('\n⚠️ Последняя ошибка: ' + state.lastError)
+      // Единственный источник бота — поле telegram записи проекта в реестре.
+      // Проект без бота работает без Telegram: это нормальное состояние, а не
+      // сбой, поэтому в state.lastError о нём ничего не пишется — только строка
+      // в тексте сводки, и она же попадает в журнал.
+      if (!project.telegram) {
+        lines.push('\nTelegram: не отправлено — у проекта не задан telegram (только журнал).')
+      }
       const summaryText = lines.join('\n')
       // Сводку сначала кладём на диск: канал до Telegram бывает недоступен, и
       // терять отчёт за смену из-за этого нельзя.
       appendShiftLog(summaryText)
-      try {
-        // Сводка проекта уходит боту ЭТОГО проекта; общий — запасной путь.
-        const bot = project.telegram || readTelegramConfig()
-        await sendTelegram(bot, summaryText)
-      } catch (error) {
-        state.lastError = 'Telegram: ' + error.message
+      if (project.telegram) {
+        try {
+          // Сводка проекта уходит боту ЭТОГО проекта; другого источника нет.
+          await sendTelegram(project.telegram, summaryText)
+        } catch (error) {
+          state.lastError = 'Telegram: ' + error.message
+        }
       }
       return summaryText
     }

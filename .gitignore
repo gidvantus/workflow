@@ -38,7 +38,6 @@ mcp/github-mcp-server/token
 token
 # Тот же токен, но принесённый в корень руками (в имени пробел — нужен кавычный шаблон).
 github?token.txt
-telegram.json
 typesafe.token
 .credentials.yaml
 settings.yaml
