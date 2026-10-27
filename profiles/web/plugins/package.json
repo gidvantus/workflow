@@ -1,0 +1,7 @@
+{
+  "name": "@gidvantus/dsh-workflow-plugins-web",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Хост-плагины отдела для профиля web. Нужен по той же причине, что и в профиле desktop: инвентарь пакетов DSH требует name+version у ближайшего манифеста, иначе каждый запрос падает с REQUEST_EXTENSION."
+}

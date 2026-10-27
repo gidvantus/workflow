@@ -82,9 +82,10 @@
 // Первая строка любого комментария в issue и PR — `**Роль:** <кто> · <о чём>`.
 // По заголовку роли диспетчер отличает свои комментарии от ревьюерских и находит
 // начало круга доработок, поэтому формат — часть контракта конвейера. Свои
-// комментарии он публикует через postComment(), роли — инструментами
-// gh_issue_comment/gh_pr_comment, которые отказывают телу без заголовка до
-// сетевого запроса. Комментарии старого формата (без заголовка) читаются
+// комментарии он публикует через postComment(), роли — инструментом MCP
+// mcp__github__add_issue_comment. Проверять заголовок больше некому: штатный
+// сервер GitHub принимает любое тело, так что формат держится заданием и
+// скиллами ролей. Комментарии старого формата (без заголовка) читаются
 // запасным правилом: тикеты, начатые до выкатки, не должны встать.
 //
 // Состояние конвейера живёт В МЕТКАХ GitHub, а не в памяти диспетчера. Поэтому
@@ -95,6 +96,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import https from 'node:https'
+import { spawn } from 'node:child_process'
 
 // ОБЩИЕ значения по умолчанию для проектов, которые своё не задали. Данных
 // конкретного проекта здесь нет и быть не должно: они в ~/.dsh/projects.json.
@@ -475,11 +477,294 @@ function loadProjects(shared) {
   }
 }
 
-function readGitHubToken() {
-  const file = path.join(dshHome(), 'github.token')
-  const token = fs.readFileSync(file, 'utf8').trim()
-  if (!token) throw new Error('пустой файл токена: ' + file)
-  return token
+// ── GitHub через MCP ────────────────────────────────────────────────────────
+// Единственный путь диспетчера к GitHub — штатный сервер github/github-mcp-server
+// (github-mcp-server.exe). Своего HTTP-клиента GitHub и своего токена в
+// диспетчере больше нет: токен лежит рядом с сервером, сервер читает его из
+// окружения, а диспетчер только зовёт инструменты mcp__github__* по протоколу
+// MCP (JSON-RPC поверх stdio). Всё, что ниже в этом разделе, — транспорт;
+// прикладные операции собраны в githubIssue/githubPostComment/… и говорят уже
+// на языке инструментов, а не эндпоинтов REST.
+const MCP_DIR = path.join(dshHome(), 'mcp', 'github-mcp-server')
+const MCP_EXE = path.join(MCP_DIR, 'github-mcp-server.exe')
+const MCP_TOKEN_FILE = path.join(MCP_DIR, 'token')
+// Конвейер живёт в метках, поэтому тулсет labels обязателен: без него у сервера
+// нет инструментов меток вовсе, и смена встанет на первом же шаге.
+const MCP_ARGS = ['stdio', '--toolsets', 'default,labels']
+const MCP_TIMEOUT_MS = 30000
+
+let mcpChild = null
+let mcpHandshake = null
+let mcpSeq = 1
+let mcpBuffer = ''
+let mcpStderr = ''
+const mcpPending = new Map()
+// Запросы идут строго по одному: сервер отвечает на stdio, и второй запрос,
+// влезший между отправкой и ответом, ничего не ускоряет, зато путает след.
+let mcpQueue = Promise.resolve()
+
+function mcpLog(text) {
+  try {
+    fs.appendFileSync(path.join(dshHome(), 'dev-department-mcp.log'), new Date().toISOString() + ' ' + text + '\n')
+  } catch (error) {
+    // журнал транспорта не должен ломать смену
+  }
+}
+
+function mcpEnv() {
+  const token = fs.readFileSync(MCP_TOKEN_FILE, 'utf8').trim()
+  if (!token) throw new Error('пустой файл токена: ' + MCP_TOKEN_FILE)
+  return { ...process.env, GITHUB_PERSONAL_ACCESS_TOKEN: token }
+}
+
+function mcpSettleAll(error) {
+  for (const task of mcpPending.values()) {
+    clearTimeout(task.timer)
+    task.reject(error)
+  }
+  mcpPending.clear()
+}
+
+function mcpReset(error) {
+  const child = mcpChild
+  mcpChild = null
+  mcpHandshake = null
+  mcpBuffer = ''
+  if (error) mcpSettleAll(error)
+  if (child) {
+    try { child.kill() } catch (error) { /* уже мёртв */ }
+  }
+}
+
+// Один ответ сервера: id — разрешение ожидающего запроса, isError — отказ
+// инструмента. Отказ приходит текстом («failed to get issue: …»), поэтому
+// сообщение об ошибке берётся из content, а не из кода JSON-RPC.
+function mcpTakeLine(line) {
+  let message = null
+  try { message = JSON.parse(line) } catch (error) { return }
+  if (!message || message.id === undefined || message.id === null) return
+  const task = mcpPending.get(message.id)
+  if (!task) return
+  mcpPending.delete(message.id)
+  clearTimeout(task.timer)
+  if (message.error) {
+    task.reject(new Error(task.name + ': ' + (message.error.message || JSON.stringify(message.error))))
+    return
+  }
+  const result = message.result || {}
+  // Ответ на initialize и другие служебные запросы приходит без content —
+  // отдаём его целиком, разбором содержимого занимаются только tools/call.
+  if (!Array.isArray(result.content)) {
+    task.resolve(message)
+    return
+  }
+  const text = result.content.filter((c) => c.type === 'text').map((c) => c.text).join('\n')
+  if (result.isError) {
+    task.reject(new Error(task.name + ': ' + String(text || 'инструмент отказал').slice(0, 400)))
+    return
+  }
+  if (!text) {
+    task.resolve(result.structuredContent === undefined ? null : result.structuredContent)
+    return
+  }
+  try {
+    task.resolve(JSON.parse(text))
+  } catch (error) {
+    task.resolve(text)
+  }
+}
+
+function mcpEnsure() {
+  if (mcpHandshake) return mcpHandshake
+  mcpHandshake = (async () => {
+    const child = spawn(MCP_EXE, MCP_ARGS, { stdio: ['pipe', 'pipe', 'pipe'], env: mcpEnv(), windowsHide: true })
+    mcpChild = child
+    mcpBuffer = ''
+    mcpStderr = ''
+    child.stdout.setEncoding('utf8')
+    child.stdout.on('data', (chunk) => {
+      mcpBuffer += chunk
+      let at = mcpBuffer.indexOf('\n')
+      while (at >= 0) {
+        const line = mcpBuffer.slice(0, at).trim()
+        mcpBuffer = mcpBuffer.slice(at + 1)
+        if (line) mcpTakeLine(line)
+        at = mcpBuffer.indexOf('\n')
+      }
+    })
+    child.stderr.setEncoding('utf8')
+    child.stderr.on('data', (chunk) => { mcpStderr = (mcpStderr + chunk).slice(-4000) })
+    child.on('error', (error) => {
+      mcpReset(new Error('MCP-сервер GitHub: ' + error.message))
+    })
+    child.on('exit', (code) => {
+      if (mcpChild !== child) return
+      mcpLog('exit ' + code + (mcpStderr ? '\n' + mcpStderr : ''))
+      mcpReset(new Error('MCP-сервер GitHub завершился (код ' + code + ')'))
+    })
+
+    const id = mcpSeq++
+    const answer = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        mcpPending.delete(id)
+        reject(new Error('таймаут рукопожатия ' + MCP_TIMEOUT_MS / 1000 + ' с'))
+      }, MCP_TIMEOUT_MS)
+      mcpPending.set(id, { resolve, reject, timer, name: 'initialize' })
+      child.stdin.write(JSON.stringify({
+        jsonrpc: '2.0',
+        id,
+        method: 'initialize',
+        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'dsh-dev-department', version: '1.0.0' } },
+      }) + '\n')
+    })
+    if (!answer || !answer.result) throw new Error('initialize: пустой ответ сервера')
+    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n')
+    mcpLog('connected ' + JSON.stringify(answer.result.serverInfo || {}))
+  })()
+  mcpHandshake.catch(() => { mcpReset() })
+  return mcpHandshake
+}
+
+async function mcpInvoke(name, args) {
+  await mcpEnsure()
+  const child = mcpChild
+  if (!child || !child.stdin || !child.stdin.writable) throw new Error('MCP-сервер GitHub не запущен')
+  const id = mcpSeq++
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      mcpPending.delete(id)
+      reject(new Error('таймаут ' + MCP_TIMEOUT_MS / 1000 + ' с: ' + name))
+    }, MCP_TIMEOUT_MS)
+    mcpPending.set(id, { resolve, reject, timer, name })
+    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } }) + '\n')
+  })
+}
+
+function mcpCall(name, args) {
+  const run = mcpQueue.then(() => mcpInvoke(name, args))
+  mcpQueue = run.then(() => undefined, () => undefined)
+  return run
+}
+
+// Чтения повторяем: канал до GitHub отваливался, и «состояние не прочитано»
+// превращалось в ложный вывод, будто задача не движется. Повторяем только
+// идемпотентные вызовы — повтор комментария мог бы создать дубль.
+async function mcpRead(name, args) {
+  let lastError
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      return await mcpCall(name, args)
+    } catch (error) {
+      lastError = error
+      if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, attempt * 1000))
+    }
+  }
+  throw lastError
+}
+
+function repoOf(project) {
+  const parts = String(project.repo || '').split('/').filter(Boolean)
+  if (parts.length !== 2) {
+    throw new Error('проект ' + project.id + ': repo должен быть «owner/name», а сейчас «' + project.repo + '»')
+  }
+  return { owner: parts[0], repo: parts[1] }
+}
+
+// Набор полей задаём явно: без него list_issues не отдаёт метки, а диспетчер
+// читает конвейер именно по ним.
+const ISSUE_FIELDS = ['number', 'title', 'body', 'state', 'labels', 'created_at', 'updated_at', 'user', 'assignees']
+
+async function githubLoadIssues(project) {
+  const { owner, repo } = repoOf(project)
+  const page = await mcpRead('list_issues', {
+    owner,
+    repo,
+    state: 'OPEN',
+    perPage: 100,
+    orderBy: 'CREATED_AT',
+    direction: 'ASC',
+    fields: ISSUE_FIELDS,
+  })
+  const rows = (page && page.issues) || []
+  return rows.filter((issue) => !issue.pull_request)
+}
+
+async function githubIssue(project, number) {
+  const { owner, repo } = repoOf(project)
+  return mcpRead('issue_read', { method: 'get', owner, repo, issue_number: Number(number) })
+}
+
+async function githubIssueComments(project, number) {
+  const { owner, repo } = repoOf(project)
+  const all = []
+  for (let page = 1; page <= 10; page += 1) {
+    const rows = await mcpRead('issue_read', { method: 'get_comments', owner, repo, issue_number: Number(number), perPage: 100, page })
+    const list = Array.isArray(rows) ? rows : []
+    all.push(...list)
+    if (list.length < 100) break
+  }
+  return all
+}
+
+async function githubPostComment(project, number, body) {
+  const { owner, repo } = repoOf(project)
+  return mcpCall('add_issue_comment', { owner, repo, issue_number: Number(number), body })
+}
+
+// PR ищется по головной ветке: соглашение feature/<номер>-* — часть контракта
+// ролей, поэтому номер тикета однозначно указывает на его PR.
+async function githubFindPr(project, number) {
+  const { owner, repo } = repoOf(project)
+  const pulls = await mcpRead('list_pull_requests', { owner, repo, state: 'all', perPage: 100, sort: 'updated', direction: 'desc' })
+  const rows = Array.isArray(pulls) ? pulls : []
+  return rows.filter((pull) => pull && pull.head && String(pull.head.ref).indexOf('feature/' + number + '-') === 0)[0] || null
+}
+
+async function githubIssueLabels(project, number) {
+  const { owner, repo } = repoOf(project)
+  const answer = await mcpRead('issue_read', { method: 'get_labels', owner, repo, issue_number: Number(number) })
+  const rows = (answer && answer.labels) || []
+  return rows.map((label) => (typeof label === 'string' ? label : label && label.name)).filter(Boolean)
+}
+
+// Метки ставятся и снимаются ОДНИМ инструментом issue_write: в MCP v2 нет
+// отдельных add/remove для меток тикета, обновление принимает полный список.
+// Отсюда чтение текущего набора перед каждой правкой — иначе правка сотрёт
+// чужие метки. Пустой список отправить можно: сервер принимает `labels: []` и
+// снимает все метки, поэтому уборка «до нуля» работает (проверено на живом
+// сервере v2.0.3).
+async function githubWriteLabels(project, number, labels) {
+  const next = Array.from(new Set((labels || []).filter(Boolean)))
+  const { owner, repo } = repoOf(project)
+  return mcpCall('issue_write', { method: 'update', owner, repo, issue_number: Number(number), labels: next })
+}
+
+async function githubAddLabel(project, number, label) {
+  if (!label) return false
+  const current = await githubIssueLabels(project, number)
+  if (current.indexOf(label) !== -1) return false
+  await githubWriteLabels(project, number, current.concat([label]))
+  return true
+}
+
+async function githubDropLabels(project, number, names) {
+  const wanted = (names || []).filter(Boolean)
+  if (wanted.length === 0) return []
+  const current = await githubIssueLabels(project, number)
+  const left = current.filter((label) => wanted.indexOf(label) === -1)
+  if (left.length === current.length) return []
+  await githubWriteLabels(project, number, left)
+  return current.filter((label) => wanted.indexOf(label) !== -1)
+}
+
+async function githubDropLabel(project, number, name) {
+  if (!name) return false
+  try {
+    const dropped = await githubDropLabels(project, number, [name])
+    return dropped.length > 0
+  } catch (error) {
+    return false
+  }
 }
 
 function readTelegramConfig() {
@@ -535,30 +820,10 @@ function request(options, body) {
 
 // Чтения повторяем: сеть до GitHub отваливалась, и «состояние не
 // прочитано» превращалось в ложный вывод, будто задача не движется. Повторяем
-// только идемпотентные запросы — повтор POST мог бы создать дубль.
-async function github(method, apiPath, body) {
-  const token = readGitHubToken()
-  const attempts = (method === 'GET' || method === 'DELETE') ? 3 : 1
-  let lastError
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    try {
-      return await request({
-        host: 'api.github.com',
-        path: apiPath,
-        method,
-        headers: {
-          Authorization: 'Bearer ' + token,
-          Accept: 'application/vnd.github+json',
-          'X-GitHub-Api-Version': '2022-11-28',
-        },
-      }, body)
-    } catch (error) {
-      lastError = error
-      if (attempt < attempts) await new Promise((resolve) => setTimeout(resolve, attempt * 1000))
-    }
-  }
-  throw lastError
-}
+// только идемпотентные запросы — повтор POST мог бы создать дубль. Сам обмен с
+// GitHub идёт через MCP-сервер (см. mcpRead/mcpCall выше), поэтому здесь
+// остались только повтор и таймауты, а не HTTP.
+
 
 // Долговечный отчёт: Telegram может быть недоступен, а сводку за смену надо
 // сохранить в любом случае.
@@ -843,15 +1108,16 @@ export default {
     }
 
     // ── чтение состояния из GitHub ─────────────────────────────────────────
+    // Открытые issue проекта — инструментом list_issues. Метки приходят в
+    // ответе только когда их просили полем fields, поэтому набор полей задан в
+    // одной константе ISSUE_FIELDS рядом с самим инструментом.
 
     async function loadIssues(project) {
-      const query = '/repos/' + project.repo + '/issues?state=open&per_page=100&sort=created&direction=asc'
-      const rows = await github('GET', query)
-      return rows.filter((i) => !i.pull_request)
+      return githubLoadIssues(project)
     }
 
     async function reload(project, number) {
-      return github('GET', '/repos/' + project.repo + '/issues/' + number)
+      return githubIssue(project, number)
     }
 
     // ── заголовок роли в комментарии ───────────────────────────────────────
@@ -887,7 +1153,7 @@ export default {
     // формата не оставит половину комментариев без роли.
     async function postComment(project, number, about, text) {
       const body = '**Роль:** диспетчер · ' + about + '\n\n' + text
-      return github('POST', '/repos/' + project.repo + '/issues/' + number + '/comments', { body })
+      return githubPostComment(project, number, body)
     }
 
     // Кто реализует тикет: маршрут задаёт метка, и живёт она на тикете всю жизнь
@@ -965,8 +1231,7 @@ export default {
     // PR ищется по головной ветке: соглашение feature/<номер>-* — часть контракта
     // ролей, поэтому номер тикета однозначно указывает на его PR.
     async function findPr(project, number) {
-      const pulls = await github('GET', '/repos/' + project.repo + '/pulls?state=all&per_page=100&sort=updated&direction=desc')
-      return (pulls || []).filter((p) => p && p.head && String(p.head.ref).indexOf('feature/' + number + '-') === 0)[0] || null
+      return githubFindPr(project, number)
     }
 
     // Пути файлов в тексте замечания. Порядок расширений — от длинных к коротким:
@@ -978,10 +1243,12 @@ export default {
 
     // Пункт чеклиста ревьюера или тестировщика: `- [ ] Б1 · <path:line> — …`.
     // Галочку в нём закрывает разработчик, поэтому отмеченный пункт — уже
-    // отработанное замечание и в маршрут доработки не попадает. Шаблон здесь и
-    // в `gh_comment_edit` — дословно один и тот же: диспетчер берёт из строки
-    // маркер, инструмент подменяет его. Расхождение ломает либо галочку, либо
-    // маршрут (пункт `-[ ] Б1` без пробела обязан быть пунктом у обоих).
+    // отработанное замечание и в маршрут доработки не попадает. Диспетчер берёт
+    // маркер из строки, а разработчик правит `[ ]` на `[x]` в теле комментария и
+    // записывает тело целиком через mcp__github__update_issue_comment: этот
+    // инструмент заменяет тело, поэтому галочка ставится только правкой тела.
+    // Расхождение в шаблоне ломает либо галочку, либо маршрут (пункт `-[ ] Б1`
+    // без пробела обязан быть пунктом у обоих).
     const CHECKLIST_LINE = /^(\s*[-*+]\s*\[)([ xX])(\]\s*)(\S+)(.*)$/
 
     // Что из комментария идёт в разбор путей. Комментарий с чеклистом отдаёт
@@ -1044,14 +1311,7 @@ export default {
     // По 100 на страницу, поэтому дочитываем, пока страница полная: иначе
     // последний круг замечаний можно обрезать.
     async function issueComments(project, number) {
-      const all = []
-      for (let page = 1; page <= 10; page += 1) {
-        const rows = await github('GET', '/repos/' + project.repo + '/issues/' + number + '/comments?per_page=100&page=' + page)
-        const list = Array.isArray(rows) ? rows : []
-        all.push(...list)
-        if (list.length < 100) break
-      }
-      return all
+      return githubIssueComments(project, number)
     }
 
     // Тексты чужих комментариев: свои комментарии диспетчера — не замечания
@@ -1363,7 +1623,7 @@ export default {
       const verdict = classifyArea(project, issue)
       if (!verdict.area) return null
       const label = areaLabelOf(verdict.area, L)
-      await github('POST', '/repos/' + project.repo + '/issues/' + issue.number + '/labels', { labels: [label] })
+      await addLabel(project, issue.number, label)
       // Разметка — прогресс процесса, а не попытка исполнителя.
       projectState(project.id).attempts[issue.number] = 0
       const b = verdict.score.backend
@@ -1486,13 +1746,23 @@ export default {
     // Снять метку, которой может и не быть. Ошибку глотаем: отсутствие метки —
     // норма, а сбой сети не должен срывать шаг диспетчера.
     async function dropLabel(project, issueNumber, name) {
-      if (!name) return false
+      return githubDropLabel(project, issueNumber, name)
+    }
+
+    // Пакетное снятие: метки тикета правятся одним issue_write, поэтому один
+    // шаг уборки — одно чтение меток и одна запись, а не по запросу на метку.
+    async function dropLabels(project, issueNumber, names) {
       try {
-        await github('DELETE', '/repos/' + project.repo + '/issues/' + issueNumber + '/labels/' + encodeURIComponent(name))
+        await githubDropLabels(project, issueNumber, names)
         return true
       } catch (error) {
         return false
       }
+    }
+
+    // Поставить метку тикета. Повтор на уже стоящей метке ничего не пишет.
+    async function addLabel(project, issueNumber, name) {
+      return githubAddLabel(project, issueNumber, name)
     }
 
     // Диалог прошлых смен живёт в файле, а его сессия — в хранилище сессий.
@@ -1711,6 +1981,88 @@ export default {
       }
     }
 
+    // Сессия, в которой родился тикет. Постановку пишет не наш код: с переездом
+    // GitHub на MCP-сервер issue создаёт чужой процесс, и крючка «тикет создан» у
+    // отдела нет. Поэтому привязка ищется на первом тике, который увидел новый
+    // тикет: берётся сессия каталога проекта, чья жизнь накрывает `created_at`
+    // тикета и которая ещё ни к одному тикету не привязана (подробности — в
+    // `findDraftSession`). Запись получает `source: "issue-created"`, и расход
+    // аналитика попадает в строки тикета, а не в блок «не привязано».
+    //
+    // Окно в три дня нужно не для скорости, а для честности: тикеты, заведённые до
+    // выкатки учёта, задним числом в книгу не попадают — их история видна только
+    // блоком «восстановлено по заголовку» в отчёте.
+    const DRAFT_BIND_WINDOW_MS = 3 * 24 * 60 * 60 * 1000
+    const DRAFT_BIND_SLACK_MS = 60 * 60 * 1000
+
+    const createdAtOf = (issue) => {
+      const raw = issue && (issue.created_at || issue.createdAt)
+      return raw === undefined || raw === null ? NaN : Date.parse(raw)
+    }
+
+    async function bindDraftSessions(project, issues) {
+      const module = await loadUsageLedger()
+      if (module === null) return 0
+      let ledger
+      try {
+        ledger = module.readLedger()
+      } catch (error) {
+        state.lastError = 'книга учёта: ' + (error && error.message ? error.message : String(error))
+        return 0
+      }
+      const mine = ledger.filter((entry) => entry.project === project.id)
+      const knownIssues = new Set(mine.map((entry) => Number(entry.issue)))
+      const boundSessions = mine.map((entry) => entry.session)
+      const now = Date.now()
+      // Тикет без единой записи книги — это кандидат: у тикета с записями сессия
+      // постановки либо уже привязана, либо её привязка не нужна.
+      const candidates = (issues || []).filter((issue) => {
+        if (!issue || knownIssues.has(Number(issue.number))) return false
+        const created = createdAtOf(issue)
+        if (!Number.isFinite(created)) return false
+        return now - created <= DRAFT_BIND_WINDOW_MS
+      })
+      if (candidates.length === 0) return 0
+      const listed = module.listSessionHeads(dshHome())
+      if (listed.problems.length > 0) {
+        state.lastError = 'книга учёта: ' + listed.problems.join('; ')
+      }
+      if (listed.heads.length === 0) return 0
+      let written = 0
+      for (const issue of candidates) {
+        const head = module.findDraftSession(listed.heads, {
+          created: createdAtOf(issue),
+          cwds: [project.workspace, project.humanClone],
+          bound: boundSessions,
+          slackMs: DRAFT_BIND_SLACK_MS,
+          windowMs: DRAFT_BIND_WINDOW_MS,
+        })
+        if (head === null) continue
+        const result = module.appendLedgerEntry({
+          at: new Date().toISOString(),
+          project: project.id,
+          issue: Number(issue.number),
+          role: head.preset || 'analyst',
+          session: head.session,
+          attempt: null,
+          source: 'issue-created',
+        })
+        if (result && result.reason) {
+          state.lastError = 'книга учёта: ' + result.reason
+          continue
+        }
+        boundSessions.push(head.session)
+        knownIssues.add(Number(issue.number))
+        written += 1
+        // Привязка должна быть видна человеку: она не спросила у агента согласия и
+        // догадывается по времени, поэтому её появление записывается в журнал.
+        appendShiftLog('книга учёта: сессия постановки ' + head.session +
+          (head.preset ? ' (' + head.preset + ')' : '') + ' привязана к тикету #' + issue.number +
+          ' по времени создания тикета')
+      }
+      return written
+    }
+
     async function startSession(project, presetId, prompt, issue) {
       const key = dialogKey(project, presetId, issue.number)
       const known = state.dialogs[key]
@@ -1767,6 +2119,25 @@ export default {
         ', compose-проект ' + project.composeProject + '.'
     }
 
+    // Аргументы owner/repo для инструментов MCP: каждый инструмент GitHub
+    // требует их явно, и угадывать по git remote роли не нужно — диспетчер
+    // подставляет репозиторий проекта в само задание.
+    function repoArgs(project) {
+      const { owner, repo } = repoOf(project)
+      return '"owner": ' + JSON.stringify(owner) + ', "repo": ' + JSON.stringify(repo)
+    }
+
+    // Как роль двигает метки. В MCP у тикета нет отдельных «поставь метку» и
+    // «сними метку»: issue_write принимает полный набор меток и заменяет его
+    // целиком, поэтому без этой памятки роль ищет несуществующий инструмент или
+    // стирает чужие метки — и конвейер встаёт.
+    function labelMechanics(project, issue) {
+      return 'Метки двигаются одним инструментом: mcp__github__issue_write({ "method": "update", ' + repoArgs(project) +
+        ', "issue_number": ' + issue.number + ', "labels": ["…"] }). Он ЗАМЕНЯЕТ набор меток целиком, поэтому сначала прочитай текущие через ' +
+        'mcp__github__issue_read({ "method": "get_labels", ' + repoArgs(project) + ', "issue_number": ' + issue.number +
+        ' }) и отправь их же вместе с нужной правкой — иначе пропадут метки маршрута и фазы.'
+    }
+
     // Задание исполнителю. Ролей реализации три — полного стека, бэкендер и
     // фронтендер, — но путь, метки и отчёт у них общие: различаются границы
     // работы. Финальный шаг одинаков у всех — PR и for-code-review: передачу
@@ -1796,8 +2167,8 @@ export default {
               : 'Отдел разработки: возьми issue #' + issue.number + ' «' + issue.title + '».',
         '',
         projectHeader(project),
-        skillLine + ': прочитай issue через gh_issue, работай в ветке feature/' + issue.number + '-<слаг> от ' + project.base + ', доведи до pull request и передай на код-ревью.',
-        'Обязательный финал: первой строкой комментария — `**Роль:** <имя роли> · <о чём>` (без заголовка инструмент откажет до сетевого запроса), затем комментарий в issue (что сделано, ветка, номер PR, что не проверено), затем метка ' + L.review + ' и снятие ' + L.progress + '.',
+        skillLine + ': прочитай постановку инструментом mcp__github__issue_read({ "method": "get", ' + repoArgs(project) + ', "issue_number": ' + issue.number + ' }), работай в ветке feature/' + issue.number + '-<слаг> от ' + project.base + ', доведи до pull request инструментом mcp__github__create_pull_request и передай на код-ревью.',
+        'Обязательный финал: первой строкой комментария — `**Роль:** <имя роли> · <о чём>` (по этому заголовку диспетчер отличает твой отчёт от замечаний ревьюера), затем комментарий в issue инструментом mcp__github__add_issue_comment({ ' + repoArgs(project) + ', "issue_number": ' + issue.number + ', "body": "<первая строка — заголовок роли, дальше: что сделано, ветка, номер PR, что не проверено>" }), затем метка ' + L.review + ' и снятие ' + L.progress + '.',
         'В ' + project.base + ' и main не коммить. PR не мержить. Работай только в своей рабочей копии отдела ' + project.workspace +
           (project.humanClone ? ': в клон человека ' + project.humanClone + ' не заходить вообще.' : '.'),
         'Стенд поднимай только со своим именем проекта: docker compose -p ' + project.composeProject +
@@ -1828,9 +2199,9 @@ export default {
       }
       if (kind === 'rework') lines.splice(2, 0, 'Начни с комментариев в issue и в PR этого тикета: там причина отказа, замечания и воспроизводящая команда.')
       // Возврат закрывается галочками в чужом по роли чеклисте, а не ответными
-      // комментариями: инструмента `gh_pr_comment` у роли нет, а маршрут
-      // следующего круга читает именно непомеченные пункты.
-      if (kind === 'rework') lines.splice(2, 0, 'Свои пункты закрывай галочками в самом комментарии ревьюера или тестировщика: gh_comment_edit({ "comment_id": <id из gh_pr или gh_issue с comments: true>, "tick": ["Б1","Ф2"] }). Пункт, с которым не согласен, НЕ отмечай — аргумент идёт в тело PR через gh_pr_edit. В issue — одна короткая строка: «замечания ревью отработаны, PR #N, коммит <sha>» (после test-failed — «по замечаниям тестировщика отработано, коммит <sha>»).')
+      // комментариями: ответный комментарий не меняет маршрут, а следующий круг
+      // читает именно непомеченные пункты исходного чеклиста.
+      if (kind === 'rework') lines.splice(2, 0, 'Свои пункты закрывай галочками в самом комментарии ревьюера или тестировщика. Порядок: прочитай тело комментария — для PR mcp__github__pull_request_read({ "method": "get_comments", ' + repoArgs(project) + ', "pullNumber": <номер PR> }), для issue mcp__github__issue_read({ "method": "get_comments", ' + repoArgs(project) + ', "issue_number": ' + issue.number + ' }) — замени в нужных строках «- [ ] Б1» на «- [x] Б1», и запиши тело целиком через mcp__github__update_issue_comment({ ' + repoArgs(project) + ', "comment_id": <id>, "body": "<прочитанное тело с галочками>" }): инструмент заменяет тело, поэтому правка отправляется только целиком. Пункт, с которым не согласен, НЕ отмечай — аргумент идёт в тело PR через mcp__github__update_pull_request. В issue — одна короткая строка: «замечания ревью отработаны, PR #N, коммит <sha>» (после test-failed — «по замечаниям тестировщика отработано, коммит <sha>»).')
       if (kind === 'rework') lines.splice(2, 0, 'Это доработка №' + (projectState(project.id).rework[issue.number] || 0) + ' из ' + project.department.maxRework + ': её номер записан комментарием диспетчера в issue.')
       // Пути из замечаний — не украшение задания: по ним исполнитель сразу видит,
       // какие файлы его половины ревьюер назвал, и не ищет их в чужом дереве.
@@ -1848,6 +2219,7 @@ export default {
       if (kind === 'continue') lines.splice(2, 0, 'Сначала посмотри, что уже сделано: ветка могла остаться, коммиты могли быть запушены, в issue может быть комментарий.')
       if (kind === 'stage') lines.splice(2, 0, 'Это ступень фронтенда: прочитай комментарий бэкендера в issue и изменённые файлы PR, чтобы работать с существующими эндпоинтами, а не с выдуманными.')
       if (repeat) lines.splice(2, 0, 'Это тот же диалог, в котором шла работа по тикету: ветка, коммиты и замечания ревьюера или тестировщика уже в его истории — продолжай с этого места, заново ничего не поднимай.')
+      lines.push(labelMechanics(project, issue))
       return lines.join('\n')
     }
 
@@ -1863,18 +2235,19 @@ export default {
         '',
         projectHeader(project),
         'Действуй по скиллу mockup-delivery. Это ступень постановки, а не разработка: продуктовый код, стили приложения, схему данных и API не менять.',
-        'Прочитай постановку целиком: gh_issue({ "number": ' + issue.number + ' }) — тело, комментарии, вложения.',
+        'Прочитай постановку целиком: mcp__github__issue_read({ "method": "get", ' + repoArgs(project) + ', "issue_number": ' + issue.number + ' }) — тело и метки; обсуждение — тем же инструментом с "method": "get_comments".',
         'Ветка: feature/' + issue.number + '-<слаг> от ' + project.base + '. Если такая ветка уже есть — продолжай в ней, вторую не создавай. Работай только в рабочей копии отдела ' + project.workspace + '.',
         'Макет — только в каталоге mockups/' + issue.number + '/: index.html со статичной разметкой и стилями на токенах проекта (без сборки, без внешних зависимостей) и notes.md — экраны, состояния (пусто, загрузка, ошибка), брейкпоинты, тексты и то, что в макет не входит.',
         'Смотри, что уже есть в репозитории: палитра, шрифты, отступы, готовые компоненты. Макет должен выглядеть как продолжение продукта, а не как чужая страница.',
         'Скриншоты для человека: node C:\\Users\\DiKsu\\.dsh\\tools\\mockup-shot.mjs --html mockups/' + issue.number + '/index.html --out ' + shot + '-1440.png --width 1440 (и ещё один с --width 375). PNG в репозиторий не коммить.',
-        'Обязательный финал: первой строкой комментария — `**Роль:** дизайнер · <о чём>`; затем комментарий в issue через gh_issue_comment — что нарисовано, пути файлов макета и прикреплённые скриншоты (поле images), затем метка ' + L.mockupsReady + ' и снятие ' + L.progress + '.',
+        'Обязательный финал: первой строкой комментария — `**Роль:** дизайнер · <о чём>`; затем комментарий в issue инструментом mcp__github__add_issue_comment({ ' + repoArgs(project) + ', "issue_number": ' + issue.number + ', "body": "<заголовок роли, что нарисовано, пути файлов макета, пути PNG-скриншотов>" }) — вложение картинок MCP не умеет, поэтому скриншоты называются путями на диске рядом с комментарием; затем метка ' + L.mockupsReady + ' и снятие ' + L.progress + '.',
         'Метку ' + L.review + ' НЕ ставить и PR НЕ открывать: реализация и PR будут следующим шагом, после того как человек поставит ' + L.dev + '.',
         'В ' + project.base + ' и main не коммить, ветку не мержить' + (project.humanClone ? ', в клон человека ' + project.humanClone + ' не заходить вообще.' : '.'),
         'Если визуального слоя в задаче нет вовсе — комментарий в issue с объяснением, снять ' + L.mockup + ' и завершить ход: макет тут не нужен.',
         'Поставь себе цель, чтобы довести макет до конца: один ход не должен обрывать работу на середине.',
       ]
       if (repeat) lines.splice(2, 0, 'Это тот же диалог, где ты уже делал макет по этому тикету: посмотри свои прошлые файлы и замечания человека в комментариях — правь макет, а не начинай заново.')
+      lines.push(labelMechanics(project, issue))
       return lines.join('\n')
     }
 
@@ -1884,12 +2257,12 @@ export default {
         (repeat ? 'Отдел разработки: ПОВТОРНО проверь issue #' : 'Отдел разработки: проверь issue #') + issue.number + ' «' + issue.title + '» (метка ' + L.test + ').',
         '',
         projectHeader(project),
-        'Действуй по скиллу testing-contract: найди PR через gh_prs({ "issue": ' + issue.number + ' }), посмотри изменённые файлы через gh_pr({ "number": <номер PR>, "files": true }), разверни ветку через git worktree в отдельный каталог.',
+        'Действуй по скиллу testing-contract: найди PR инструментом mcp__github__list_pull_requests({ ' + repoArgs(project) + ', "state": "all", "perPage": 100, "sort": "updated", "direction": "desc" }) — это PR, у которого head-ветка начинается с feature/' + issue.number + '-; изменённые файлы — mcp__github__pull_request_read({ "method": "get_files", ' + repoArgs(project) + ', "pullNumber": <номер PR> }), дифф — тем же инструментом с "method": "get_diff". Разверни ветку через git worktree в отдельный каталог.',
         'Проверяй сам, а не по описанию из PR. Артефакты клади в ' + (project.artifacts || 'reports/') + '.',
         'Если в ветке есть макет постановки (mockups/' + issue.number + '/), сверь с ним экраны: раскладка, состояния (пусто, загрузка, ошибка) и тексты — это часть приёмки, расхождение и есть дефект.',
         'Стенд поднимай только со своим именем проекта: docker compose -p ' + project.composeProject +
           ' ... Без -p docker возьмёт имя из docker-compose.yml и ты задешь стенд человека на его портах и его базе.',
-        'Вердикт — комментарий в issue, первой строкой — `**Роль:** тестировщик · <о чём>` (без заголовка инструмент откажет до сетевого запроса): прошло — метка ' + L.ok + '; не прошло — ' + L.failed + ' и наименьшая воспроизводящая команда. В обоих случаях сними ' + L.test + ': тикет не должен остаться в очереди тестировщика.',
+        'Вердикт — комментарий в issue инструментом mcp__github__add_issue_comment({ ' + repoArgs(project) + ', "issue_number": ' + issue.number + ', "body": "…" }), первой строкой — `**Роль:** тестировщик · <о чём>`: прошло — метка ' + L.ok + '; не прошло — ' + L.failed + ' и наименьшая воспроизводящая команда. В обоих случаях сними ' + L.test + ': тикет не должен остаться в очереди тестировщика.',
         'Продуктовый код и PR не править, PR не мержить. Поставь себе цель, чтобы довести проверку до конца.',
       ]
       // Дефекты — чеклистом в том же вердикте, теми же номерами, что у
@@ -1902,6 +2275,7 @@ export default {
         lines.push('Если прошлый дефект исправлен и новых нет — метка ' + L.ok + '.')
       }
       lines.push(reworkCounterLine(project, issue))
+      lines.push(labelMechanics(project, issue))
       return lines.join('\n')
     }
 
@@ -1926,9 +2300,9 @@ export default {
         (repeat ? 'Отдел разработки: ПОВТОРНО проверь код по issue #' : 'Отдел разработки: проверь код по issue #') + issue.number + ' «' + issue.title + '» (метка ' + L.review + ').',
         '',
         projectHeader(project),
-        'Действуй по скиллу code-review: найди PR через gh_prs({ "issue": ' + issue.number + ' }), прочитай изменённые файлы через gh_pr({ "number": <номер PR>, "files": true }), затем сам дифф и код вокруг него в рабочей копии отдела ' + project.workspace + '.',
-        'Замечания — ОДНИМ комментарием В PR через gh_pr_comment({ "number": <номер PR>, "body": "<заголовок, вердикт, сводка, чеклист>" }), первой строкой — `**Роль:** код-ревьюер · <о чём>`, второй — строка вердикта. Внутри — чеклист двумя секциями `### Бэкенд` и `### Фронтенд`, пункты `- [ ] Б1 · <path:line> — что не так · Случай: … · Правка: … · Если не править: …`: номер — префикс половины (Б/Ф) и сквозной номер по секции. По одному комментарию на замечание НЕ пиши: по непомеченным пунктам этого одного комментария диспетчер строит маршрут доработки. Пункт, найденный позже, дописывай в ТОТ ЖЕ комментарий через gh_comment_edit({ "comment_id": <id из gh_pr({comments:true})>, "body": "<прочитанное тело с новым пунктом>" }).',
-        'Обязательный финал: первой строкой комментария — `**Роль:** код-ревьюер · <о чём>` (без заголовка инструмент откажет до сетевого запроса), второй строкой — вердикт `SHIP` / `FIX: <n>` / `BLOCKED` (разбор примет его и в самом заголовке: `**Роль:** код-ревьюер · вердикт FIX: 2`); решение — меткой: принял → ' + L.test + ' и снять ' + L.review + '; нужны правки → ' + L.dev + ' и снять ' + L.review + '. В issue — одна короткая строка, и ничего больше: «ревью пройдено, PR #<номер>» либо «вернул: <n> пунктов в комментарии PR #<номер>».',
+        'Действуй по скиллу code-review: найди PR инструментом mcp__github__list_pull_requests({ ' + repoArgs(project) + ', "state": "all", "perPage": 100, "sort": "updated", "direction": "desc" }) — это PR, у которого head-ветка начинается с feature/' + issue.number + '-; изменённые файлы — mcp__github__pull_request_read({ "method": "get_files", ' + repoArgs(project) + ', "pullNumber": <номер PR> }), дифф — тем же инструментом с "method": "get_diff"; затем сам дифф и код вокруг него в рабочей копии отдела ' + project.workspace + '.',
+        'Замечания — ОДНИМ комментарием В PR через mcp__github__add_issue_comment({ ' + repoArgs(project) + ', "issue_number": <номер PR>, "body": "<заголовок, вердикт, сводка, чеклист>" }) — PR для этого инструмента такой же issue. Первой строкой — `**Роль:** код-ревьюер · <о чём>`, второй — строка вердикта. Внутри — чеклист двумя секциями `### Бэкенд` и `### Фронтенд`, пункты `- [ ] Б1 · <path:line> — что не так · Случай: … · Правка: … · Если не править: …`: номер — префикс половины (Б/Ф) и сквозной номер по секции. По одному комментарию на замечание НЕ пиши: по непомеченным пунктам этого одного комментария диспетчер строит маршрут доработки. Пункт, найденный позже, дописывай в ТОТ ЖЕ комментарий: прочитай его тело через mcp__github__pull_request_read({ "method": "get_comments", ' + repoArgs(project) + ', "pullNumber": <номер PR> }) и запиши целиком с новым пунктом через mcp__github__update_issue_comment({ ' + repoArgs(project) + ', "comment_id": <id>, "body": "<прочитанное тело с новым пунктом>" }).',
+        'Обязательный финал: первой строкой комментария — `**Роль:** код-ревьюер · <о чём>`, второй строкой — вердикт `SHIP` / `FIX: <n>` / `BLOCKED` (разбор примет его и в самом заголовке: `**Роль:** код-ревьюер · вердикт FIX: 2`); решение — меткой: принял → ' + L.test + ' и снять ' + L.review + '; нужны правки → ' + L.dev + ' и снять ' + L.review + '. В issue — одна короткая строка, и ничего больше: «ревью пройдено, PR #<номер>» либо «вернул: <n> пунктов в комментарии PR #<номер>».',
         'Если в ветке PR есть макет постановки (mockups/<номер>/), сверь изменение с ним: раскладка, состояния и тексты из макета — часть задания, расхождение без объяснения в PR — замечание.',
         'Продуктовый код не править, PR не мержить, стенд не поднимать — прогон и приёмочные слои принадлежат тестировщику.',
         'В ' + project.base + ' и main не коммитить и не переключать ветки в рабочей копии: ревью читает, а не строит.' +
@@ -1944,6 +2318,7 @@ export default {
           'Это ПЕРВАЯ половина тикета полного стека: фронтенд-часть ещё не начата. Ревьюй бэкенд-часть по существу — контракт, обработчики, данные, миграции. Отсутствие экранов, кнопок и клиентской связки дефектом не считай: вторая половина идёт следом, в той же ветке.')
         lines.push('Принял — ' + L.test + ' означает «половина принята»: диспетчер сам передаст тикет фронтенду, тестировщику он уйдёт только после второй половины.')
       }
+      lines.push(labelMechanics(project, issue))
       return lines.join('\n')
     }
 
@@ -1957,10 +2332,10 @@ export default {
         (repeat ? 'Отдел разработки: ПОВТОРНО слей PR по issue #' : 'Отдел разработки: слей PR по issue #') + issue.number + ' «' + issue.title + '» (метка ' + L.ok + ').',
         '',
         projectHeader(project),
-        'Действуй по скиллу devops-delivery, раздел «Слияние pull request»: найди PR через gh_prs({ "issue": ' + issue.number + ' }), прочитай вердикт тестировщика в issue и само изменение через gh_pr({ "number": <PR>, "files": true }).',
+        'Действуй по скиллу devops-delivery, раздел «Слияние pull request»: найди PR инструментом mcp__github__list_pull_requests({ ' + repoArgs(project) + ', "state": "all", "perPage": 100, "sort": "updated", "direction": "desc" }) — это PR, у которого head-ветка начинается с feature/' + issue.number + '-; вердикт тестировщика читай в issue через mcp__github__issue_read({ "method": "get_comments", ' + repoArgs(project) + ', "issue_number": ' + issue.number + ' }), изменение — через mcp__github__pull_request_read({ "method": "get_files", ' + repoArgs(project) + ', "pullNumber": <PR> }).',
         'Перед слиянием убери артефакты постановки: если в ветке PR есть каталог mockups/' + issue.number + ', удали его отдельным коммитом (git rm -r mockups/' + issue.number + ', сообщение «Убрать макеты постановки (#' + issue.number + ')»), запушь в ветку и только потом сливай. В ' + project.base + ' макеты попадать не должны; в истории git они остаются. Если каталога нет — пропусти этот шаг молча.',
-        'Слияние — gh_pr_merge({ "number": <PR> }): merge-коммит в ' + project.base + ', ветка задачи удаляется. Force-push, ребейз и правки кода в чужой ветке запрещены.',
-        'Обязательный финал: первой строкой комментария — `**Роль:** DevOps-инженер · <о чём>`; затем комментарий в issue с sha merge-коммита и удалённой веткой, затем снять ' + L.ok + ', снять ' + L.phaseFrontend + ' (если он есть) и поставить ' + L.merged + '.',
+        'Слияние — mcp__github__merge_pull_request({ ' + repoArgs(project) + ', "pullNumber": <PR>, "merge_method": "merge" }): merge-коммит в ' + project.base + ', ветка задачи удаляется. Force-push, ребейз и правки кода в чужой ветке запрещены.',
+        'Обязательный финал: первой строкой комментария — `**Роль:** DevOps-инженер · <о чём>`; затем комментарий в issue инструментом mcp__github__add_issue_comment({ ' + repoArgs(project) + ', "issue_number": ' + issue.number + ', "body": "<sha merge-коммита и удалённая ветка>" }), затем снять ' + L.ok + ', снять ' + L.phaseFrontend + ' (если он есть) и поставить ' + L.merged + '.',
         'PR нет или вердикт тестировщика не зелёный — комментарий в issue и остановка: это сломанная передача, её разбирает человек.',
         'PR конфликтует с ' + project.base + ' — комментарий с конфликтующими файлами, метка ' + L.dev + ' вместо ' + L.ok + ': тикет возвращается разработчику, слияние не форсируется.',
         'PR уже слит (человеком раньше) — это не ошибка: комментарий с sha и метка ' + L.merged + ', снять ' + L.ok + '.',
@@ -1969,6 +2344,7 @@ export default {
         'Поставь себе цель, чтобы довести слияние до конца: тикет не должен остаться без метки.',
       ]
       if (repeat) lines.splice(2, 0, 'Это тот же диалог, где ты уже сливал этот тикет: проверь, не слит ли PR уже, и не дублируй слияние.')
+      lines.push(labelMechanics(project, issue))
       return lines.join('\n')
     }
 
@@ -1991,14 +2367,11 @@ export default {
         await postComment(project, issue.number, 'PR уже слит руками',
           'PR #' + pr.number + ' уже слит (' + pr.merged_at +
             ') — снимаю ' + L.ok + ' и ставлю ' + L.merged + ' без сессии DevOps-инженера.')
-        await github('POST', '/repos/' + project.repo + '/issues/' + issue.number + '/labels', { labels: [L.merged] })
-        await dropLabel(project, issue.number, L.ok)
-        await dropLabel(project, issue.number, L.phaseFrontend)
-        await dropLabel(project, issue.number, L.frontend)
+        await addLabel(project, issue.number, L.merged)
         // Макет постановки ушёл в историю вместе со слиянием: метки ступени
-        // больше ничего не значат и только путают следующий шаг.
-        await dropLabel(project, issue.number, L.mockup)
-        await dropLabel(project, issue.number, L.mockupsReady)
+        // больше ничего не значат и только путают следующий шаг. Снимаем их
+        // одним запросом: набор меток тикета правится целиком.
+        await dropLabels(project, issue.number, [L.ok, L.phaseFrontend, L.frontend, L.mockup, L.mockupsReady])
         const st = projectState(project.id)
         if (st.run) {
           st.run.entries.push({
@@ -2038,9 +2411,8 @@ export default {
         if (has(issue, L.review) && pr) return null
         const fromLabel = has(issue, L.test) ? L.test : L.review
         const reason = pr ? 'бэкенд-часть прошла код-ревью' : 'бэкенд-части в постановке не было'
-        await dropLabel(project, issue.number, fromLabel)
-        await dropLabel(project, issue.number, L.review)
-        await github('POST', '/repos/' + project.repo + '/issues/' + issue.number + '/labels', { labels: [L.frontend] })
+        await dropLabels(project, issue.number, [fromLabel, L.review])
+        await addLabel(project, issue.number, L.frontend)
         // Передача — это прогресс диспетчера, а не неудачная попытка агента:
         // счётчик обнуляем, иначе вторая половина сгорала бы на первом же шаге.
         projectState(project.id).attempts[issue.number] = 0
@@ -2108,11 +2480,8 @@ export default {
     // «снят → возвращён → снят» крутится каждый тик.
     async function dropFromPipeline(project, issue) {
       const L = project.labels
-      for (const name of [L.progress, L.review, L.failed, L.test, L.frontend, L.phaseFrontend, L.ok, L.dev, L.mockup, L.mockupsReady]) {
-        try {
-          await github('DELETE', '/repos/' + project.repo + '/issues/' + issue.number + '/labels/' + encodeURIComponent(name))
-        } catch (error) { /* метки могло и не быть */ }
-      }
+      // Одна правка на всю уборку: набор меток тикета пишется целиком.
+      await dropLabels(project, issue.number, [L.progress, L.review, L.failed, L.test, L.frontend, L.phaseFrontend, L.ok, L.dev, L.mockup, L.mockupsReady])
       for (const presetId of ['dev-fullstack', 'dev-backend', 'dev-frontend', 'design', 'tester', 'code-review', 'devops-delivery']) {
         forgetDialog(project, presetId, issue.number)
       }
@@ -2193,7 +2562,7 @@ export default {
       // готовому макету задача уйдёт в разработку сама.
       if (role === 'design' && (decision.kind === 'mockup' || decision.kind === 'mockup-rework')) {
         const repeat = existingDialog(project, 'design', issue.number)
-        await github('POST', '/repos/' + project.repo + '/issues/' + issue.number + '/labels', { labels: [L.progress] })
+        await addLabel(project, issue.number, L.progress)
         const sessionId = await startSession(project, 'design', mockupPrompt(project, issue, repeat), issue)
         st.session = { role: 'design', issue: issue.number, title: issue.title, sessionId, startedAt: new Date().toISOString() }
         st.run.sessions = (st.run.sessions || 0) + 1
@@ -2234,24 +2603,20 @@ export default {
         // Захват нормализуем здесь, а не в агенте: у конвейера должен оставаться
         // ровно один активный маркер, иначе следующий шаг неоднозначен.
         if (kind === 'new' || kind === 'rework' || kind === 'stage') {
-          await github('POST', '/repos/' + project.repo + '/issues/' + issue.number + '/labels', { labels: [L.progress] })
+          await addLabel(project, issue.number, L.progress)
           // Возврат из ревью приходит с ready-for-dev, из теста — с test-failed,
           // ступень фронтенда — с ready-for-frontend; снимаем всё, чтобы на тикете
           // не осталось чужого шага.
           const stale = [L.dev, L.failed, L.review]
           if (kind === 'stage') stale.push(L.frontend)
-          for (const name of stale) {
-            try {
-              await github('DELETE', '/repos/' + project.repo + '/issues/' + issue.number + '/labels/' + encodeURIComponent(name))
-            } catch (error) { /* метки могло и не быть */ }
-          }
+          await dropLabels(project, issue.number, stale)
         }
         // Фаза фронтенда полного стека помечается меткой, которая переживает
         // in-progress: по ней диспетчер понимает, кому продолжать и кому
         // возвращать доработку, если ход завис или ревьюер вернул тикет.
         if (role === 'dev-frontend' && has(issue, L.areaFullstack)) {
           try {
-            await github('POST', '/repos/' + project.repo + '/issues/' + issue.number + '/labels', { labels: [L.phaseFrontend] })
+            await addLabel(project, issue.number, L.phaseFrontend)
           } catch (error) {
             state.lastError = 'метка фазы фронтенда: ' + (error && error.message ? error.message : String(error))
           }
@@ -2446,6 +2811,15 @@ export default {
       }
 
       const issues = await loadIssues(project)
+
+      // Сессию постановки привязываем до раздачи: новый тикет входит в конвейер в
+      // том же тике, а привязка нужна раньше, чем по нему пойдёт расход ролей.
+      // Ошибка книги не должна останавливать смену — она уже названа в lastError.
+      try {
+        await bindDraftSessions(project, issues)
+      } catch (error) {
+        state.lastError = 'книга учёта: ' + (error && error.message ? error.message : String(error))
+      }
 
       // Тикет, снятый с конвейера, ждёт человека. Признак, что человек вернул его
       // в работу, один — метка ready-for-dev: её ставит только человек. Тогда
@@ -2867,6 +3241,10 @@ export default {
     ctx.effect(() => tools.register(tickTool), 'dev-department:tick')
     ctx.effect(() => tools.register(summaryTool), 'dev-department:summary')
     ctx.effect(() => tools.register(workspacesTool), 'dev-department:workspaces')
+
+    // Плагин выгружается (перезапуск профиля, HMR) — сервер GitHub гасим сами:
+    // иначе осиротевший процесс держал бы соединение до закрытия приложения.
+    ctx.effect(() => () => mcpReset(), 'dev-department:mcp')
 
     ctx.effect(() => ctx.interval(() => {
       step({}).catch((error) => { state.lastError = String(error && error.message ? error.message : error) })

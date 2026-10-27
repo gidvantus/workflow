@@ -46,3 +46,24 @@
           - 'C:\Users\DiKsu\.dsh\mcp\playwright-mcp\output'
         cwd: 'C:\Users\DiKsu\.dsh\mcp\playwright-mcp'
         failOnStartupError: false
+
+    # GitHub MCP (github/github-mcp-server): единственный путь к GitHub для
+    # агентов и диспетчера. Нативная сборка v2.0.3 под Windows (без Docker).
+    # Ключ лежит рядом с сервером — ~/.dsh/mcp/github-mcp-server/token — и
+    # читается здесь при загрузке строки, чтобы не дублировать его в конфиге.
+    # Тулсеты: default (context, copilot, issues, pull_requests, repos, users) и
+    # labels — конвейер отдела разработки живёт в метках. Инструменты видны
+    # модели как mcp__github__<tool>.
+    - id: mcp-github
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: github
+        transport: stdio
+        command: 'C:\Users\DiKsu\.dsh\mcp\github-mcp-server\github-mcp-server.exe'
+        args:
+          - 'stdio'
+          - '--toolsets'
+          - 'default,labels'
+        env:
+          GITHUB_PERSONAL_ACCESS_TOKEN: !!js 'process.getBuiltinModule("node:fs").readFileSync("C:/Users/DiKsu/.dsh/mcp/github-mcp-server/token", "utf8").trim()'
+        failOnStartupError: false

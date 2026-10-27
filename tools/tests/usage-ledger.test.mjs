@@ -270,6 +270,67 @@ check('кэш-чтение считается отдельным тарифом'
 check('мелкая цена не превращается в ноль', ledger.formatCost(0.0004), '$0.0004')
 check('обычная цена в центах', ledger.formatCost(1.2345), '$1.23')
 
+// ── сессия, в которой родился тикет ─────────────────────────────────────────
+
+console.log('\n=== сессия постановки: заголовок на диске и выбор по времени ===')
+// Заголовок сессии — первое событие `session`: в нём `cwd`, `agentPreset` и
+// `createdAt`. Целую стенограмму для привязки читать не нужно и нельзя — она тянет
+// мегабайты.
+const bindHome = path.join(process.cwd(), '.usage-ledger-bind-home')
+fs.rmSync(bindHome, { recursive: true, force: true })
+const ISSUE_AT = new Date('2026-10-26T09:00:00Z').getTime()
+const headDir = (workspace, id, createdAt, updatedAt, cwd) => {
+  const dir = writeTranscript(bindHome, workspace, id, [
+    { type: 'session', version: 3, id: 'session-' + id, createdAt, cwd: cwd || 'D:\\Agents\\Workflow', agentPreset: 'analyst' },
+    msg(1, 1, 400, 40),
+  ])
+  const file = path.join(dir, 'session.v3.jsonl.zstd')
+  const at = new Date(updatedAt)
+  fs.utimesSync(file, at, at)
+  return file
+}
+const BIND_A = '11111111-1111-4111-8111-111111111111'
+const BIND_B = '22222222-2222-4222-8222-222222222222'
+const BIND_OLD = '33333333-3333-4333-8333-333333333333'
+// Ранняя сессия человека: началась за сутки до тикета и живёт до сих пор.
+headDir('--D-Agents-Workflow--', BIND_A, ISSUE_AT - 24 * 3600 * 1000, ISSUE_AT + 3600 * 1000)
+// Сессия постановки: началась за десять минут до тикета — она и должна победить.
+headDir('--D-Agents-Workflow--', BIND_B, ISSUE_AT - 10 * 60 * 1000, ISSUE_AT + 5 * 60 * 1000)
+// Сессия из чужой рабочей области: другой каталог, к проекту не относится.
+headDir('--Elsewhere--', BIND_OLD, ISSUE_AT - 5 * 60 * 1000, ISSUE_AT + 5 * 60 * 1000, 'D:\\Agents\\Vahta')
+
+const listed = ledger.listSessionHeads(bindHome)
+check('заголовки всех сессий прочитаны', listed.heads.length, 3)
+check('заголовок несёт каталог и пресет', { cwd: listed.heads[0].cwd, preset: listed.heads[0].preset },
+  { cwd: 'D:\\Agents\\Workflow', preset: 'analyst' })
+check('в заголовке нет мусора от вызовов', listed.problems, [])
+
+const workspace = 'D:\\Agents\\Workflow'
+const picked = ledger.findDraftSession(listed.heads, {
+  created: ISSUE_AT,
+  cwds: [workspace, ''],
+  bound: [],
+})
+check('выбрана самая поздняя сессия, накрывающая рождение тикета', picked && picked.session, BIND_B)
+check('чужая рабочая область не выбрана', picked.session === BIND_OLD, false)
+// Уже привязанная сессия повторно не выбирается: очередь доходит до следующей,
+// которая накрывает тот же момент (в жизни это следующий по времени диалог).
+check('уже привязанная сессия не выбирается повторно',
+  ledger.findDraftSession(listed.heads, { created: ISSUE_AT, cwds: [workspace], bound: [BIND_B] }).session === BIND_B,
+  false)
+check('без подходящего каталога — никого', ledger.findDraftSession(listed.heads, {
+  created: ISSUE_AT, cwds: ['D:\\Other'], bound: [],
+}), null)
+check('неразбираемая дата тикета — никого', ledger.findDraftSession(listed.heads, {
+  created: NaN, cwds: [workspace], bound: [],
+}), null)
+// Окно: тикет, заведённый через неделю после начала сессии, к ней не относится —
+// иначе долго живущий диалог человека забирал бы себе все новые тикеты.
+check('сессия вне окна не притягивает тикет', ledger.findDraftSession(listed.heads, {
+  created: ISSUE_AT + 7 * 24 * 3600 * 1000, cwds: [workspace], bound: [], windowMs: 3 * 24 * 3600 * 1000,
+}), null)
+fs.rmSync(bindHome, { recursive: true, force: true })
+
 console.log(failures === 0 ? '\nВСЕ ПРОВЕРКИ ПРОШЛИ' : '\nПРОВАЛОВ: ' + failures)
 fs.rmSync(home, { recursive: true, force: true })
 fs.rmSync(homeEmpty, { recursive: true, force: true })

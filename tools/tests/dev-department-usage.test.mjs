@@ -21,7 +21,8 @@ const home = path.join(process.cwd(), '.dev-department-usage-home')
 fs.rmSync(home, { recursive: true, force: true })
 const WORKSPACE = path.join(home, 'workspace')
 fs.mkdirSync(path.join(WORKSPACE, '.git'), { recursive: true })
-fs.writeFileSync(path.join(home, 'github.token'), 'test-token\n')
+fs.mkdirSync(path.join(home, 'mcp', 'github-mcp-server'), { recursive: true })
+fs.writeFileSync(path.join(home, 'mcp', 'github-mcp-server', 'token'), 'test-token\n')
 fs.writeFileSync(path.join(home, 'telegram.json'), JSON.stringify({ token: 't', chatId: '1' }))
 fs.writeFileSync(path.join(home, 'projects.json'), JSON.stringify({
   version: 1,
@@ -66,54 +67,126 @@ const issues = new Map()
 const comments = []
 const telegram = []
 
-function respond(options, payload) {
+// Диспетчер говорит с GitHub только по MCP (с переездом GitHub на сервер), поэтому
+// поддельный сервер отвечает на те же инструменты, что и штатный
+// github-mcp-server: list_issues, issue_read, add_issue_comment, list_pull_requests,
+// issue_write. HTTP к api.github.com не перехватывается: если диспетчер вернётся к
+// своему REST-клиенту, тест упадёт на реальной сети, а не тихо пройдёт на заглушке.
+const mcpCalls = []
+
+function replyText(payload) {
+  return { content: [{ type: 'text', text: JSON.stringify(payload) }], isError: false }
+}
+
+function replyError(message) {
+  return { content: [{ type: 'text', text: message }], isError: true }
+}
+
+function issueShape(issue) {
+  return {
+    number: issue.number,
+    title: issue.title,
+    body: issue.body || '',
+    state: issue.state === 'open' ? 'OPEN' : 'CLOSED',
+    labels: (issue.labels || []).slice(),
+    created_at: issue.created_at || '2026-10-01T00:00:00Z',
+    updated_at: issue.updated_at || '2026-10-01T00:00:00Z',
+    user: { login: 'gidvantus' },
+    assignees: [],
+  }
+}
+
+function mcpTool(name, args) {
+  mcpCalls.push({ name, args })
+  if (name === 'list_issues') {
+    const open = [...issues.values()].filter((i) => i.state === 'open').sort((a, b) => a.number - b.number)
+    return replyText({ issues: open.map(issueShape), totalCount: open.length, pageInfo: { hasNextPage: false } })
+  }
+  if (name === 'issue_read') {
+    const issue = issues.get(Number(args.issue_number))
+    if (!issue) return replyError('failed to get issue: 404 Not Found')
+    if (args.method === 'get') return replyText(issueShape(issue))
+    if (args.method === 'get_labels') {
+      const labels = issue.labels || []
+      return replyText({ labels: labels.map((label) => ({ name: label })), totalCount: labels.length })
+    }
+    if (args.method === 'get_comments') {
+      const page = Number(args.page || 1)
+      const perPage = Number(args.perPage || 30)
+      const all = comments.filter((c) => c.number === issue.number)
+      return replyText(all.slice((page - 1) * perPage, page * perPage)
+        .map((c, at) => ({ id: 1000 + at, body: c.body, user: { login: c.user } })))
+    }
+    return replyError('unsupported method ' + args.method)
+  }
+  if (name === 'add_issue_comment') {
+    const issue = issues.get(Number(args.issue_number))
+    if (!issue) return replyError('failed to create comment: 404 Not Found')
+    comments.push({ number: issue.number, body: args.body, user: 'dispatcher' })
+    return replyText({ id: 5000 + comments.length, url: 'https://github.com/x/y/issues/' + issue.number })
+  }
+  if (name === 'list_pull_requests') return replyText([])
+  if (name === 'issue_write') {
+    const issue = issues.get(Number(args.issue_number))
+    if (!issue) return replyError('failed to update issue: 404 Not Found')
+    // Как у настоящего сервера: набор меток ЗАМЕНЯЕТСЯ целиком.
+    if (args.method === 'update' && Array.isArray(args.labels)) issue.labels = args.labels.slice()
+    return replyText({ id: String(issue.number), url: 'https://github.com/x/y/issues/' + issue.number })
+  }
+  return replyError('unknown tool ' + name)
+}
+
+// Подмена spawn: поддельный сервер MCP живёт в том же процессе. Штатный диспетчер
+// импортирует spawn из node:child_process, поэтому правим сам модуль и
+// синхронизируем именованные экспорты (syncBuiltinESMExports).
+const { createRequire } = await import('node:module')
+const { syncBuiltinESMExports } = await import('node:module')
+const requireCjs = createRequire(import.meta.url)
+const childProcess = requireCjs('node:child_process')
+childProcess.spawn = () => {
+  const stdoutHandlers = []
+  const child = {
+    stdout: {
+      setEncoding() {},
+      on(event, fn) { if (event === 'data') stdoutHandlers.push(fn) },
+    },
+    stderr: { setEncoding() {}, on() {} },
+    stdin: {
+      writable: true,
+      write(line) {
+        let message
+        try { message = JSON.parse(line) } catch (error) { return }
+        setImmediate(() => {
+          let answer
+          if (message.method === 'initialize') {
+            answer = {
+              jsonrpc: '2.0', id: message.id,
+              result: { protocolVersion: '2025-06-18', capabilities: {}, serverInfo: { name: 'fake-github-mcp', version: '0.0.0' } },
+            }
+          } else if (message.method === 'tools/call') {
+            answer = { jsonrpc: '2.0', id: message.id, result: mcpTool(message.params.name, message.params.arguments || {}) }
+          } else {
+            return
+          }
+          for (const handler of stdoutHandlers) handler(JSON.stringify(answer) + '\n')
+        })
+        return true
+      },
+    },
+    on() { return child },
+    kill() {},
+  }
+  return child
+}
+syncBuiltinESMExports()
+
+// Telegram по-прежнему идёт HTTP: его канал не менялся.
+function respondTelegram(options, payload) {
   if (options.host === 'api.telegram.org') {
     telegram.push(JSON.parse(payload).text)
     return { statusCode: 200, body: '{"ok":true}' }
   }
-  const url = new URL('https://api.github.com' + options.path)
-  const parts = url.pathname.split('/').filter(Boolean)
-  const body = payload ? JSON.parse(payload) : null
-  if (parts[0] !== 'repos') return { statusCode: 404, body: '{"message":"nf"}' }
-  if (parts[3] === 'pulls') return { statusCode: 200, body: '[]' }
-  if (parts[3] !== 'issues') return { statusCode: 404, body: '{"message":"nf"}' }
-  const tail = parts.slice(4)
-  if (tail.length === 0) {
-    if (options.method === 'POST') {
-      const number = 900 + issues.size
-      const createdIssue = {
-        number, title: body.title, body: body.body, state: 'open',
-        labels: [], assignees: [], comments: 0,
-        updated_at: '2026-10-26T12:00:00Z',
-        html_url: 'https://github.com/gidvantus/workflow/issues/' + number,
-      }
-      issues.set(number, createdIssue)
-      return { statusCode: 201, body: JSON.stringify(createdIssue) }
-    }
-    return { statusCode: 200, body: JSON.stringify([...issues.values()].filter((i) => i.state === 'open')) }
-  }
-  const issue = issues.get(Number(tail[0]))
-  if (!issue) return { statusCode: 404, body: '{"message":"nf"}' }
-  if (tail.length === 1) return { statusCode: 200, body: JSON.stringify(issue) }
-  if (tail[1] === 'comments') {
-    if (options.method === 'GET') {
-      return { statusCode: 200, body: JSON.stringify(comments.filter((c) => c.number === issue.number)) }
-    }
-    comments.push({ number: issue.number, body: body.body })
-    return { statusCode: 201, body: '{}' }
-  }
-  if (tail[1] === 'labels') {
-    if (options.method === 'POST') {
-      for (const label of body.labels) if (!issue.labels.includes(label)) issue.labels.push(label)
-      return { statusCode: 200, body: '{}' }
-    }
-    if (options.method === 'DELETE') {
-      const name = decodeURIComponent(tail[2] || '')
-      issue.labels = issue.labels.filter((l) => l !== name)
-      return { statusCode: 200, body: '{}' }
-    }
-  }
-  return { statusCode: 404, body: '{"message":"nf"}' }
+  return { statusCode: 500, body: '{"message":"неожиданный HTTP: диспетчер должен ходить в GitHub только через MCP"}' }
 }
 
 https.request = (options, callback) => ({
@@ -122,7 +195,7 @@ https.request = (options, callback) => ({
   destroy() { return this },
   end(payload) {
     process.nextTick(() => {
-      const result = respond(options, payload)
+      const result = respondTelegram(options, payload)
       const res = {
         statusCode: result.statusCode,
         on(event, fn) {
@@ -455,53 +528,96 @@ check('числа прочитаны со стенограммы', [diskRow.turn
 check('замечаний по целой стенограмме нет', row.usage.problems, [])
 check('итог карточки по стенограмме', row.usage.totals, { in: 1000, out: 100, cacheRead: 0, cacheWrite: 0 })
 
-// ── сценарий 5: привязка аналитика при создании постановки ──────────────────
-// Вторая точка записи в книгу: сессию аналитика открывает человек, номера тикета в
-// её заголовке ещё нет, поэтому привязка появляется только здесь.
+// ── сценарий 5: сессия постановки привязывается к тикету ────────────────────
+// Своего крючка «тикет создан» у отдела больше нет: постановку создаёт MCP-сервер
+// (чужой процесс), а сессию открывает человек, и номера тикета в её заголовке ещё
+// нет. Поэтому привязку даёт первый тик, увидевший новый тикет: он берёт сессию
+// каталога проекта, чья жизнь накрывает `created_at` тикета и которая ещё ни к
+// какому тикету не привязана.
 
-console.log('\n=== сценарий 5: аналитик пишет привязку при создании тикета ===')
-const analystFile = path.join(process.cwd(), '..', '..', 'agent-presets', 'analyst', 'github.mjs')
-const analystMod = await import('file:///' + analystFile.replace(/\\/g, '/') + '?v=' + Date.now())
-const analystTools = []
-analystMod.default.apply({
-  get: (name) => (name === 'tools' ? { register(tool) { analystTools.push(tool) } } : services[name]),
-  effect(fn) { fn(); return () => {} },
+console.log('\n=== сценарий 5: сессия постановки привязывается к тикету ===')
+
+// Сессия постановки: каталог проекта, пресет аналитика. Первое событие стенограммы —
+// `session` с `cwd`, `agentPreset` и `createdAt`; его и читает привязка.
+function writeSessionHead(id, options) {
+  const opts = options || {}
+  const dir = path.join(home, 'sessions', '--D-Agents-Workflow--', 'session-' + id)
+  fs.mkdirSync(dir, { recursive: true })
+  const file = path.join(dir, 'session.v3.jsonl.zstd')
+  const head = {
+    type: 'session',
+    version: 3,
+    id: 'session-' + id,
+    createdAt: opts.createdAt || Date.now(),
+    cwd: opts.cwd || WORKSPACE,
+    agentPreset: opts.preset || 'analyst',
+  }
+  const rows = [head, msg(1, 1, 400, 40)]
+  fs.writeFileSync(file, zlib.zstdCompressSync(Buffer.from(rows.map((r) => JSON.stringify(r) + '\n').join(''), 'utf8')))
+  // Время последней записи — это «когда сессия ещё жила». Часы в тесте поддельные,
+  // поэтому mtime ставим руками: иначе привязка зависела бы от настоящего времени.
+  const at = new Date(opts.updatedAt || Date.now())
+  fs.utimesSync(file, at, at)
+  return id
+}
+
+issues.clear()
+writeBook([])
+surfaces.clear()
+const ANALYST_BIND = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'
+writeSessionHead(ANALYST_BIND)
+issues.set(40, {
+  number: 40, title: 'Постановка аналитика', state: 'open', body: 'постановка',
+  labels: ['ready-for-dev', 'area:frontend'], assignees: [],
+  created_at: new Date().toISOString(),
 })
-const analystCreate = analystTools.find((tool) => tool.name === 'gh_issue_create')
-check('инструмент создания постановки есть', !!analystCreate, true)
+app = await boot()
+step = await app.tick()
+check('новый тикет выдан роли', step.action, 'dispatched')
+const bound = readBook().find((entry) => entry.issue === 40 && entry.source === 'issue-created')
+check('сессия постановки привязана к тикету', {
+  project: bound && bound.project,
+  issue: bound && bound.issue,
+  role: bound && bound.role,
+  session: bound && bound.session,
+  source: bound && bound.source,
+}, { project: 'workflow', issue: 40, role: 'analyst', session: ANALYST_BIND, source: 'issue-created' })
 
-const analystSession = 'session-cccccccc-cccc-4ccc-8ccc-cccccccccccc'
-const createdIssue = JSON.parse(await analystCreate.execute(
-  { title: 'Новая постановка', body: '## Промт для разработчика\n…' },
-  { agent: { id: analystSession } },
-))
-const analystEntry = readBook().find((entry) => entry.role === 'analyst' && entry.issue === createdIssue.number)
-check('запись аналитика появилась', {
-  project: analystEntry && analystEntry.project,
-  issue: analystEntry && analystEntry.issue,
-  session: analystEntry && analystEntry.session,
-  source: analystEntry && analystEntry.source,
-}, { project: 'workflow', issue: createdIssue.number, session: analystSession, source: 'issue-created' })
-check('ответ инструмента говорит о записи', createdIssue.usageLedger, { recorded: true, source: 'issue-created' })
+// Повторный тик второй записи не делает: сессия уже привязана.
+const bookAfterBind = readBook().length
+await app.tick()
+check('повторный тик привязку не дублирует', readBook().length, bookAfterBind)
 
-// Одна сессия может создать несколько постановок — у каждого тикета своя запись.
-const entriesBefore = readBook().length
-const secondIssue = JSON.parse(await analystCreate.execute(
-  { title: 'Вторая постановка', body: 'тело' }, { agent: { id: analystSession } },
-))
-check('вторая постановка — своя запись', readBook().length, entriesBefore + 1)
-check('и о ней сказано в ответе', secondIssue.usageLedger.recorded, true)
+// Тикет, заведённый до выкатки учёта, задним числом в книгу не попадает: его
+// история видна только блоком «восстановлено по заголовку» в отчёте.
+writeBook([])
+issues.clear()
+issues.set(41, {
+  number: 41, title: 'Тикет из прошлого', state: 'open', body: 'постановка',
+  labels: ['ready-for-dev', 'area:frontend'], assignees: [],
+  created_at: '2026-09-01T00:00:00Z',
+})
+app = await boot()
+await app.tick()
+check('старый тикет задним числом не привязан',
+  readBook().filter((entry) => entry.issue === 41 && entry.source === 'issue-created').length, 0)
 
-// Нечитаемая книга: тикет создан, файл не перезаписан, инструмент сказал словами.
-const brokenText = '{ книга не разбирается'
-fs.writeFileSync(bookFile, brokenText)
-const brokenCreate = JSON.parse(await analystCreate.execute(
-  { title: 'Постановка при битой книге', body: 'тело' }, { agent: { id: analystSession } },
-))
-check('битая книга не перезаписана', fs.readFileSync(bookFile, 'utf8'), brokenText)
-check('тикет всё равно создан', typeof brokenCreate.number, 'number')
-check('и инструмент сказал, что привязка не записана', [brokenCreate.usageLedger.recorded, /повреждена/.test(brokenCreate.usageLedger.reason)], [false, true])
-checkText('в причине назван файл', brokenCreate.usageLedger.reason, 'dev-department-usage.json')
+// Сессия вне каталога проекта (чужая рабочая область) не привязывается: правило
+// проекта — по каталогу, а не «любая свежая сессия».
+writeBook([])
+issues.clear()
+const STRANGER = 'ffffffff-ffff-4fff-8fff-ffffffffffff'
+writeSessionHead(STRANGER, { cwd: path.join(home, 'somewhere-else') })
+issues.set(42, {
+  number: 42, title: 'Чужая сессия', state: 'open', body: 'постановка',
+  labels: ['ready-for-dev', 'area:frontend'], assignees: [],
+  created_at: new Date().toISOString(),
+})
+app = await boot()
+await app.tick()
+check('сессия чужого каталога к тикету не привязывается',
+  readBook().filter((entry) => entry.session === STRANGER).length, 0)
+issues.delete(42)
 
 // ── сценарий 6: сжатая контекстом сессия (Ф1) ───────────────────────────────
 

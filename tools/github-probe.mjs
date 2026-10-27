@@ -44,7 +44,7 @@ function dshHome() {
 }
 
 function readToken() {
-  const file = path.join(dshHome(), 'github.token')
+  const file = path.join(dshHome(), 'mcp', 'github-mcp-server', 'token')
   return fs.readFileSync(file, 'utf8').trim()
 }
 

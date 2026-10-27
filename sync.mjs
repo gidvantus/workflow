@@ -63,6 +63,11 @@ const PRESETS = ['analyst', 'code-review', 'design', 'dev-backend', 'dev-fronten
 // Хост-плоскость: путь внутри каталога установки совпадает с путём в репозитории.
 const HOST_FILES = [
   'profiles/desktop/cordis.patch.yml',
+  // Манифест пачки хост-плагинов: инвентарь пакетов DSH требует у ближайшего
+  // package.json непустые name и version, иначе каждый запрос падает с
+  // REQUEST_EXTENSION. Профильный манифест version не несёт — этот файл его
+  // перекрывает.
+  'profiles/desktop/plugins/package.json',
   'profiles/desktop/plugins/dev-department.mjs',
   'profiles/desktop/plugins/usage-ledger.mjs',
   'profiles/desktop/plugins/role-sessions.mjs',
@@ -72,6 +77,7 @@ const HOST_FILES = [
   'profiles/desktop/plugins/voice-input/client.js',
   'profiles/desktop/plugins/voice-input/package.json',
   'profiles/web/cordis.patch.yml',
+  'profiles/web/plugins/package.json',
   'profiles/web/plugins/role-sessions.mjs',
 ]
 
@@ -230,7 +236,10 @@ const short = (full) => path.relative(repo, full).split(path.sep).join('/')
 
 function secrets() {
   const found = []
-  for (const name of ['github.token', 'telegram.json', 'typesafe.token']) {
+  // Токен GitHub лежит рядом с MCP-сервером (mcp/github-mcp-server/token): своего
+  // клиента GitHub у диспетчера и ролей больше нет, ключ читает строка mcp-github.
+  const secretFiles = ['telegram.json', 'typesafe.token', 'mcp/github-mcp-server/token']
+  for (const name of secretFiles) {
     const file = path.join(dshHome, name)
     if (!fs.existsSync(file)) continue
     const value = fs.readFileSync(file, 'utf8').trim()

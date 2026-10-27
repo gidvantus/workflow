@@ -33,6 +33,9 @@ pnpm-debug.log*
 
 # Секреты: их в репозитории нет и быть не должно.
 github.token
+# Токен GitHub живёт рядом с MCP-сервером: в репозитории его нет.
+mcp/github-mcp-server/token
+token
 # Тот же токен, но принесённый в корень руками (в имени пробел — нужен кавычный шаблон).
 github?token.txt
 telegram.json

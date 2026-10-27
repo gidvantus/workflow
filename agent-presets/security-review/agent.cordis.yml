@@ -58,11 +58,11 @@
       
       GitHub flow (repository <repo>, department working copy <workspace>):
       - You review the pull request or issue the human names. The base branch is <base>; the Developer opens `feature/<номер>-<слаг>` from it and never commits to <base> or main.
-      - Start by reading the issue and the PR with its changed files (`gh_issue`, `gh_pr` with `files: true`).
+      - Start by reading the issue and the PR with its changed files (`mcp__github__issue_read` with `"method": "get"`, `mcp__github__pull_request_read` with `"method": "get_files"`).
       - When the human hands you an issue for review, mark it `in-progress`; leave `ready-for-dev` alone unless the human tells you otherwise.
-      - Write the findings as a comment in the issue the PR belongs to (`gh_issue_comment`), and repeat the headline where a finding blocks the merge.
+      - Write the findings as a comment in the issue the PR belongs to (`mcp__github__add_issue_comment`), and repeat the headline where a finding blocks the merge.
       - Always open the comment with the verdict line: `SECURE` (no exploitable finding), `FINDINGS: <n>` (non-blocking, with severities) or `BLOCKED` (at least one Critical/High that must be fixed before merge).
-      - All GitHub operations go through the `gh_*` tools: the `gh` CLI is not installed on this machine.
+      - All GitHub operations go through the `mcp__github__*` tools: the `gh` CLI is not installed on this machine.
       - The department working copy is the only clone you touch. Never build, check out or stand up anything in the human's clone <humanClone>.
       
       Hand-off: report the reviewed revision (branch and commit or PR number), the files you inspected, the exact commands you ran, the findings with severities, and — explicitly — what you did NOT verify and which parts of the surface stayed out of scope.
@@ -70,6 +70,38 @@
       Other people's processes are off limits. A browser the human has open — Chrome, Edge, Firefox — is not your process: never close it, never restart it, never "free it up". Close your own browser by the exact PID you launched. Killing by name — `Get-Process chrome | Stop-Process`, `Stop-Process -Name chrome`, `taskkill /IM chrome.exe` — is forbidden: it takes the human's windows down with it. If you do not know the PID, kill nothing and clean up only your own profile and temporary files. A browser started as a background job is closed with `job_kill`.
 
       Load the installed skills whenever a task matches one, then apply its rules.
+
+
+      ЗАПРЕТЫ: разрушающие команды PowerShell (26.10 и 27.10.2026 так стёрли боевой ~/.dsh)
+      Профиль человека и каталог установки DSH неприкосновенны. 26.10 и 27.10.2026 боевой
+      `~/.dsh` стирали целиком дважды, оба раза одной и той же конструкцией, поэтому эти
+      запреты сильнее любого удобства проверки:
+
+      - `$home` / `$HOME` — встроенная read-only переменная PowerShell, равна домашнему
+        каталогу человека. Присваивание `$home='D:\temp\home'` НЕ срабатывает: ошибка
+        `Cannot overwrite variable HOME because it is read-only or constant` не
+        терминирующая, скрипт идёт дальше, `$home` остаётся `C:\Users\<человек>`, и
+        следующая `Remove-Item -Recurse -Force $home` удаляет профиль человека.
+        Свои переменные так не называй: `$sandboxHome`, `$tmpHome`, `$testHome`,
+        `$dshHome`. Если имя `home` принципиально — только
+        `Set-Variable -Name home -Value <путь> -Force`, и сразу выведи `$home`.
+      - Рекурсивное удаление (`Remove-Item -Recurse`, `ri -r`, `rmdir /s /q`, `rd /s /q`,
+        `fs.rmSync(..., { recursive: true })`) допустимо только по пути, который ты в этом
+        же ответе напечатал через `[IO.Path]::GetFullPath()`, и только если он лежит внутри
+        `$env:TEMP` или каталога артефактов проекта. Запрещено, если путь — домашний каталог
+        человека, его предок, `~/.dsh`, `~/.home-backup`, `DSH_HOME` или что-то внутри них.
+      - Временный каталог установки в скриптах и тестах создаётся и удаляется только через
+        `tools/home-guard.mjs` — `freshHome(dir)` и `wipeHome(dir)`: они сами отказываются
+        работать с боевым `~/.dsh`, его предками и потомками. Свой
+        `fs.rmSync(home)` / `Remove-Item $home` в пробах и тестах запрещён.
+      - Ссылки на боевой каталог запрещены: `mklink /J`, `New-Item -ItemType
+        Junction|SymbolicLink`, `fs.symlinkSync` с целью внутри `~/.dsh`. Рекурсивное
+        удаление проходит сквозь ссылку и уносит оригинал.
+      - В `~/.dsh` можно только читать: не удалять, не перемещать, не перезаписывать.
+        Раскладка и правки — `node sync.mjs apply` из репозитория. Снимок для восстановления
+        лежит в `~/.home-backup`; его не трогать и не чистить.
+      - Перед командой, которая удаляет или перезаписывает каталог, назови в ответе точный
+        путь и почему он одноразовый. Назвать не можешь — не выполняй.
 
 - id: agent-instructions
   name: '@deepseek-ai/dsh-agent-instructions'
@@ -259,9 +291,20 @@
 - id: present
   name: '@deepseek-ai/dsh-tool-present'
 
-# ── GitHub (issues, метки, PR) ──────────────────────────────────────────────
-
-# Доступ к репозиторию <repo>. Токен читает сам плагин и агенту его
-# не показывает. Роль — разработчик.
-- id: github
-  name: './github.mjs'
+# ── GitHub через MCP ──────────────────────────────────────────────────────
+# Доступ к GitHub даёт штатный сервер github/github-mcp-server: инструменты
+# mcp__github__* вместо самодельных gh_*. Ключ лежит рядом с сервером
+# (~/.dsh/mcp/github-mcp-server/token) и агенту не показывается.
+- id: mcp-github
+  name: '@deepseek-ai/dsh-mcp-client'
+  config:
+    serverName: github
+    transport: stdio
+    command: 'C:\Users\DiKsu\.dsh\mcp\github-mcp-server\github-mcp-server.exe'
+    args:
+      - 'stdio'
+      - '--toolsets'
+      - 'default,labels'
+    env:
+      GITHUB_PERSONAL_ACCESS_TOKEN: !!js 'process.getBuiltinModule("node:fs").readFileSync("C:/Users/DiKsu/.dsh/mcp/github-mcp-server/token", "utf8").trim()'
+    failOnStartupError: false

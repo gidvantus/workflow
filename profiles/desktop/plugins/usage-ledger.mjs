@@ -4,8 +4,10 @@
 // и usage-чанк потока попытки), но не знает, к какому тикету относится сессия.
 // Заголовок сессии закрывает роли конвейера, а аналитика — нет: его сессию открывает
 // человек, и номера тикета в ней ещё нет. Поэтому привязку пишут в момент, когда она
-// рождается: диспетчер — при запуске роли по тикету (`source: "dispatcher"`),
-// аналитик — при создании постановки (`source: "issue-created"`).
+// рождается: диспетчер — при запуске роли по тикету (`source: "dispatcher"`), и он же
+// привязывает сессию, в которой тикет родился (`source: "issue-created"`, см.
+// `findDraftSession`; своего крючка на создание issue у отдела нет — GitHub идёт
+// через MCP-сервер).
 //
 // Файл книги — `<DSH_HOME>/dev-department-usage.json`, append-only массив записей
 // `{ at, project, issue, role, session, attempt, source }`. Каталог читается НА
@@ -381,6 +383,151 @@ export function readUsageFromDisk(home, sessionId) {
     problems,
     file: found.file,
   }
+}
+
+// ── сессия, в которой родился тикет ─────────────────────────────────────────
+//
+// Аналитика конвейер не запускает: сессию постановки открывает человек, и номера
+// тикета в её заголовке ещё нет. Крючка на создание issue у отдела тоже нет — с
+// переездом GitHub на MCP-сервер постановку создаёт чужой процесс, а не наш код.
+// Поэтому «сессия, в которой родился тикет» не пишется, а ищется по времени: на
+// первом тике, который увидел новый тикет, диспетчер берёт сессию проекта, чья
+// жизнь накрывает `created_at` тикета и которая ещё ни к одному тикету не
+// привязана. Догадка проверяемая — она опирается на данные DSH, а не на слова
+// агента, — и когда подходящей сессии нет, привязки просто нет.
+
+const SESSION_FILE = 'session.v3.jsonl.zstd'
+// Событие `session` — самое первое в стенограмме, и в нём уже есть `cwd`,
+// `agentPreset` и `createdAt`. Целую стенограмму ради этого не читаем.
+const HEAD_BYTES = 256 * 1024
+
+// Пути сравниваем без регистра и с одним видом разделителя: реестр проектов,
+// рабочая область и событие `session` пишут один и тот же каталог по-разному.
+function pathKey(value) {
+  return String(value === undefined || value === null ? '' : value)
+    .trim().replace(/[\\/]+/g, '/').replace(/\/+$/, '').toLowerCase()
+}
+
+// Заголовок одной сессии: первое событие стенограммы и время последней записи.
+// null — стенограмма не прочиталась; о такой сессии говорит `problems`.
+export function readSessionHead(file, folder) {
+  let bytes
+  let stat
+  try {
+    stat = fs.statSync(file)
+    const fd = fs.openSync(file, 'r')
+    try {
+      const want = Math.min(stat.size, HEAD_BYTES)
+      bytes = Buffer.alloc(want)
+      fs.readSync(fd, bytes, 0, want, 0)
+    } finally {
+      fs.closeSync(fd)
+    }
+  } catch (error) {
+    return null
+  }
+  // Декодируем только первый кадр: остальные для привязки не нужны, а стенограмма
+  // тянет мегабайты. Недописанный кадр отдаёт обрывок текста — до первой строки
+  // JSONL этого хватает.
+  let end = bytes.length
+  for (let i = 4; i + 4 <= bytes.length; i += 1) {
+    if (isFrameStart(bytes, i)) {
+      end = i
+      break
+    }
+  }
+  let text
+  try {
+    text = zlib.zstdDecompressSync(bytes.subarray(0, end)).toString('utf8')
+  } catch (error) {
+    return null
+  }
+  const line = text.split('\n').find((row) => row.trim() !== '')
+  if (!line) return null
+  let event
+  try {
+    event = JSON.parse(line)
+  } catch (error) {
+    return null
+  }
+  if (!event || event.type !== 'session') return null
+  return {
+    session: normalizeSessionId(event.id || folder),
+    cwd: String(event.cwd || ''),
+    preset: String(event.agentPreset || ''),
+    createdAt: Number(event.createdAt),
+    updatedAt: Number(stat.mtimeMs),
+  }
+}
+
+// Заголовки всех сессий каталога установки: `session-<id>` — и ещё id из события
+// `session`, потому что книга и каталог пишут его по-разному.
+export function listSessionHeads(home) {
+  const root = path.join(home || dshHome(), 'sessions')
+  const heads = []
+  const problems = []
+  let workspaces
+  try {
+    workspaces = fs.readdirSync(root)
+  } catch (error) {
+    return { heads, problems: ['каталога сессий нет: ' + root] }
+  }
+  for (const workspace of workspaces) {
+    const base = path.join(root, workspace)
+    let names
+    try {
+      names = fs.readdirSync(base)
+    } catch (error) {
+      continue
+    }
+    for (const name of names) {
+      const file = path.join(base, name, SESSION_FILE)
+      if (!fs.existsSync(file)) continue
+      const head = readSessionHead(file, name)
+      if (head === null) {
+        problems.push('заголовок сессии не прочитался: ' + file)
+        continue
+      }
+      heads.push(head)
+    }
+  }
+  return { heads, problems }
+}
+
+// Какая сессия проекта накрывает момент рождения тикета. Чистая функция: заголовки
+// ей подаёт `listSessionHeads`, привязку — вызывающий. Правила:
+//   • сессия, уже привязанная к тикету, не рассматривается вовсе;
+//   • каталог сессии должен быть каталогом проекта (рабочая область или клон человека);
+//   • жизнь сессии накрывает `created` с допуском `slackMs` в обе стороны;
+//   • из подходящих берётся самая поздняя по началу: долго живущий диалог человека
+//     накрывает все новые тикеты, и без этого правила он забирал бы их себе.
+//   • начало сессии не раньше `created - windowMs`: тот же долгий диалог не должен
+//     притягивать тикет, заведённый спустя недели.
+export function findDraftSession(heads, options) {
+  const opts = options || {}
+  const created = Number(opts.created)
+  if (!Number.isFinite(created)) return null
+  const cwds = (opts.cwds || []).filter(Boolean).map(pathKey)
+  const bound = new Set((opts.bound || []).map(normalizeSessionId))
+  const slack = Number.isFinite(opts.slackMs) ? opts.slackMs : 60 * 60 * 1000
+  const windowMs = Number.isFinite(opts.windowMs) ? opts.windowMs : 3 * 24 * 60 * 60 * 1000
+  let best = null
+  for (const head of heads || []) {
+    if (!head || !head.session) continue
+    if (bound.has(normalizeSessionId(head.session))) continue
+    if (cwds.length > 0) {
+      const where = pathKey(head.cwd)
+      if (where === '' || cwds.indexOf(where) === -1) continue
+    }
+    const started = Number(head.createdAt)
+    const stopped = Number(head.updatedAt)
+    if (!Number.isFinite(started) || !Number.isFinite(stopped)) continue
+    if (started > created + slack) continue
+    if (started < created - windowMs) continue
+    if (stopped < created - slack) continue
+    if (best === null || started > best.createdAt) best = head
+  }
+  return best
 }
 
 // ── сумма по тикету ─────────────────────────────────────────────────────────
