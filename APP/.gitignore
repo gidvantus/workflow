@@ -1,0 +1,14 @@
+# Секреты стенда: реальные значения лежат только здесь, в git файл не едет.
+.env
+
+# Python
+__pycache__/
+.venv/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Фронтенд
+node_modules/
+dist/
