@@ -3162,24 +3162,33 @@ export default {
 
     const summaryTool = define(
       'dev_department_summary',
-      'Отправить сводку отдела разработки в Telegram немедленно и закрыть смены всех проектов, где они идут.',
+      'Закрыть смены всех проектов, где они идут, и отправить их сводки в Telegram. Сводка уходит только боту проекта из реестра (projects.<id>.telegram): у проекта без бота она остаётся в журнале.',
       { type: 'object', properties: {}, additionalProperties: false },
       async () => {
         config = loadConfig()
         const loaded = loadProjects(config.values)
         const closed = []
+        // sent — это «сводка ушла в Telegram», а не «смена закрылась»: у проекта
+        // без бота сводка остаётся в журнале, и отчитываться за неё отправкой —
+        // значит обещать человеку сообщение, которого в чате нет. Отдельно
+        // названы доставленные проекты и те, у кого отправка сорвалась сетью.
+        const telegram = []
+        const failed = []
         const now = new Date()
         for (const project of loaded.projects) {
           const st = state.projects[project.id]
           if (!st || !st.run) continue
+          const before = state.lastError
           await finishProjectShift(project, now, FINISH.manual)
           closed.push(project.id)
+          if (!project.telegram) continue
+          if (state.lastError !== before) failed.push(project.id)
+          else telegram.push(project.id)
         }
-        return {
-          sent: closed.length > 0,
-          closed,
-          note: closed.length > 0 ? null : 'ни в одном проекте смена не идёт — отправлять нечего',
-        }
+        let note = null
+        if (closed.length === 0) note = 'ни в одном проекте смена не идёт — отправлять нечего'
+        else if (telegram.length + failed.length === 0) note = 'у закрытых проектов не задан telegram — сводки только в журнале'
+        return { sent: telegram.length > 0, closed, telegram, failed, note }
       },
     )
 
