@@ -3030,15 +3030,21 @@ export default {
       // Сводку сначала кладём на диск: канал до Telegram бывает недоступен, и
       // терять отчёт за смену из-за этого нельзя.
       appendShiftLog(summaryText)
+      // Доставку сообщаем вызывающему явно: глобальный state.lastError для этого
+      // не годится — он нигде не сбрасывается, а при повторе того же отказа
+      // (лежит сеть, битый токен у двух проектов) остаётся прежним, и сравнение
+      // «до/после» объявило бы второй одинаковый сбой доставкой.
+      let delivered = false
       if (project.telegram) {
         try {
           // Сводка проекта уходит боту ЭТОГО проекта; другого источника нет.
           await sendTelegram(project.telegram, summaryText)
+          delivered = true
         } catch (error) {
           state.lastError = 'Telegram: ' + error.message
         }
       }
-      return summaryText
+      return { text: summaryText, delivered }
     }
 
     // ── инструменты для ручной проверки ────────────────────────────────────
@@ -3172,18 +3178,20 @@ export default {
         // без бота сводка остаётся в журнале, и отчитываться за неё отправкой —
         // значит обещать человеку сообщение, которого в чате нет. Отдельно
         // названы доставленные проекты и те, у кого отправка сорвалась сетью.
+        // Доставку называет сама finishProjectShift: сравнивать state.lastError
+        // до и после нельзя — он не сбрасывается и при повторном одинаковом
+        // отказе не меняется, поэтому второй такой же сбой считался бы доставкой.
         const telegram = []
         const failed = []
         const now = new Date()
         for (const project of loaded.projects) {
           const st = state.projects[project.id]
           if (!st || !st.run) continue
-          const before = state.lastError
-          await finishProjectShift(project, now, FINISH.manual)
+          const result = await finishProjectShift(project, now, FINISH.manual)
           closed.push(project.id)
           if (!project.telegram) continue
-          if (state.lastError !== before) failed.push(project.id)
-          else telegram.push(project.id)
+          if (result && result.delivered) telegram.push(project.id)
+          else failed.push(project.id)
         }
         let note = null
         if (closed.length === 0) note = 'ни в одном проекте смена не идёт — отправлять нечего'
