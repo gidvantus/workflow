@@ -1,0 +1,71 @@
+# Стенд APP: db + api + web.
+#
+# Исходники лежат рядом: backend/ — FastAPI, frontend/ — React + nginx.
+#
+#   docker-compose up -d --build
+#
+# Плагина `docker compose` на этой машине нет: работает отдельный `docker-compose`.
+#
+# Имя проекта и порты у каждого стенда свои — они лежат в его `.env`
+# (`COMPOSE_PROJECT_NAME`, `FRONTEND_PORT`, `API_PORT`). Значения по умолчанию
+# в `.env.example` описывают стенд отдела разработки (`workflow-agent`, 8095/8096).
+# Второму стенду того же compose-файла нужны свои значения, иначе он пересоздаст
+# чужие контейнеры: например `COMPOSE_PROJECT_NAME=workflow-local` и порты 8091/8092.
+#
+# Секретов в репозитории нет: `.env.example` держит локальные заглушки, реальные
+# значения человек кладёт в `.env` — он подключается вторым и переопределяет пример.
+
+name: ${COMPOSE_PROJECT_NAME:-workflow-agent}
+
+x-env-files: &env-files
+  - path: .env.example
+    required: true
+  - path: .env
+    required: false
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    env_file: *env-files
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # api ждёт именно готовности базы: иначе alembic падает на старте.
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  api:
+    build: ./backend
+    restart: unless-stopped
+    env_file: *env-files
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${API_PORT:-8096}:8000"
+    healthcheck:
+      # curl в python:3.12-slim нет, запрос делает сам python.
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')\"",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+
+  web:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "${FRONTEND_PORT:-8095}:80"
+
+volumes:
+  pgdata:
