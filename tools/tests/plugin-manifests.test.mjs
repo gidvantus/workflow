@@ -16,10 +16,11 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import * as pluginPaths from './plugin-paths.mjs'
 
+// Корень репозитория берём у помощника раскладок, каталог установки — из окружения.
+const repoRoot = pluginPaths.REPO_ROOT
 const dshHome = process.env.DSH_HOME || path.join(os.homedir(), '.dsh')
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 
 let failures = 0
 function check(name, actual, expected) {
@@ -111,6 +112,31 @@ for (const name of profiles) {
     continue
   }
   auditProfile('установка/' + name, installed)
+}
+
+// ── установленный bundle-пакет ──────────────────────────────────────────────
+// В раскладке пакета ближайший манифест над плагинами — манифест самого пакета
+// (dsh plugin add кладёт его зависимостью профиля), поэтому name и version
+// обязаны быть и у него: иначе инвентарь падает ровно так же, как на профильном
+// манифесте без версии. Пакета на машине может ещё не быть — тогда пропуск.
+const bundleDir = pluginPaths.bundlePackageDir({ dshHome })
+if (bundleDir === null) {
+  console.log('\n=== пакет ' + pluginPaths.BUNDLE_PACKAGE + ' не установлен: проверка пропущена ===')
+} else {
+  const manifest = path.join(bundleDir, 'package.json')
+  if (!fs.existsSync(manifest)) {
+    failures += 1
+    console.log('ФЕЙЛ  пакет: манифест на месте → нет ' + manifest)
+  } else {
+    const identity = identityOf(manifest)
+    const ok = identity.error === undefined && identity.name === pluginPaths.BUNDLE_PACKAGE
+    if (!ok) failures += 1
+    console.log((ok ? 'ok    ' : 'ФЕЙЛ  ') + 'пакет: name и version → ' + (identity.error === undefined ? identity.name + '@' + identity.version : identity.error))
+  }
+  const bundlePatch = path.join(bundleDir, 'cordis.patch.yml')
+  const patchOk = fs.existsSync(bundlePatch)
+  if (!patchOk) failures += 1
+  console.log((patchOk ? 'ok    ' : 'ФЕЙЛ  ') + 'пакет: патч бандла на месте → ' + (patchOk ? 'есть cordis.patch.yml' : 'нет ' + bundlePatch))
 }
 
 console.log('')
