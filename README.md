@@ -25,6 +25,8 @@ profiles/                       хост-плоскость DSH: процесс�
   desktop/
     cordis.patch.yml            подключение плагинов к профилю desktop
     plugins/
+      package.json              манифест пачки плагинов: без name+version DSH
+                                валит каждый запрос с REQUEST_EXTENSION
       dev-department.mjs        диспетчер отдела: роли, окна смен, Telegram-сводка
       role-sessions.mjs         инструменты open_role_session / list_agent_presets
       role-permissions.mjs      роли получают danger-full-access (без запросов)
@@ -94,7 +96,9 @@ DSH собирается из композиций Cordis. Здесь их дв�
 - **Агент-плоскость** (`agent-presets/<id>/`) — то, что одна сессия добавляет в
   реестры: персона, скиллы, инструменты роли. Один каталог — один пресет:
   `preset.yml` (имя и описание для списка), `agent.cordis.yml` (композиция),
-  `skills/` (скиллы роли), `*.mjs` (собственные инструменты, например `github.mjs`).
+  `skills/` (скиллы роли). Своего клиента GitHub у роли больше нет: доступ к
+  репозиторию даёт штатный MCP-сервер строкой `mcp-github` в `agent.cordis.yml`,
+  а инструменты видны модели как `mcp__github__*`.
 
 Подробности конвейера — в [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), процесс с
 ролями и метками — в [docs/DEPARTMENT-PROCESS.md](docs/DEPARTMENT-PROCESS.md).
@@ -123,7 +127,7 @@ DSH собирается из композиций Cordis. Здесь их дв�
 
    | Файл | Что внутри |
    |---|---|
-   | `~/.dsh/github.token` | токен GitHub (fine-grained; Issues, Contents, Pull requests read+write на нужные репозитории) |
+   | `~/.dsh/mcp/github-mcp-server/token` | токен GitHub для MCP-сервера (fine-grained; Issues, Contents, Pull requests read+write на нужные репозитории) |
    | `~/.dsh/telegram.json` | бот и чат для `tg-bridge` — образец `config/telegram.example.json` |
    | `~/.dsh/projects.json` | `telegram.token` и `telegram.chatId` каждого проекта |
 
@@ -145,7 +149,28 @@ DSH собирается из композиций Cordis. Здесь их дв�
    «нет ни одного бота» и не опрашивает Telegram, а сводки смен диспетчер кладёт
    только в файл.
 
-5. Перезапустить DSH Desktop. Новые каталоги пресетов подхватываются на ходу, а
+5. Поставить MCP-сервер GitHub — единственный путь к GitHub для диспетчера и ролей:
+   нативная сборка `github/github-mcp-server` (Windows x86_64, без Docker) в
+   `~/.dsh/mcp/github-mcp-server/`:
+
+   ```powershell
+   $dir = "$env:USERPROFILE\.dsh\mcp\github-mcp-server"
+   New-Item -ItemType Directory -Force $dir | Out-Null
+   Invoke-WebRequest -OutFile "$dir\gh-mcp.zip" `
+     https://github.com/github/github-mcp-server/releases/latest/download/github-mcp-server_Windows_x86_64.zip
+   Expand-Archive "$dir\gh-mcp.zip" -DestinationPath $dir -Force
+   Remove-Item "$dir\gh-mcp.zip"
+   "# пересоздать токен: https://github.com/settings/personal-access-tokens/new" | Out-Null
+   Set-Content -Encoding ascii "$dir\token" "<fine-grained PAT>"
+   ```
+
+   `cordis.patch.yml` читает этот файл выражением `!!js` в аргументах строки
+   `mcp-github`, поэтому второй копии токена в конфиге нет. Нет файла — строка
+   не поднимется (у неё `failOnStartupError: false`), и инструменты `mcp__github__*`
+   просто исчезнут из сессий: диспетчер в этом случае пишет «состояние GitHub не
+   прочитано». Тулсеты сервера — `default,labels`: конвейер живёт в метках.
+
+6. Перезапустить DSH Desktop. Новые каталоги пресетов подхватываются на ходу, а
    плагины хоста и правки `agent.cordis.yml` — только после перезапуска.
 
 ## sync.mjs
@@ -199,26 +224,25 @@ node sync.mjs status      # что расходится и что в репоз�
 теперь источник у них один — этот репозиторий, и поле больше не нужно.
 
 Отдельно `collect` проверяет, не попал ли в репозиторий настоящий секрет: читает
-боевые `github.token` и `telegram.json` и токены проектов из `projects.json`, и
-сообщает, если такая строка встречается в файлах репозитория.
+`mcp/github-mcp-server/token`, `telegram.json` и токены проектов из `projects.json`,
+и сообщает, если такая строка встречается в файлах репозитория.
 
 ## Проверки
 
 Наборы работают на **боевых** модулях
-(`$DSH_HOME/profiles/desktop/plugins/dev-department.mjs` и
-`$DSH_HOME/.agent-presets/*/github.mjs`) с поддельными сетью, часами и сервисами.
-GitHub и Telegram они не трогают.
+(`$DSH_HOME/profiles/desktop/plugins/dev-department.mjs`) с поддельным MCP-сервером
+GitHub, часами и сервисами. HTTP к GitHub больше не перехватывается: диспетчер
+говорит с GitHub только по MCP, и тест подменяет `spawn` поддельным сервером,
+который отвечает на те же инструменты (`list_issues`, `issue_read`,
+`add_issue_comment`, `list_pull_requests`, `issue_write`). Реальный GitHub и
+Telegram тесты не трогают.
 
 ```powershell
 cd tools/tests
 node dev-department-dialogs.test.mjs    # конвейер, диалоги, сбой модели, сторож зависших
 node dev-department-windows.test.mjs    # расписание окон смен
-node tester-images.test.mjs             # вложения-скриншоты в вердикте тестировщика
-node code-review-tools.test.mjs         # gh_pr_comment, gh_pr с comments и метка for-code-review
-node analyst-github.test.mjs            # инструменты аналитика, включая gh_issue_edit
-node dev-edit-tools.test.mjs            # gh_pr_edit: правка тела PR у разработчиков
-node comment-edit-tools.test.mjs        # gh_comment_edit: галочки в чеклисте, отказы до запроса, id комментария
 node github-probe.test.mjs              # github-probe.mjs: PATCH комментария, право и побайтовый возврат тела
+node plugin-manifests.test.mjs          # манифесты хост-плагинов: без name+version каждый ход падает с REQUEST_EXTENSION
 ```
 
 Живая проба GitHub (`tools/github-probe.mjs`) — единственный инструмент набора,
@@ -246,7 +270,7 @@ node tools/pipeline-labels-probe.mjs    # что есть и чего не хв�
 node tools/pipeline-labels-create.mjs   # создать недостающее (существующее не трогает)
 ```
 
-Оба читают реестр `~/.dsh/projects.json` и токен из `~/.dsh/github.token`.
+Оба читают реестр `~/.dsh/projects.json` и токен из `~/.dsh/mcp/github-mcp-server/token`.
 `probe` только читает; `create` создаёт недостающие метки во всех проектах
 реестра, у которых задан `repo`, а также снимает с тикетов и удаляет из
 репозитория метки выведенных маршрутов (`ready-for-design`).
@@ -255,7 +279,7 @@ node tools/pipeline-labels-create.mjs   # создать недостающее 
 
 | Метка | Кто ставит |
 |---|---|
-| `needs-mockup` | аналитик (`gh_issue_mockup`) или человек: постановке нужен макет |
+| `needs-mockup` | аналитик (метка через `mcp__github__issue_write`) или человек: постановке нужен макет |
 | `mockups-ready` | дизайнер, когда макет лёг в ветку и скриншоты ушли в issue |
 | `ready-for-dev` | человек: этим он берёт тикет в работу и принимает макет |
 | `area:backend` / `area:frontend` / `area:fullstack` | диспетчер по тексту постановки (или человек) |

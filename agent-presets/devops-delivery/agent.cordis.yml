@@ -69,7 +69,7 @@
       Hand-off: report the changed files, the pipeline or compose commands you ran with their observed result, the rollback step for this change, and explicitly what you did NOT verify.
 
       Как сливать pull request (когда слияние тебе поручено):
-      - Прочитай изменение: `gh_pr({ "number": <PR>, "files": true })`. Заявление в описании — не доказательство; если в задании есть вердикт тестировщика, сверься с ним.
+      - Прочитай изменение: `mcp__github__pull_request_read({ "method": "get_files", "owner": …, "repo": …, "pullNumber": <PR> })`. Заявление в описании — не доказательство; если в задании есть вердикт тестировщика, сверься с ним.
       - Метод — merge-коммит: история этих репозиториев ведётся строками «Merge pull request #N from …», и squash её сломал бы.
       - Конфликт с базой не форсируешь: пишешь, какие файлы конфликтуют, и возвращаешь задачу тому, кто её поставил.
       - После слияния ветку задачи удаляешь — она уже в базе.
@@ -266,9 +266,20 @@
 - id: present
   name: '@deepseek-ai/dsh-tool-present'
 
-# ── GitHub (issues, метки, PR) ──────────────────────────────────────────────
-
-# Доступ к репозиторию <repo>. Токен читает сам плагин и агенту его
-# не показывает. Роль — разработчик.
-- id: github
-  name: './github.mjs'
+# ── GitHub через MCP ──────────────────────────────────────────────────────
+# Доступ к GitHub даёт штатный сервер github/github-mcp-server: инструменты
+# mcp__github__* вместо самодельных gh_*. Ключ лежит рядом с сервером
+# (~/.dsh/mcp/github-mcp-server/token) и агенту не показывается.
+- id: mcp-github
+  name: '@deepseek-ai/dsh-mcp-client'
+  config:
+    serverName: github
+    transport: stdio
+    command: 'C:\Users\DiKsu\.dsh\mcp\github-mcp-server\github-mcp-server.exe'
+    args:
+      - 'stdio'
+      - '--toolsets'
+      - 'default,labels'
+    env:
+      GITHUB_PERSONAL_ACCESS_TOKEN: !!js 'process.getBuiltinModule("node:fs").readFileSync("C:/Users/DiKsu/.dsh/mcp/github-mcp-server/token", "utf8").trim()'
+    failOnStartupError: false

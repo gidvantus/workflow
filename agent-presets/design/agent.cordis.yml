@@ -267,11 +267,20 @@
 - id: tool-skill
   name: '@deepseek-ai/dsh-tool-skill'
 
-# ── GitHub (issues, метки, PR) ──────────────────────────────────────────────
-
-# Доступ к репозиторию проекта: инструменты gh_* и project_info. Токен читает
-# сам плагин и агенту его не показывает. Тот же файл, что у ролей dev и tester,
-# поэтому дизайнер умеет работать по тому же GitHub-механизму: issue, ветка, PR.
-# Что именно из этого он делает в конкретной задаче — говорит задание.
-- id: github
-  name: './github.mjs'
+# ── GitHub через MCP ──────────────────────────────────────────────────────
+# Доступ к GitHub даёт штатный сервер github/github-mcp-server: инструменты
+# mcp__github__* вместо самодельных gh_*. Ключ лежит рядом с сервером
+# (~/.dsh/mcp/github-mcp-server/token) и агенту не показывается.
+- id: mcp-github
+  name: '@deepseek-ai/dsh-mcp-client'
+  config:
+    serverName: github
+    transport: stdio
+    command: 'C:\Users\DiKsu\.dsh\mcp\github-mcp-server\github-mcp-server.exe'
+    args:
+      - 'stdio'
+      - '--toolsets'
+      - 'default,labels'
+    env:
+      GITHUB_PERSONAL_ACCESS_TOKEN: !!js 'process.getBuiltinModule("node:fs").readFileSync("C:/Users/DiKsu/.dsh/mcp/github-mcp-server/token", "utf8").trim()'
+    failOnStartupError: false

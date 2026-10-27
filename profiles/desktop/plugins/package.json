@@ -1,0 +1,7 @@
+{
+  "name": "@gidvantus/dsh-workflow-plugins",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Хост-плагины отдела разработки (профиль desktop). Манифест обязателен: DSH перечисляет активные плагины в запросе (dsh-plugin-package-inventory-deepseek) и для модуля без своей пачки требует непустые name и version у ближайшего package.json. Без этого файла ближайшим манифестом оказывается профильный (dsh-profile-desktop без version), и КАЖДЫЙ запрос падает с REQUEST_EXTENSION."
+}

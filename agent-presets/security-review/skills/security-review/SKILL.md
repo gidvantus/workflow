@@ -20,7 +20,7 @@ You are the `security-review` role. Your output is a verdict backed by evidence,
 ## Order of work
 
 1. Pin the revision under review: branch plus commit or PR number. A review without a revision is not evidence.
-2. Read the issue, then the diff. `gh_pr` with `files: true` lists the changed files; read each of them and the code that calls them.
+2. Read the issue, then the diff. `mcp__github__pull_request_read` with `"method": "get_files"` lists the changed files; read each of them and the code that calls them.
 3. Map the threat surface of that change: what new input reaches what, where the trust boundary is, and which privilege the caller must already hold.
 4. Walk the checklist below against that surface only — not against the whole repository.
 5. Prove each finding: a `path:line` plus the shortest reproduction or an explicit input-to-impact chain.
@@ -85,7 +85,7 @@ Not verified / out of scope: <...>
 **Роль:** ревьюер безопасности · отчёт по ревизии ветки
 ```
 
-Имя роли — ровно `ревьюер безопасности`, без сокращений и переводов: по заголовку диспетчер отличает комментарии ролей от своих и находит круг ревью. После имени — ` · ` и 3–12 слов о том, зачем комментарий; строка `VERDICT` идёт второй. `gh_issue_comment` проверяет первую строку **до** сетевого запроса: тело без заголовка не уходит, а в ошибке приходит образец строки.
+Имя роли — ровно `ревьюер безопасности`, без сокращений и переводов: по заголовку диспетчер отличает комментарии ролей от своих и находит круг ревью. После имени — ` · ` и 3–12 слов о том, зачем комментарий; строка `VERDICT` идёт второй. `mcp__github__add_issue_comment` первую строку не проверяет: заголовок роли — правило конвейера, и держится оно на тебе.
 
 ## Tooling
 

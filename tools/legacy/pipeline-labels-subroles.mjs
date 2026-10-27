@@ -8,7 +8,7 @@ import path from 'node:path'
 import https from 'node:https'
 
 const home = process.env.DSH_HOME || path.join(os.homedir(), '.dsh')
-const token = fs.readFileSync(path.join(home, 'github.token'), 'utf8').trim()
+const token = fs.readFileSync(path.join(home, 'mcp', 'github-mcp-server', 'token'), 'utf8').trim()
 const registry = JSON.parse(fs.readFileSync(path.join(home, 'projects.json'), 'utf8'))
 
 function post(url, payload) {

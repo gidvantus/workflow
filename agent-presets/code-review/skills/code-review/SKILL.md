@@ -22,7 +22,7 @@ The method — what to read, what to look for, how to phrase a finding — is th
 ## Order of work
 
 1. Pin the revision under review: branch plus commit, or the pull request number. A review without a revision is not evidence.
-2. Read the issue the change belongs to (`gh_issue`), then the pull request with its changed files (`gh_pr` with `files: true` and `comments: true`) — the body and the author's answers are part of what you review.
+2. Read the issue the change belongs to (`mcp__github__issue_read` with `"method": "get"`), then the pull request with its changed files (`mcp__github__pull_request_read` with `"method": "get_files"` and `"method": "get_comments"`) — the body and the author's answers are part of what you review.
 3. Work the `ponytail-review` method against that revision: the diff, then the code it touches — callers of every changed function, what those functions call, the tests, the README.
 4. Establish the load this project expects (README, compose and deploy config) and say which load you assumed. Judge scale against it, not against what a large service would need.
 5. Report.
@@ -36,8 +36,8 @@ The method — what to read, what to look for, how to phrase a finding — is th
 
 ## The PR body and the author's answers
 
-- The PR body is read together with the diff. When it describes a previous revision, that is a finding **for the author** — the same four parts as any other finding: what is wrong, the case, the smallest fix, the cost. The reviewer never rewrites the body: the body is the author's report, and this role has no tool for it (`gh_pr_edit` belongs to the developer roles, not to you).
-- The author's answers are read, not guessed. `gh_pr({ "number": N, "comments": true })` returns `comments: [{ id, author, body, at }]` — the answers to your findings live there. "Probably fixed by now" is not a reason to drop a finding.
+- The PR body is read together with the diff. When it describes a previous revision, that is a finding **for the author** — the same four parts as any other finding: what is wrong, the case, the smallest fix, the cost. The reviewer never rewrites the body: the body is the author's report, and this role has no tool for it (`mcp__github__update_pull_request` belongs to the developer roles, not to you).
+- The author's answers are read, not guessed. `mcp__github__pull_request_read({ "method": "get_comments", "owner": …, "repo": …, "pullNumber": N })` returns `comments: [{ id, author, body, at }]` — the answers to your findings live there. "Probably fixed by now" is not a reason to drop a finding.
 - A finding closes on evidence only: a fix in the diff, or an answer in the PR that settles the case. Otherwise it stays in the verdict.
 
 ## Evidence rules
@@ -71,8 +71,8 @@ FIX: 3
 
 - Нумерация пунктов — префикс половины и сквозной номер внутри секции: `Б1`, `Б2` в «Бэкенде», `Ф1`, `Ф2` во «Фронтенде». Пункт, не называющий путь ни одной половины, половины не имеет: он идёт абзацем до секций, без чекбокса.
 - Секцию без пунктов не пишешь: пустая секция — шум. Тяжесть замечания называешь в самом пункте (`Must fix` / `Should fix` / `Nice to have`), чтобы `FIX: <n>` считался по пунктам.
-- Пункт закрывает **автор** — галочкой в твоём же комментарии (`gh_comment_edit({ "comment_id": …, "tick": ["Б1"] })`). Ты галочки не ставишь и ответ автора не переписываешь.
-- Замечание, найденное позже (второй круг, ответ автора, найденное при повторном чтении), **дописывается новым пунктом в тот же комментарий** через `gh_comment_edit({ "comment_id": …, "body": <прочитанное тело с новым пунктом> })`. Новый комментарий для этого не открывается: маршрут доработки строится по непомеченным пунктам, и второй комментарий раздвоил бы чеклист.
+- Пункт закрывает **автор** — галочкой в твоём же комментарии: он читает тело и пишет его обратно через `mcp__github__update_issue_comment`. Ты галочки не ставишь и ответ автора не переписываешь.
+- Замечание, найденное позже (второй круг, ответ автора, найденное при повторном чтении), **дописывается новым пунктом в тот же комментарий** через `mcp__github__update_issue_comment({ "owner": …, "repo": …, "comment_id": …, "body": <прочитанное тело с новым пунктом> })`. Новый комментарий для этого не открывается: маршрут доработки строится по непомеченным пунктам, и второй комментарий раздвоил бы чеклист.
 - `SHIP` — тот же единственный комментарий: вердикт и сводка, без пунктов и без секций.
 
 `SHIP` означает: в **Must fix** и **Should fix** пусто; **Nice to have** не блокирует никогда.
@@ -88,7 +88,7 @@ FIX: 3
 FIX: 3
 ```
 
-Имя роли — ровно `код-ревьюер`, без сокращений и переводов: по заголовку диспетчер отличает комментарии ролей от своих и находит начало круга ревью. После имени — ` · ` и 3–12 слов; канон вердикта — второй строкой, как в образце. Разбор принимает и вердикт, названный прямо в заголовке (`**Роль:** код-ревьюер · вердикт FIX: 2`); отдельного решения для этого не нужно, но и разнобой не нужен: пиши каноном. `gh_pr_comment` и `gh_issue_comment` проверяют первую строку **до** сетевого запроса: тело без заголовка не уходит, а в ошибке приходит образец строки.
+Имя роли — ровно `код-ревьюер`, без сокращений и переводов: по заголовку диспетчер отличает комментарии ролей от своих и находит начало круга ревью. После имени — ` · ` и 3–12 слов; канон вердикта — второй строкой, как в образце. Разбор принимает и вердикт, названный прямо в заголовке (`**Роль:** код-ревьюер · вердикт FIX: 2`); отдельного решения для этого не нужно, но и разнобой не нужен: пиши каноном. `mcp__github__add_issue_comment` первую строку не проверяют: заголовок роли — правило конвейера, и держится оно на тебе.
 
 ## Decision — the verdict
 

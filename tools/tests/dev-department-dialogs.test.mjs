@@ -41,7 +41,8 @@ fs.writeFileSync(path.join(home, 'projects.json'), JSON.stringify({
     },
   },
 }, null, 2))
-fs.writeFileSync(path.join(home, 'github.token'), 'test-token\n')
+fs.mkdirSync(path.join(home, 'mcp', 'github-mcp-server'), { recursive: true })
+fs.writeFileSync(path.join(home, 'mcp', 'github-mcp-server', 'token'), 'test-token\n')
 fs.writeFileSync(path.join(home, 'telegram.json'), JSON.stringify({ token: 't', chatId: '1' }))
 process.env.DSH_HOME = home
 
@@ -69,51 +70,132 @@ let pullFilesReads = 0
 // Замечания и вердикты ревьюера живут комментариями PR — как в жизни.
 const reviewer = (number, text) => comments.push({ number, body: text, user: 'reviewer' })
 
-function respond(options, payload) {
+// Диспетчер говорит с GitHub только по MCP: поддельный сервер отвечает на те же
+// инструменты (list_issues, issue_read, add_issue_comment, list_pull_requests,
+// issue_write), что и штатный github-mcp-server. HTTP к api.github.com больше не
+// перехватывается: если диспетчер вернётся к своему REST-клиенту, тест упадёт на
+// реальной сети, а не тихо пройдёт на заглушке.
+const mcpCalls = []
+
+function replyText(payload) {
+  return { content: [{ type: 'text', text: JSON.stringify(payload) }], isError: false }
+}
+
+function replyError(message) {
+  return { content: [{ type: 'text', text: message }], isError: true }
+}
+
+function issueShape(issue) {
+  return {
+    number: issue.number,
+    title: issue.title,
+    body: issue.body || '',
+    state: issue.state === 'open' ? 'OPEN' : 'CLOSED',
+    labels: issue.labels.slice(),
+    created_at: issue.created_at || '2026-10-01T00:00:00Z',
+    updated_at: issue.updated_at || '2026-10-01T00:00:00Z',
+    user: { login: 'gidvantus' },
+    assignees: [],
+  }
+}
+
+function mcpTool(name, args) {
+  mcpCalls.push({ name, args })
+  if (name === 'list_issues') {
+    const open = [...issues.values()].filter((i) => i.state === 'open').sort((a, b) => a.number - b.number)
+    return replyText({ issues: open.map(issueShape), totalCount: open.length, pageInfo: { hasNextPage: false } })
+  }
+  if (name === 'issue_read') {
+    const issue = issues.get(Number(args.issue_number))
+    if (!issue) return replyError('failed to get issue: 404 Not Found')
+    if (args.method === 'get') return replyText(issueShape(issue))
+    if (args.method === 'get_labels') return replyText({ labels: issue.labels.map((label) => ({ name: label })), totalCount: issue.labels.length })
+    if (args.method === 'get_comments') {
+      const page = Number(args.page || 1)
+      const perPage = Number(args.perPage || 30)
+      const all = comments.filter((c) => c.number === issue.number)
+      return replyText(all.slice((page - 1) * perPage, page * perPage).map((c, at) => ({ id: 1000 + at, body: c.body, user: { login: c.user } })))
+    }
+    return replyError('unsupported method ' + args.method)
+  }
+  if (name === 'add_issue_comment') {
+    const issue = issues.get(Number(args.issue_number))
+    if (!issue) return replyError('failed to create comment: 404 Not Found')
+    comments.push({ number: issue.number, body: args.body, user: 'dispatcher' })
+    return replyText({ id: 5000 + comments.length, url: 'https://github.com/x/y/issues/' + issue.number })
+  }
+  if (name === 'list_pull_requests') {
+    return replyText([...pulls.values()])
+  }
+  if (name === 'issue_write') {
+    const issue = issues.get(Number(args.issue_number))
+    if (!issue) return replyError('failed to update issue: 404 Not Found')
+    if (args.method === 'update' && Array.isArray(args.labels)) {
+      // Как у настоящего сервера v2.0.3: набор меток ЗАМЕНЯЕТСЯ целиком, и
+      // пустой список тоже принимается — он снимает все метки.
+      issue.labels = args.labels.slice()
+    }
+    return replyText({ id: String(issue.number), url: 'https://github.com/x/y/issues/' + issue.number })
+  }
+  return replyError('unknown tool ' + name)
+}
+
+// Подмена spawn: поддельный сервер MCP живёт в том же процессе. Штатный
+// диспетчер импортирует spawn из node:child_process, поэтому правим сам модуль
+// и синхронизируем именованные экспорты (syncBuiltinESMExports).
+const { createRequire } = await import('node:module')
+const { syncBuiltinESMExports } = await import('node:module')
+const requireCjs = createRequire(import.meta.url)
+const childProcess = requireCjs('node:child_process')
+childProcess.spawn = () => {
+  const stdoutHandlers = []
+  const stderrHandlers = []
+  const exitHandlers = []
+  const child = {
+    stdout: {
+      setEncoding() {},
+      on(event, fn) { if (event === 'data') stdoutHandlers.push(fn) },
+    },
+    stderr: {
+      setEncoding() {},
+      on(event, fn) { if (event === 'stderr') stderrHandlers.push(fn) },
+    },
+    stdin: {
+      writable: true,
+      write(line) {
+        let message
+        try { message = JSON.parse(line) } catch (error) { return }
+        setImmediate(() => {
+          let answer
+          if (message.method === 'initialize') {
+            answer = { jsonrpc: '2.0', id: message.id, result: { protocolVersion: '2025-06-18', capabilities: {}, serverInfo: { name: 'fake-github-mcp', version: '0.0.0' } } }
+          } else if (message.method === 'tools/call') {
+            answer = { jsonrpc: '2.0', id: message.id, result: mcpTool(message.params.name, message.params.arguments || {}) }
+          } else {
+            return
+          }
+          for (const handler of stdoutHandlers) handler(JSON.stringify(answer) + '\n')
+        })
+        return true
+      },
+    },
+    on(event, fn) {
+      if (event === 'exit') exitHandlers.push(fn)
+      return child
+    },
+    kill() {},
+  }
+  return child
+}
+syncBuiltinESMExports()
+
+// Telegram по-прежнему идёт HTTP: его канал не менялся.
+function respondTelegram(options, payload) {
   if (options.host === 'api.telegram.org') {
     telegram.push(JSON.parse(payload).text)
     return { statusCode: 200, body: '{"ok":true}' }
   }
-  const url = new URL('https://api.github.com' + options.path)
-  const parts = url.pathname.split('/').filter(Boolean)
-  const body = payload ? JSON.parse(payload) : null
-  if (parts[0] !== 'repos') return { statusCode: 404, body: '{"message":"nf"}' }
-  if (parts[3] === 'pulls') {
-    if (parts.length === 4) return { statusCode: 200, body: JSON.stringify([...pulls.values()]) }
-    if (parts[5] === 'files') {
-      pullFilesReads += 1
-      return { statusCode: 200, body: JSON.stringify(pullFiles) }
-    }
-    return { statusCode: 404, body: '{"message":"nf"}' }
-  }
-  if (parts[3] !== 'issues') return { statusCode: 404, body: '{"message":"nf"}' }
-  const tail = parts.slice(4)
-  if (tail.length === 0) {
-    const open = [...issues.values()].filter((i) => i.state === 'open')
-    return { statusCode: 200, body: JSON.stringify(open) }
-  }
-  const issue = issues.get(Number(tail[0]))
-  if (!issue) return { statusCode: 404, body: '{"message":"nf"}' }
-  if (tail.length === 1) return { statusCode: 200, body: JSON.stringify(issue) }
-  if (tail[1] === 'comments') {
-    if (options.method === 'GET') {
-      return { statusCode: 200, body: JSON.stringify(comments.filter((c) => c.number === issue.number)) }
-    }
-    comments.push({ number: issue.number, body: body.body, user: 'dispatcher' })
-    return { statusCode: 201, body: '{}' }
-  }
-  if (tail[1] === 'labels') {
-    if (options.method === 'POST') {
-      for (const label of body.labels) if (!issue.labels.includes(label)) issue.labels.push(label)
-      return { statusCode: 200, body: '{}' }
-    }
-    if (options.method === 'DELETE') {
-      const name = decodeURIComponent(tail[2] || '')
-      issue.labels = issue.labels.filter((l) => l !== name)
-      return { statusCode: 200, body: '{}' }
-    }
-  }
-  return { statusCode: 404, body: '{"message":"nf"}' }
+  return { statusCode: 500, body: '{"message":"неожиданный HTTP: диспетчер должен ходить в GitHub только через MCP"}' }
 }
 
 https.request = (options, callback) => ({
@@ -122,7 +204,7 @@ https.request = (options, callback) => ({
   destroy() { return this },
   end(payload) {
     process.nextTick(() => {
-      const result = respond(options, payload)
+      const result = respondTelegram(options, payload)
       const res = {
         statusCode: result.statusCode,
         on(event, fn) {
@@ -284,7 +366,7 @@ step = await tick(app)
 check('после разработки — код-ревьюер', step.result.action + ':' + step.result.role, 'dispatched:code-review')
 const reviewDialog = step.result.sessionId
 check('ревьюеру сказано про метку', lastPrompt().text.includes('for-code-review'), true)
-check('ревьюеру сказано про комментарии в PR', lastPrompt().text.includes('gh_pr_comment'), true)
+check('ревьюеру сказано про комментарии в PR', lastPrompt().text.includes('mcp__github__add_issue_comment'), true)
 check('диалоги записаны с проектом', Object.keys((await app.status()).dialogs).sort(), ['vahta:code-review:100', 'vahta:dev-fullstack:100'])
 
 endTurn(reviewDialog)
@@ -772,7 +854,7 @@ const reviewPrompt = lastPrompt().text
 check('задание ревьюеру: один комментарий', reviewPrompt.includes('ОДНИМ комментарием'), true)
 check('задание ревьюеру: секция Бэкенд', reviewPrompt.includes('### Бэкенд'), true)
 check('задание ревьюеру: секция Фронтенд', reviewPrompt.includes('### Фронтенд'), true)
-check('задание ревьюеру: дописать пункт в тот же комментарий', reviewPrompt.includes('gh_comment_edit'), true)
+check('задание ревьюеру: дописать пункт в тот же комментарий', reviewPrompt.includes('mcp__github__update_issue_comment'), true)
 check('задание ревьюеру: одна строка в issue', reviewPrompt.includes('одна короткая строка'), true)
 check('задание ревьюеру: нет старого «по одному, чтобы автор ответил точечно»', reviewPrompt.includes('чтобы автор мог ответить точечно'), false)
 reviewer(1500, '**Роль:** код-ревьюер · вердикт FIX: один пункт\nFIX: 1\n\n### Фронтенд\n- [ ] Ф1 · `frontend/src/lib/vacancySubscription.js:41` — нет признака отписки')
@@ -782,13 +864,13 @@ await tick(app)
 step = await tick(app)
 const reworkPrompt = lastPrompt().text
 check('доработка ушла фронтендеру', step.result.action + ':' + step.result.role, 'dispatched:dev-frontend')
-check('в задании доработки: галочки через gh_comment_edit', reworkPrompt.includes('gh_comment_edit'), true)
-check('в задании доработки: tick по номеру', reworkPrompt.includes('"tick"'), true)
+check('в задании доработки: галочки через mcp__github__update_issue_comment', reworkPrompt.includes('mcp__github__update_issue_comment'), true)
+check('в задании доработки: правится `- [ ]` на `- [x]` в теле', reworkPrompt.includes('- [x]'), true)
 check('в задании доработки: одна строка в issue и sha', reworkPrompt.includes('одна короткая строка') && reworkPrompt.includes('коммит <sha>'), true)
-check('в задании доработки: не согласен — в тело PR', reworkPrompt.includes('gh_pr_edit'), true)
+check('в задании доработки: не согласен — в тело PR', reworkPrompt.includes('mcp__github__update_pull_request'), true)
 
 console.log('\n=== сценарий 16: отклонение формата `-[ ] Б1` — пункт у обеих сторон ===')
-// Шов постановки #10: шаблон пункта один у диспетчера и у `gh_comment_edit`.
+// Шов постановки #10: шаблон пункта один у диспетчера и у `mcp__github__update_issue_comment`.
 // Дефис без пробела — обычное отклонение от формата у модели; такой пункт
 // обязан остаться пунктом и для маршрута, иначе закрыть его будет нечем.
 reset({ number: 1600, title: 'Демо-тикет 1600', labels: ['ready-for-dev', 'area:backend'], state: 'open' })
