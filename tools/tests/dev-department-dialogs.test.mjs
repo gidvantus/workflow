@@ -8,13 +8,13 @@
 // бота только в журнал (запроса на api.telegram.org нет, сбоя нет).
 // Запуск: node .dev-department-dialogs-test.mjs
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import https from 'node:https'
+import * as pluginPaths from './plugin-paths.mjs'
 
 // Каталог установки читаем ДО подмены DSH_HOME ниже: тестируем боевой модуль.
-const dshHome = process.env.DSH_HOME || path.join(os.homedir(), '.dsh')
-const pluginFile = path.join(dshHome, 'profiles', 'desktop', 'plugins', 'dev-department.mjs')
+// Модуль ищется в любой раскладке — рабочая копия, установленный пакет, старая.
+const pluginFile = pluginPaths.pluginFile('dev-department')
 const home = path.join(process.cwd(), '.dev-department-test-home')
 fs.rmSync(home, { recursive: true, force: true })
 fs.mkdirSync(home, { recursive: true })
