@@ -1,12 +1,11 @@
 // Проверка расписания проекта на РЕАЛЬНОМ модуле диспетчера: функции окна
 // берём из самого файла, а не из копии. Запуск: node .dev-department-windows-test.mjs
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
+import * as pluginPaths from '../plugin-paths.mjs'
 
-// Каталог установки берём из окружения: тот же тест работает и на другой машине.
-const dshHome = process.env.DSH_HOME || path.join(os.homedir(), '.dsh')
-const plugin = path.join(dshHome, 'profiles', 'desktop', 'plugins', 'dev-department.mjs')
+// Модуль берём в любой раскладке: рабочая копия, установленный пакет, старая.
+const plugin = pluginPaths.pluginFile('dev-department')
 const source = fs.readFileSync(plugin, 'utf8')
 const cut = source.indexOf('export default {')
 const wanted = ['parseClock', 'formatClock', 'windowLabel', 'parseWindows', 'minutesOfDay', 'inWindow', 'shiftKey', 'nextWindowStart']

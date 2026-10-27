@@ -238,48 +238,81 @@ GitHub не даст (422), и шаг конвейера упадёт. Набо�
 
 | Файл | Ответственность |
 |---|---|
-| `profiles/desktop/plugins/package.json` | манифест пачки хост-плагинов: без непустых `name` и `version` здесь DSH валит каждый запрос с `REQUEST_EXTENSION` |
+| `package.json` (корень) | манифест bundle-пакета `dsh-dev-department`: `name`/`version`, `exports` на четыре модуля плагинов, патч и сам манифест, `files`, `dsh.bundle.patch` |
+| `cordis.patch.yml` (корень) | патч бандла: строки четырёх хост-плагинов (спецификатором пакета) и переопределение строки `agent-presets` с корнем пресетов внутри пакета |
+| `profiles/desktop/cordis.patch.yml` | раскладка профиля прежним способом (`sync.mjs`) и машинная настройка человека — MCP GitHub и Playwright MCP; вместе с пакетом не подключается |
+| `profiles/desktop/plugins/package.json` | манифест пачки хост-плагинов для раскладки `sync.mjs`: без непустых `name` и `version` DSH валит каждый запрос с `REQUEST_EXTENSION` |
 | `profiles/desktop/plugins/dev-department.mjs` | расписание смен, выбор задачи, запуск ролей, диалоги, сторож, сводка в Telegram |
 | `profiles/desktop/plugins/usage-ledger.mjs` | книга привязок «сессия → тикет» и счёт токенов по правилу проекции `tokenUsage` |
 | `profiles/desktop/plugins/role-sessions.mjs` | инструменты `open_role_session`, `list_agent_presets`; создаёт сессию роли в нужной рабочей области |
 | `profiles/desktop/plugins/role-permissions.mjs` | выдаёт ролевым сессиям `danger-full-access` |
 | `profiles/desktop/plugins/tg-bridge.mjs` | мост в Telegram |
-| `profiles/desktop/plugins/voice-input/` | голосовой ввод в GUI: кнопка в композере и ручка `POST /dsh-voice/transcribe` |
+| `profiles/desktop/plugins/voice-input/` | голосовой ввод в GUI: кнопка в композере и ручка `POST /dsh-voice/transcribe` (в пакет не входит) |
 | `agent-presets/<id>/agent.cordis.yml` | композиция роли: персона, скиллы, инструменты, строка `mcp-github` |
 | `agent-presets/<id>/preset.yml` | имя и описание роли в списке пресетов |
 | `agent-presets/<id>/skills/*/SKILL.md` | рабочий контракт роли: порядок действий, команды, границы |
 | `profiles/desktop/cordis.patch.yml` (строка `mcp-github`) | единственный доступ к GitHub: штатный `github/github-mcp-server`, инструменты `mcp__github__*` |
 
+## Карта пакета
+
+Надстройка ставится одним bundle-пакетом: `dsh plugin add
+github:gidvantus/workflow#<commit>` кладёт `dsh-dev-department` зависимостью
+профиля (`~/.dsh/profiles/<профиль>/node_modules/dsh-dev-department`) и дописывает
+имя в `dsh.profile.bundles`. Дальше DSH применяет слой пакета после бандлов
+`@deepseek-ai/dsh-base` и `@deepseek-ai/dsh-web-app`.
+
+| Что | Куда едет | Почему |
+|---|---|---|
+| `cordis.patch.yml` (корень) | `dsh.bundle.patch` пакета | это и есть слой композиции профиля |
+| `profiles/desktop/plugins/*.mjs` | `exports` (`./plugins/<файл>.mjs`) и `files` | строки патча адресуются спецификатором `dsh-dev-department/plugins/…`; относительный путь резолвился бы от профиля, а не от пакета |
+| `agent-presets/` | `files` | строка `agent-presets` получает этот каталог корнем пресетов с trust `system` |
+| `docs/`, `tools/`, `config/` | **не едут** | документация процесса и инструменты проверки, а не надстройка каталога установки |
+| `profiles/desktop/plugins/voice-input/`, MCP-строки | **не едут** | ~640 МБ внешних бинарников и машинная настройка человека (пути к бинарникам и браузеру) |
+
+Пресеты системного корня — только чтение: `agentPresets.copy()` для них не
+работает, правка роли идёт через git (commit + повторный `dsh plugin add`).
+`~/.dsh/.agent-presets` при этом остаётся пользовательским корнем
+(`includeUserRoot`): там по-прежнему можно держать свои пресеты.
+
+Устройство строки `agent-presets` в патче бандла — одна из ловушек: патч
+**заменяет `config` строки целиком**, а не смешивает с прежним. Поэтому в нём
+повторены `default`, `includeShippedRoot` и `includeUserRoot`: без `default`
+ростер не загрузится (обязательное поле), а выключенный `include*` молча убрал бы
+штатные или пользовательские пресеты из списка.
+
 ### Если добавляешь хост-плагин
 
-1. Файл кладётся в `profiles/<профиль>/plugins/` и вписывается в `HOST_FILES` в
-   `sync.mjs` — иначе `apply` его не разложит.
-2. Плагин подключается строкой в `cordis.patch.yml` профиля, а строка обязана
-   объявить в `inject` все хост-сервисы, которые потребляет (см. шапку патча).
-3. `plugins/package.json` — ближайший манифест для всей пачки. DSH перечисляет
-   активные пакеты плагинов в **каждом** запросе к модели
-   (`@deepseek-ai/dsh-plugin-package-inventory-deepseek`) и требует у ближайшего
-   манифеста непустые `name` и `version`. Профильный манифест
-   (`dsh-profile-desktop`) `version` не несёт, поэтому без этого файла каждый ход
-   падает с `DeepSeek request extension preparation failed` и кодом
-   `REQUEST_EXTENSION` — плагин при этом загружается нормально, и в журнале хоста
-   нет ничего, кроме предупреждения. Снаружи это выглядит как «сломалась модель».
-4. Плагин со своим каталогом (как `voice-input/`) приносит собственный
-   `package.json` — этот файл его не касается.
+1. Файл кладётся в `profiles/desktop/plugins/`.
+2. Он вписывается в `exports` и `files` в корневом `package.json` — иначе в
+   установленном пакете его нет и строка патча падает с «плагин не найден».
+3. Строка добавляется в **корневой** `cordis.patch.yml` (имя —
+   `dsh-dev-department/plugins/<файл>.mjs`), а строка обязана объявить в `inject`
+   все хост-сервисы, которые потребляет (см. шапку патча).
+4. Для прежней раскладки `sync.mjs` файл сам попадёт в список: он собирается
+   обходом `profiles/`, ручных массивов больше нет.
+5. `plugins/package.json` в пакете не нужен: ближайший манифест над модулями —
+   сам `package.json` пакета, а он несёт `name` и `version`. Файл остаётся для
+   раскладки `sync.mjs`, где ближайший манифест — профильный, а у того `version`
+   нет: без `name`+`version` каждый ход падает с
+   `DeepSeek request extension preparation failed` и кодом `REQUEST_EXTENSION` —
+   плагин при этом загружается нормально, и в журнале хоста нет ничего, кроме
+   предупреждения. Снаружи это выглядит как «сломалась модель».
+6. Плагин со своим каталогом (как `voice-input/`) приносит собственный
+   `package.json` — этот пункт его не касается.
 
 ### Если добавляешь новую роль
 
 1. Скопируй ближайший по смыслу пресет в `agent-presets/<id>/` и перепиши
-   `preset.yml`, персону и скилл.
+   `preset.yml`, персону и скилл. Ничего больше вписывать не нужно: каталог
+   подхватывается и пакетом (он едет целиком), и `sync.mjs` (он обходит
+   `agent-presets/`).
 2. Добавь `<id>` в `ROLES` в `role-permissions.mjs` — иначе сессия роли будет
    упираться в запросы подтверждения.
-3. Добавь `<id>` в список `PRESETS` в `sync.mjs`, иначе каталог не будет
-   синхронизироваться.
-3. Если роль выводится из процесса, сними её каталог, убери id из `ROLES` и
-   `PRESETS`, и проверь, что на неё не ссылается `dev-department.mjs`.
-4. Если роль должна участвовать в конвейере — научи диспетчер её запускать.
-5. Перезапусти DSH: композиции пресетов перечитываются только при старте, новые
-   каталоги пресетов — на ходу.
+3. Если роль должна участвовать в конвейере — научи диспетчер её запускать.
+4. Правка роли в установке идёт через git, а не через каталог установки: пресеты
+   системного корня только на чтение. После правки — commit и
+   `dsh plugin add github:gidvantus/workflow#<commit>`, затем перезапуск DSH:
+   композиции пресетов перечитываются только при старте.
 
 ## Учёт токенов
 

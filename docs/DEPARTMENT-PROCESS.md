@@ -1,7 +1,9 @@
 # Процесс отдела разработки
 
 Состояние на 20.10.2026. Описывает поведение установленного диспетчера
-(`~/.dsh/profiles/desktop/plugins/dev-department.mjs`) и промтов, которые он выдаёт ролям.
+(`<пакет>/profiles/desktop/plugins/dev-department.mjs`, то есть
+`<DSH_HOME>/profiles/desktop/node_modules/dsh-dev-department/…`; в `~/.dsh` лежит
+только состояние отдела — см. §10) и промтов, которые он выдаёт ролям.
 
 ---
 
@@ -462,14 +464,37 @@ DevOps-инженера.
 
 ## 10. Где это живёт
 
+Две вещи стоит держать в голове. **Код отдела** (плагины хоста и роли) приезжает
+пакетом `dsh-dev-department`: он лежит в
+`~/.dsh/profiles/<профиль>/node_modules/dsh-dev-department/`, а источник его —
+этот репозиторий. **Состояние отдела** (реестр проектов, диалоги, журнал, книга
+токенов) — это файлы человека в `~/.dsh`, они не ставятся и не перезаписываются
+пакетом никогда.
+
 | Что | Где |
 |---|---|
-| Диспетчер и тексты заданий | `~/.dsh/profiles/desktop/plugins/dev-department.mjs` |
-| Разрешения ролей (список `ROLES`) | `~/.dsh/profiles/desktop/plugins/role-permissions.mjs` |
+| Диспетчер и тексты заданий | `<пакет>/profiles/desktop/plugins/dev-department.mjs` |
+| Разрешения ролей (список `ROLES`) | `<пакет>/profiles/desktop/plugins/role-permissions.mjs` |
+| Строки плагинов отдела в композиции | `<пакет>/cordis.patch.yml` — патч бандла |
+| Роли: промт, описание, скиллы (`agent.cordis.yml`, `preset.yml`, `skills/`) | `<пакет>/agent-presets/<id>/` — карта ролей в разделе 2.1 |
+| Скилл макета (роль `design`) | `<пакет>/agent-presets/design/skills/mockup-delivery/SKILL.md` |
 | Проекты, ветки, каталоги, метки | `~/.dsh/projects.json` |
 | Общие расписание и лимиты | `~/.dsh/dev-department.json` |
 | Карта диалогов роль↔тикет | `~/.dsh/dev-department-dialogs.json` |
 | Журнал смен | `~/.dsh/dev-department.log` |
-| Роли: промт, описание, скиллы (`agent.cordis.yml`, `preset.yml`, `skills/`) | `~/.dsh/.agent-presets/<id>/` — карта ролей в разделе 2.1 |
-| Скилл макета (роль `design`) | `~/.dsh/.agent-presets/design/skills/mockup-delivery/SKILL.md` |
+| Книга привязок «сессия → тикет» | `~/.dsh/dev-department-usage.json` |
+| MCP GitHub и Playwright MCP (машинная настройка) | `~/.dsh/profiles/<профиль>/cordis.patch.yml` |
 | Рендер макета в PNG | `~/.dsh/tools/mockup-shot.mjs` |
+
+`<пакет>` — каталог установленного пакета, он же корень репозитория: править
+роль или диспетчера нужно **в репозитории**, а не в каталоге установки. Пресеты
+системного корня только на чтение (`agentPresets.copy()` для них не работает),
+поэтому правка идёт через git: commit в ветку, `dsh plugin add
+github:gidvantus/workflow#<commit>`, перезапуск DSH. Правка файла прямо в
+`node_modules` пропадёт при следующей установке и не попадёт в репозиторий.
+
+Раньше то же самое раскладывалось `node sync.mjs apply` в
+`~/.dsh/profiles/<профиль>/plugins/` и `~/.dsh/.agent-presets/<id>/`. Эта
+раскладка поддерживается только для машин, где пакет ещё не поставлен: две
+копии диспетчера в одной композиции — это два тикера на одни тикеты.
+

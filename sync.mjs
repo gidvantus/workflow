@@ -5,6 +5,15 @@
 //   node sync.mjs apply     из репозитория в ~/.dsh
 //   node sync.mjs status    сравнить и показать расхождения
 //
+// Установка — не этот скрипт. Надстройка ставится одним bundle-пакетом
+// (`dsh plugin add github:gidvantus/workflow#<commit>`): хост-плагины приезжают
+// строками его cordis.patch.yml, роли — его каталогом agent-presets/. Поэтому
+// apply и status, увидев в профиле установленный пакет, говорят об этом и
+// раскладку хост-плоскости не предлагают: вторая копия в каталоге установки
+// подняла бы второй диспетчер. За sync остались файлы, путь которых в установке
+// не совпадает с путём в репозитории (config/dev-department.json), и collect —
+// сбор правок из установки обратно в репозиторий.
+//
 // Каталог установки: $DSH_HOME, иначе ~/.dsh; переопределяется ключом --dsh-home.
 // Корень репозитория: каталог самого скрипта; переопределяется ключом --repo или
 // полем repo в sync.local.json. Скрипт лежит в корне репозитория и переезжает
@@ -17,6 +26,7 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
+import { BUNDLE_PACKAGE, DEFAULT_PROFILE, bundlePackageDir } from './tools/plugin-paths.mjs'
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
 
@@ -57,29 +67,58 @@ if (!fs.existsSync(repo)) {
 
 // ── что синхронизируем ──────────────────────────────────────────────────────
 
-// Роли отдела: один каталог — один пресет. Новый пресет добавляется сюда строкой.
-const PRESETS = ['analyst', 'code-review', 'design', 'dev-backend', 'dev-frontend', 'dev-fullstack', 'devops-delivery', 'jev', 'security-review', 'tester']
+// Списки не ведутся руками: и роли, и хост-плоскость берутся из файловой системы
+// репозитория. Раньше здесь лежали массивы PRESETS и HOST_FILES, и забытая строка
+// в них означала роль, которая есть в репозитории, но никуда не раскладывается.
+// Теперь новый пресет — это новый каталог `agent-presets/<id>/`, а новый
+// хост-файл — новый файл в `profiles/<профиль>/`.
+
+// Роли отдела: один каталог — один пресет.
+function repoPresets() {
+  const root = path.join(repo, 'agent-presets')
+  if (!fs.existsSync(root)) return []
+  return fs.readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && !EXCLUDE_PATH.test(entry.name))
+    .map((entry) => entry.name)
+    .sort()
+}
 
 // Хост-плоскость: путь внутри каталога установки совпадает с путём в репозитории.
-const HOST_FILES = [
-  'profiles/desktop/cordis.patch.yml',
-  // Манифест пачки хост-плагинов: инвентарь пакетов DSH требует у ближайшего
-  // package.json непустые name и version, иначе каждый запрос падает с
-  // REQUEST_EXTENSION. Профильный манифест version не несёт — этот файл его
-  // перекрывает.
-  'profiles/desktop/plugins/package.json',
-  'profiles/desktop/plugins/dev-department.mjs',
-  'profiles/desktop/plugins/usage-ledger.mjs',
-  'profiles/desktop/plugins/role-sessions.mjs',
-  'profiles/desktop/plugins/role-permissions.mjs',
-  'profiles/desktop/plugins/tg-bridge.mjs',
-  'profiles/desktop/plugins/voice-input/index.mjs',
-  'profiles/desktop/plugins/voice-input/client.js',
-  'profiles/desktop/plugins/voice-input/package.json',
-  'profiles/web/cordis.patch.yml',
-  'profiles/web/plugins/package.json',
-  'profiles/web/plugins/role-sessions.mjs',
-]
+function repoHostFiles() {
+  return walk(path.join(repo, 'profiles'))
+    .map((rel) => 'profiles/' + rel.split(path.sep).join('/'))
+    .sort()
+}
+
+// Установленный bundle-пакет надстройки: `dsh plugin add` кладёт его зависимостью
+// профиля, и тогда хост-плоскость и пресеты приезжают из пакета, а не из sync.
+// Место то же, что читает патч бандла в корне репозитория, поэтому путь берётся у
+// помощника раскладок, а не выводится здесь заново.
+function installedBundles() {
+  const root = path.join(dshHome, 'profiles')
+  if (!fs.existsSync(root)) return []
+  const found = []
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue
+    const dir = bundlePackageDir({ dshHome, repoRoot: repo, profile: entry.name })
+    if (dir !== null) found.push({ profile: entry.name, dir })
+  }
+  return found
+}
+
+// Подключён ли пакет в манифесте профиля: каталог в node_modules без строки в
+// `dsh.profile.bundles` — это «пакет лежит», а не «пакет работает». null —
+// манифест не прочитан (профиля нет или он битый).
+function bundleRegistered(profile) {
+  const file = path.join(dshHome, 'profiles', profile, 'package.json')
+  if (!fs.existsSync(file)) return null
+  try {
+    const manifest = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''))
+    return (manifest?.dsh?.profile?.bundles ?? []).includes(BUNDLE_PACKAGE)
+  } catch {
+    return null
+  }
+}
 
 // Файлы, у которых путь в каталоге установки не совпадает с путём в репозитории.
 // Расписание смен и лимиты диспетчер читает из ~/.dsh/dev-department.json, а в
@@ -166,7 +205,7 @@ function pruneEmptyDirs(root) {
 // скиллы и переименованные роли остаются в репозитории навсегда.
 function mirrorRoots() {
   const roots = []
-  for (const preset of PRESETS) {
+  for (const preset of repoPresets()) {
     const source = path.join(dshHome, '.agent-presets', preset)
     if (!fs.existsSync(source)) continue
     roots.push({
@@ -195,13 +234,13 @@ function prune(roots) {
 
 function pairs() {
   const list = []
-  for (const rel of HOST_FILES) {
-    list.push({ from: path.join(dshHome, rel), to: path.join(repo, rel), rel })
+  for (const rel of repoHostFiles()) {
+    list.push({ from: path.join(dshHome, rel), to: path.join(repo, rel), rel, kind: 'host' })
   }
   for (const { repo: rel, home } of HOME_FILES) {
-    list.push({ from: path.join(dshHome, home), to: path.join(repo, rel), rel })
+    list.push({ from: path.join(dshHome, home), to: path.join(repo, rel), rel, kind: 'home' })
   }
-  for (const preset of PRESETS) {
+  for (const preset of repoPresets()) {
     const fromRoot = path.join(dshHome, '.agent-presets', preset)
     const toRoot = path.join(repo, 'agent-presets', preset)
     // Перечисляем ОБЕ стороны: на новой машине пресетов в каталоге установки
@@ -214,6 +253,7 @@ function pairs() {
         from: path.join(fromRoot, rel),
         to: path.join(toRoot, rel),
         rel: 'agent-presets/' + preset + '/' + rel.split(path.sep).join('/'),
+        kind: 'preset',
       })
     }
   }
@@ -281,7 +321,59 @@ console.log('каталог установки: ' + dshHome)
 console.log('репозиторий:       ' + repo)
 console.log('')
 
+const bundles = installedBundles()
+// Пакет может стоять в одном профиле и отсутствовать в другом, поэтому признак
+// считается по профилю, а не по всему каталогу установки: иначе установка в
+// probe (её делает тестировщик на новом профиле) молча выключала бы раскладку и
+// для desktop, и для web — и никто бы об этом не узнал.
+const bundleIn = new Set(bundles.map((bundle) => bundle.profile))
+// Пресеты лежат в каталоге установки одни на машину (`~/.dsh/.agent-presets`), а не
+// по профилю: их привозит пакет, поставленный в основной профиль отдела.
+const presetsInBundle = bundleIn.has(DEFAULT_PROFILE)
+
+for (const bundle of bundles) {
+  const registered = bundleRegistered(bundle.profile)
+  const state = registered === true
+    ? 'подключён в dsh.profile.bundles'
+    : registered === false
+      ? 'НЕ перечислен в dsh.profile.bundles профиля — DSH его не применит'
+      : 'манифест профиля не прочитан'
+  console.log('пакет:             ' + BUNDLE_PACKAGE + ' установлен в профиль ' + bundle.profile +
+    ' (' + path.relative(dshHome, bundle.dir).split(path.sep).join('/') + '), ' + state)
+}
+
+// Пара, которую уже везёт установленный пакет: раскладывать её в каталог
+// установки и собирать из него нельзя — вторая копия подняла бы второй
+// диспетчер, а `collect` вернул бы в репозиторий устаревший модуль.
+function ownedByBundle(pair) {
+  if (pair.kind === 'host') {
+    const name = profileOf(pair.rel)
+    return name !== null && bundleIn.has(name)
+  }
+  if (pair.kind === 'preset') return presetsInBundle
+  return false
+}
+
 const list = pairs()
+const synced = list.filter((pair) => !ownedByBundle(pair))
+const fromBundle = synced.length !== list.length
+
+if (fromBundle) {
+  const profiles = [...bundleIn].sort().join(', ')
+  console.log('')
+  console.log('пакет везёт хост-плоскость ' + (bundleIn.size === 1 ? 'профиля ' : 'профилей ') + profiles +
+    (presetsInBundle ? ' и пресеты ролей' : '') + ':')
+  console.log('строки плагинов берутся из его cordis.patch.yml, роли — из его agent-presets/. Раскладывать')
+  console.log('и собирать их через sync больше не нужно и нельзя: в каталоге установки появилась бы')
+  console.log('вторая копия, а collect вернул бы в репозиторий устаревший модуль.')
+  console.log('')
+}
+
+// Зеркальная уборка пресетов сравнивает репозиторий с `~/.dsh/.agent-presets`.
+// Когда роли приезжают из пакета, этот каталог — остаток прежней раскладки (или
+// пустой), и сверка с ним удаляла бы из репозитория новые файлы. Поэтому при
+// пакете в основном профиле уборка не делается вовсе.
+const mirrors = presetsInBundle ? [] : mirrorRoots()
 
 if (mode === 'status') {
   let same = 0
@@ -289,7 +381,7 @@ if (mode === 'status') {
   let missingRepo = 0
   let missingHome = 0
   let skipped = 0
-  for (const pair of list) {
+  for (const pair of synced) {
     const inRepo = hash(pair.to)
     const inHome = hash(pair.from)
     if (!hasProfile(pair.rel)) {
@@ -313,7 +405,7 @@ if (mode === 'status') {
   }
   console.log('')
   let extra = 0
-  for (const root of mirrorRoots()) {
+  for (const root of mirrors) {
     if (!fs.existsSync(root.target)) continue
     for (const rel of walkAll(root.target)) {
       if (root.keep.has(rel)) continue
@@ -323,11 +415,14 @@ if (mode === 'status') {
   }
   console.log('совпадает: ' + same + ', различается: ' + diff + ', нет в репозитории: ' + missingRepo +
     ', не разложено: ' + missingHome + ', профиля нет: ' + skipped + ', лишнего: ' + extra)
+  if (fromBundle) {
+    console.log('(файлы, которые везёт пакет, из счёта исключены)')
+  }
 }
 
 if (mode === 'collect') {
   let copied = 0
-  for (const pair of list) {
+  for (const pair of synced) {
     if (!hasProfile(pair.rel)) continue
     if (!fs.existsSync(pair.from)) {
       console.log('  пропуск (нет боевого файла): ' + pair.from)
@@ -339,9 +434,14 @@ if (mode === 'collect') {
       console.log('  собрано   ' + short(pair.to))
     }
   }
-  const removed = prune(mirrorRoots())
+  const removed = prune(mirrors)
   console.log('')
   console.log('обновлено файлов: ' + copied + ', удалено лишних: ' + removed)
+  if (fromBundle) {
+    console.log('')
+    console.log('правки из старой раскладки не собираются: источник правды — пакет. Роли и плагины')
+    console.log('правятся в репозитории; в профиль их привозит `dsh plugin add github:gidvantus/workflow#<commit>`.')
+  }
   console.log('')
   console.log('проверка секретов:')
   scanSecrets()
@@ -350,7 +450,7 @@ if (mode === 'collect') {
 if (mode === 'apply') {
   let copied = 0
   const noProfile = new Set()
-  for (const pair of list) {
+  for (const pair of synced) {
     if (!hasProfile(pair.rel)) {
       const name = profileOf(pair.rel)
       if (name && !noProfile.has(name)) {
@@ -368,5 +468,10 @@ if (mode === 'apply') {
     }
   }
   console.log('')
-  console.log('обновлено файлов: ' + copied + ' (перезапусти DSH, чтобы плагины хоста перечитались)')
+  if (fromBundle) {
+    console.log('обновлено файлов: ' + copied + '. Хост-плоскость и роли едут из пакета: их обновляют')
+    console.log('заново поставленным пакетом (`dsh plugin add`) и перезапуском DSH, а не `sync apply`.')
+  } else {
+    console.log('обновлено файлов: ' + copied + ' (перезапусти DSH, чтобы плагины хоста перечитались)')
+  }
 }
