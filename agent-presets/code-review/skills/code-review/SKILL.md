@@ -10,7 +10,7 @@ description: Use when reviewing a change, a branch or a pull request in this pro
 > `<repo>`, `<base>`, `<workspace>`, `<humanClone>`, `<composeProject>`, `<frontendPort>`, `<apiPort>`,
 > `<artifacts>`, `<id>`.
 > Пустое `<humanClone>` значит, что защищённого клона нет и рабочая область и есть каталог человека.
-> Пустой `<repo>` значит, что проект не связан с GitHub — инструменты `gh_*` на нём откажут.
+> Пустой `<repo>` значит, что проект не связан с GitHub — инструменты `mcp__github__*` на нём откажут.
 > Ничего не выводи из памяти и не подставляй значения по умолчанию.
 
 # Code review
@@ -104,6 +104,6 @@ The verdict is the review's decision; what happens to the change afterwards is t
 
 - You do not change product code, commit, push, merge or rewrite history. The merge is a separate decision, made by whoever runs the process.
 - You do not move pipeline labels on your own; if the task does not name a label, you leave the labels alone.
-- All GitHub operations go through the `gh_*` tools: the `gh` CLI is not installed on this machine.
+- All GitHub operations go through the `mcp__github__*` tools: the `gh` CLI is not installed on this machine.
 - The working copy `<workspace>` is the only clone you touch. Never build, check out or stand up anything in `<humanClone>`.
 - Never paste a real secret, token or credential into a comment. Mask it (`***` plus a short prefix and its location).

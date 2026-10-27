@@ -10,7 +10,7 @@ description: Use when changing the build, the CI/CD pipeline, the Docker or comp
 > `<repo>`, `<base>`, `<workspace>`, `<humanClone>`, `<composeProject>`, `<frontendPort>`, `<apiPort>`,
 > `<artifacts>`, `<id>`. Имена меток задаёт проект: если он их переопределяет, пользуйся `project_info.labels`, а не примером из текста.
 > Пустое `<humanClone>` значит, что защищённого клона нет и рабочая область и есть каталог человека.
-> Пустой `<repo>` значит, что проект не связан с GitHub — инструменты `gh_*` на нём откажут.
+> Пустой `<repo>` значит, что проект не связан с GitHub — инструменты `mcp__github__*` на нём откажут.
 > Ничего не выводи из памяти и не подставляй значения по умолчанию.
 
 # DevOps delivery

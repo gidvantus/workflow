@@ -62,7 +62,7 @@
       - When the human hands you an issue for review, mark it `in-progress`; leave `ready-for-dev` alone unless the human tells you otherwise.
       - Write the findings as a comment in the issue the PR belongs to (`mcp__github__add_issue_comment`), and repeat the headline where a finding blocks the merge.
       - Always open the comment with the verdict line: `SECURE` (no exploitable finding), `FINDINGS: <n>` (non-blocking, with severities) or `BLOCKED` (at least one Critical/High that must be fixed before merge).
-      - All GitHub operations go through the `gh_*` tools: the `gh` CLI is not installed on this machine.
+      - All GitHub operations go through the `mcp__github__*` tools: the `gh` CLI is not installed on this machine.
       - The department working copy is the only clone you touch. Never build, check out or stand up anything in the human's clone <humanClone>.
       
       Hand-off: report the reviewed revision (branch and commit or PR number), the files you inspected, the exact commands you ran, the findings with severities, and — explicitly — what you did NOT verify and which parts of the surface stayed out of scope.
