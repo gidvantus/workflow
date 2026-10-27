@@ -23,7 +23,8 @@ const WORKSPACE = path.join(home, 'workspace')
 fs.mkdirSync(path.join(WORKSPACE, '.git'), { recursive: true })
 fs.mkdirSync(path.join(home, 'mcp', 'github-mcp-server'), { recursive: true })
 fs.writeFileSync(path.join(home, 'mcp', 'github-mcp-server', 'token'), 'test-token\n')
-fs.writeFileSync(path.join(home, 'telegram.json'), JSON.stringify({ token: 't', chatId: '1' }))
+// Бот проекта живёт только в реестре: сводку тест ловит поддельным Telegram,
+// поэтому бот задан полем telegram записи проекта, а не общим файлом.
 fs.writeFileSync(path.join(home, 'projects.json'), JSON.stringify({
   version: 1,
   default: 'workflow',
@@ -35,6 +36,7 @@ fs.writeFileSync(path.join(home, 'projects.json'), JSON.stringify({
       workspace: WORKSPACE,
       composeProject: 'workflow-agent',
       department: { enabled: true },
+      telegram: { token: 't', chatId: '1' },
     },
   },
 }, null, 2))

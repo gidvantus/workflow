@@ -17,10 +17,10 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 
-// Боты берутся из конфигурации. У каждого проекта может быть СВОЙ бот —
-// поле telegram в ~/.dsh/projects.json; ~/.dsh/telegram.json остаётся общим и
-// обслуживает проекты, которые своего бота не завели. Тот же общий файл
-// читает диспетчер отдела разработки, чтобы слать сводки.
+// Боты берутся ТОЛЬКО из реестра проектов: поле telegram записи проекта в
+// ~/.dsh/projects.json. Другого источника нет — общего файла бота плагин не
+// читает. Проект без своего бота работает без Telegram: события, разрешения и
+// вопросы его сессий остаются в GUI, и это нормальное состояние, а не сбой.
 //
 // Секрета в исходнике нет намеренно: токен, зашитый в код, уезжает вместе с
 // плагином. Нет настроенного бота — нет моста, и об этом пишется в лог.
@@ -39,17 +39,6 @@ function readJsonConfig(file) {
     return JSON.parse(stripBom(fs.readFileSync(file, 'utf8')))
   } catch (error) {
     return undefined
-  }
-}
-
-// Общий бот: ~/.dsh/telegram.json.
-function readSharedTelegram() {
-  const raw = readJsonConfig(path.join(dshHomeDir(), 'telegram.json'))
-  if (!raw || !raw.token || !raw.chatId) return undefined
-  return {
-    token: String(raw.token),
-    chatId: raw.chatId,
-    voiceLang: raw.voiceLang ? String(raw.voiceLang) : undefined,
   }
 }
 
@@ -80,10 +69,10 @@ function readProjectsRegistry() {
   })
 }
 
-// Список ботов для опроса: по одному на проект со своим ботом плюс общий —
-// для проектов без своего. Токен, указанный у двух проектов, опрашивается
-// один раз: владельцем становится первый по порядку реестра.
-function buildBots(projects, shared) {
+// Список ботов для опроса: по одному на проект со своим ботом. Токен,
+// указанный у двух проектов, опрашивается один раз: владельцем становится
+// первый по порядку реестра.
+function buildBots(projects) {
   const bots = []
   const seen = new Set()
   for (const project of projects) {
@@ -92,22 +81,7 @@ function buildBots(projects, shared) {
     seen.add(project.bot.token)
     bots.push({ key: project.id, projectId: project.id, roots: project.roots, defaultCwd: project.workspace, ...project.bot })
   }
-  if (shared && !seen.has(shared.token)) {
-    seen.add(shared.token)
-    bots.push({ key: 'shared', projectId: null, roots: [], defaultCwd: '', ...shared })
-  }
   return bots
-}
-
-// Рабочая область по умолчанию, когда у бота нет своего проекта.
-function defaultProjectWorkspace() {
-  const raw = readJsonConfig(path.join(dshHomeDir(), 'projects.json'))
-  const projects = (raw && raw.projects) || {}
-  const ids = Object.keys(projects)
-  if (ids.length === 0) return ''
-  const id = typeof raw.default === 'string' && raw.default && projects[raw.default] ? raw.default : ids[0]
-  const workspace = projects[id] && projects[id].workspace
-  return typeof workspace === 'string' ? workspace : ''
 }
 
 // Инструменты распознавания голосовых живут в пакете процесса — в каталоге
@@ -261,29 +235,24 @@ export default {
     }
 
     const projects = readProjectsRegistry()
-    const shared = readSharedTelegram()
-    const bots = buildBots(projects, shared)
+    const bots = buildBots(projects)
     if (bots.length === 0) {
-      console.error('[tg-bridge] нет ни одного бота: ни telegram у проектов в projects.json, ни ~/.dsh/telegram.json')
+      console.error('[tg-bridge] нет ни одного бота: в проектах реестра не задан telegram (token и chatId)')
       return
     }
 
     const bridges = bots.map((bot) => buildBridge(ctx, bot))
     const byToken = new Map(bridges.map((bridge) => [bridge.token, bridge]))
-    // Общий бот — ТОЛЬКО тот, у которого нет своего проекта. Если токен общего
-    // бота принадлежит какому-то проекту, общего бота нет вовсе: иначе события
-    // проекта без своего бота молча уходили бы в чужой чат.
-    const sharedBridge = bridges.filter((bridge) => bridge.projectId === null)[0]
 
     const withoutBot = projects.filter((project) => !project.bot)
     if (withoutBot.length > 0) {
       console.warn('[tg-bridge] без своего бота: ' + withoutBot.map((p) => p.id).join(', ') +
-        (sharedBridge ? ' — их события уходят общему боту' : ' — их события остаются в GUI, пока в проекте не задан telegram'))
+        ' — их события остаются в GUI, пока в проекте не задан telegram')
     }
 
     // Проект сессии ищем по рабочей области: тот же признак, по которому
-    // пресеты резолвят проект. Не нашли — событие уходит общему боту, а если
-    // его нет, остаётся GUI.
+    // пресеты резолвят проект. Не нашли или у проекта нет своего бота — моста
+    // нет, и событие сессии остаётся в GUI.
     function projectOfSession(sessionId) {
       try {
         const session = sessions ? sessions.get(sessionId) : undefined
@@ -306,13 +275,12 @@ export default {
       }
     }
 
+    // Мост проекта сессии. Нет проекта, нет своего бота или мост не поднят —
+    // undefined: событие, разрешение и вопрос такой сессии остаются в GUI.
     function bridgeForSession(sessionId) {
       const project = projectOfSession(sessionId)
-      if (project && project.bot) {
-        const own = byToken.get(project.bot.token)
-        if (own) return own
-      }
-      return sharedBridge
+      if (!project || !project.bot) return undefined
+      return byToken.get(project.bot.token)
     }
 
     // Хуки регистрируются ОДИН раз на процесс: их тела живут в мостах.
@@ -323,14 +291,14 @@ export default {
 
     ctx.on('approval/request', (req, next) => {
       const agentId = req && req.agent && req.agent.id ? String(req.agent.id) : ''
-      const bridge = agentId ? bridgeForSession(agentId) : sharedBridge
+      const bridge = agentId ? bridgeForSession(agentId) : undefined
       if (!bridge) return next()
       return bridge.onApproval(req, next)
     }, { prepend: true })
 
     ctx.on('user-questions/request', (request, next) => {
       const agentId = request && request.agent && request.agent.id ? String(request.agent.id) : ''
-      const bridge = agentId ? bridgeForSession(agentId) : sharedBridge
+      const bridge = agentId ? bridgeForSession(agentId) : undefined
       if (!bridge) return next()
       return bridge.onQuestion(request, next)
     }, { prepend: true })
@@ -390,7 +358,7 @@ function buildBridge(ctx, bot) {
     let approvalSeq = 0
     let questionSeq = 0
     let target
-    let cwd = bot.defaultCwd || defaultProjectWorkspace()
+    let cwd = bot.defaultCwd || ''
     let lastSessions = []
     let polling = false
     let mediaChain = Promise.resolve()

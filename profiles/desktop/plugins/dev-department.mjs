@@ -767,13 +767,6 @@ async function githubDropLabel(project, number, name) {
   }
 }
 
-function readTelegramConfig() {
-  const file = path.join(dshHome(), 'telegram.json')
-  const raw = JSON.parse(stripBom(fs.readFileSync(file, 'utf8')))
-  if (!raw || !raw.token || !raw.chatId) throw new Error('в ' + file + ' нужны поля token и chatId')
-  return { token: raw.token, chatId: raw.chatId }
-}
-
 function request(options, body) {
   return new Promise((resolve, reject) => {
     const payload = body === undefined ? null : JSON.stringify(body)
@@ -3026,18 +3019,32 @@ export default {
         }
       }
       if (state.lastError) lines.push('\n⚠️ Последняя ошибка: ' + state.lastError)
+      // Единственный источник бота — поле telegram записи проекта в реестре.
+      // Проект без бота работает без Telegram: это нормальное состояние, а не
+      // сбой, поэтому в state.lastError о нём ничего не пишется — только строка
+      // в тексте сводки, и она же попадает в журнал.
+      if (!project.telegram) {
+        lines.push('\nTelegram: не отправлено — у проекта не задан telegram (только журнал).')
+      }
       const summaryText = lines.join('\n')
       // Сводку сначала кладём на диск: канал до Telegram бывает недоступен, и
       // терять отчёт за смену из-за этого нельзя.
       appendShiftLog(summaryText)
-      try {
-        // Сводка проекта уходит боту ЭТОГО проекта; общий — запасной путь.
-        const bot = project.telegram || readTelegramConfig()
-        await sendTelegram(bot, summaryText)
-      } catch (error) {
-        state.lastError = 'Telegram: ' + error.message
+      // Доставку сообщаем вызывающему явно: глобальный state.lastError для этого
+      // не годится — он нигде не сбрасывается, а при повторе того же отказа
+      // (лежит сеть, битый токен у двух проектов) остаётся прежним, и сравнение
+      // «до/после» объявило бы второй одинаковый сбой доставкой.
+      let delivered = false
+      if (project.telegram) {
+        try {
+          // Сводка проекта уходит боту ЭТОГО проекта; другого источника нет.
+          await sendTelegram(project.telegram, summaryText)
+          delivered = true
+        } catch (error) {
+          state.lastError = 'Telegram: ' + error.message
+        }
       }
-      return summaryText
+      return { text: summaryText, delivered }
     }
 
     // ── инструменты для ручной проверки ────────────────────────────────────
@@ -3161,24 +3168,35 @@ export default {
 
     const summaryTool = define(
       'dev_department_summary',
-      'Отправить сводку отдела разработки в Telegram немедленно и закрыть смены всех проектов, где они идут.',
+      'Закрыть смены всех проектов, где они идут, и отправить их сводки в Telegram. Сводка уходит только боту проекта из реестра (projects.<id>.telegram): у проекта без бота она остаётся в журнале.',
       { type: 'object', properties: {}, additionalProperties: false },
       async () => {
         config = loadConfig()
         const loaded = loadProjects(config.values)
         const closed = []
+        // sent — это «сводка ушла в Telegram», а не «смена закрылась»: у проекта
+        // без бота сводка остаётся в журнале, и отчитываться за неё отправкой —
+        // значит обещать человеку сообщение, которого в чате нет. Отдельно
+        // названы доставленные проекты и те, у кого отправка сорвалась сетью.
+        // Доставку называет сама finishProjectShift: сравнивать state.lastError
+        // до и после нельзя — он не сбрасывается и при повторном одинаковом
+        // отказе не меняется, поэтому второй такой же сбой считался бы доставкой.
+        const telegram = []
+        const failed = []
         const now = new Date()
         for (const project of loaded.projects) {
           const st = state.projects[project.id]
           if (!st || !st.run) continue
-          await finishProjectShift(project, now, FINISH.manual)
+          const result = await finishProjectShift(project, now, FINISH.manual)
           closed.push(project.id)
+          if (!project.telegram) continue
+          if (result && result.delivered) telegram.push(project.id)
+          else failed.push(project.id)
         }
-        return {
-          sent: closed.length > 0,
-          closed,
-          note: closed.length > 0 ? null : 'ни в одном проекте смена не идёт — отправлять нечего',
-        }
+        let note = null
+        if (closed.length === 0) note = 'ни в одном проекте смена не идёт — отправлять нечего'
+        else if (telegram.length + failed.length === 0) note = 'у закрытых проектов не задан telegram — сводки только в журнале'
+        return { sent: telegram.length > 0, closed, telegram, failed, note }
       },
     )
 
