@@ -175,6 +175,31 @@ function intInRange(value, min, max, fallback) {
 
 // ── Общие настройки смены ───────────────────────────────────────────────────
 
+// Необязательный тариф для перевода токенов в деньги. Числа тарифа задаёт человек
+// в ~/.dsh/dev-department.json; в коде их нет и быть не должно — валюта и цена
+// зависят от провайдера и меняются без правки отдела. Незаданный тариф значит «цену
+// не показываем», а не «цена ноль»: иначе сводка утверждала бы, что смена бесплатна.
+const USAGE_RATE_KEYS = ['inputUsdPerM', 'cacheReadUsdPerM', 'cacheWriteUsdPerM', 'outputUsdPerM']
+
+function parseUsageRates(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { rates: null, problems: ['usageRates: нужен объект с полями ' + USAGE_RATE_KEYS.join(', ')] }
+  }
+  const problems = []
+  const rates = {}
+  let given = 0
+  for (const key of USAGE_RATE_KEYS) {
+    if (raw[key] === undefined) continue
+    if (typeof raw[key] === 'number' && Number.isFinite(raw[key]) && raw[key] >= 0) {
+      rates[key] = raw[key]
+      given += 1
+      continue
+    }
+    problems.push('usageRates.' + key + ': нужно неотрицательное число — цена за миллион токенов')
+  }
+  return { rates: given > 0 ? rates : null, problems }
+}
+
 function loadConfig() {
   const file = path.join(dshHome(), 'dev-department.json')
   let raw
@@ -198,6 +223,11 @@ function loadConfig() {
   if (raw.stuckAfterMinutes !== undefined) {
     if (Number.isInteger(raw.stuckAfterMinutes) && raw.stuckAfterMinutes >= 1 && raw.stuckAfterMinutes <= 1440) values.stuckAfterMinutes = raw.stuckAfterMinutes
     else problems.push('stuckAfterMinutes: нужно целое от 1 до 1440')
+  }
+  if (raw.usageRates !== undefined) {
+    const parsedRates = parseUsageRates(raw.usageRates)
+    for (const problem of parsedRates.problems) problems.push(problem)
+    if (parsedRates.rates) values.usageRates = parsedRates.rates
   }
 
   // Общее расписание — запасное для проектов, которые своё не задали.
@@ -946,6 +976,12 @@ export default {
   // Явные зависимости: записи из cordis.patch.yml применяются раньше, чем
   // бандлы публикуют сервисы. Без inject плагин стартует в пустом окружении
   // и молча ничего не делает — на этом уже один раз обожглись.
+  // `sessionQuery` в этом списке НЕТ намеренно: запись в inject — это обязательная
+  // зависимость (объектная форма в этом cordis — intercept, а не «необязательная»),
+  // и сборка без сервиса опроса сессий не подняла бы отдел вовсе — ни тика, ни
+  // статуса, ни сводки. Спрашиваем сервис в момент вызова (см. `sessionQueryOf`):
+  // его нет — расход читается запасным путём по стенограммам, а смена ролей идёт
+  // как раньше. Запасному пути эта ветка и написана.
   inject: ['timer', 'tools', 'agents', 'sessions', 'agentPresets', 'workspaceRegistry', 'sessionController', 'permissionPresets', 'sessionTitle'],
 
   apply(ctx) {
@@ -959,6 +995,18 @@ export default {
     const permissionPresets = ctx.get('permissionPresets')
     const sessionTitle = ctx.get('sessionTitle')
 
+    // Сервис опроса сессий спрашивается на каждом вызове, а не здесь: в inject его
+    // нет (см. выше), поэтому он может появиться позже и может не появиться вовсе.
+    // `ctx.get` без второго аргумента не бросает на неизвестном имени, но обёртка
+    // нужна: отказ сервиса не должен уносить карточку и сводку.
+    const sessionQueryOf = () => {
+      try {
+        return ctx.get('sessionQuery') || null
+      } catch (error) {
+        return null
+      }
+    }
+
     const missing = []
     if (!timer) missing.push('timer')
     if (!tools) missing.push('tools')
@@ -971,6 +1019,22 @@ export default {
     if (!sessionTitle) missing.push('sessionTitle')
     if (missing.length > 0) {
       throw new Error('отдел разработки: недоступны сервисы ' + missing.join(', '))
+    }
+
+    // Модуль учёта токенов лежит рядом с диспетчером (его раскладывает
+    // `node sync.mjs apply`). Импорт отложенный и необязательный: установка,
+    // которой файл ещё не разложили, обязана работать как раньше, только без счёта.
+    // Правило повтора живёт в модуле, поэтому своего счёта у диспетчера нет.
+    let usageLedger = null
+    let usageLedgerProblem = null
+    async function loadUsageLedger() {
+      if (usageLedger !== null) return usageLedger
+      try {
+        usageLedger = await import('./usage-ledger.mjs')
+      } catch (error) {
+        usageLedgerProblem = error && error.message ? error.message : String(error)
+      }
+      return usageLedger
     }
 
     // Состояние. У КАЖДОГО проекта свой отдел: своя смена, свой её ключ, своя
@@ -1721,8 +1785,9 @@ export default {
     // много заданий, а повторный id может быть отброшен как дубль. Одного
     // счётчика мало: после перезапуска приложения он начинается заново, и
     // продолжение диалога получило бы id, который уже выдавался до перезапуска.
-    async function promptSession(sessionId, prompt) {
+    async function promptSession(project, sessionId, prompt) {
       const token = Date.now().toString(36) + '-' + Math.random().toString(16).slice(2, 8)
+      notePromptedSession(project, sessionId)
       await sessionController.prompt({
         requestId: 'dev-department-' + sessionId + '-' + token,
         sessionId,
@@ -1741,13 +1806,272 @@ export default {
       return workspaceRegistry.create(wanted, project.title + ' — отдел')
     }
 
+    // ── расход токенов по тикету ───────────────────────────────────────────
+
+    // Привязка «сессия → тикет» пишется ДО первого хода: смена может закрыться в
+    // любой момент, а расход уже пошёл. Повторная выдача в тот же диалог вторую
+    // запись не добавляет — дедуп по ключу «проект|тикет|сессия» живёт в модуле.
+    async function recordUsageBinding(project, presetId, issue, sessionId) {
+      const module = await loadUsageLedger()
+      if (module === null) return null
+      const attempt = projectState(project.id).attempts[issue.number] || null
+      const result = module.appendLedgerEntry({
+        at: new Date().toISOString(),
+        project: project.id,
+        issue: issue.number,
+        role: presetId,
+        session: sessionId,
+        attempt,
+        source: 'dispatcher',
+      })
+      if (result && result.reason) state.lastError = 'книга учёта: ' + result.reason
+      return result
+    }
+
+    // Смена помнит диалоги, которым она дала ход. Привязка в книге пишется один раз
+    // на диалог (дедуп по ключу «проект|тикет|сессия»), поэтому у доработки в тот же
+    // диалог `at` остаётся от прошлой смены — и по времени её расход в сводку не
+    // попал бы, хотя в эту смену он был. Набор живёт в состоянии смены и в книгу не
+    // пишется: это «что смена пнула», а не «когда родилась привязка».
+    function notePromptedSession(project, sessionId) {
+      const run = projectState(project.id).run
+      if (!run) return
+      if (!(run.prompted instanceof Set)) run.prompted = new Set()
+      run.prompted.add(String(sessionId))
+    }
+
+    function sessionWord(count) {
+      const tail = Math.abs(count) % 100
+      const last = tail % 10
+      if (tail > 10 && tail < 20) return 'сессий'
+      if (last === 1) return 'сессия'
+      if (last > 1 && last < 5) return 'сессии'
+      return 'сессий'
+    }
+
+    // Счёт по одной сессии: сперва стенограмма на диске, а живая поверхность
+    // (`sessionQuery.readSurface`) — запасной путь для сессии, которой на диске ещё
+    // нет. Причина в полноте: поверхность состоит из четырёх видов сообщений
+    // (`SurfaceEventType`), в ней нет ни `assistant/attempt`, ни `llm/retry-started`,
+    // ни вытесненных сжатием ходов. Считать по ней значит разойтись с отчётом
+    // `tools/issue-tokens.mjs`, который читает стенограмму целиком: на шаге с
+    // повтором у провалившейся попытки свой usage, и поверхность покажет меньше.
+    // Молчаливые нули не прячем: сбои разбора стенограммы идут в problems.
+    async function usageOfSession(module, entry) {
+      const fromDisk = module.readUsageFromDisk(dshHome(), entry.session)
+      const diskNumbers = () => ({
+        usage: fromDisk.usage, turns: fromDisk.turns, events: fromDisk.events, problems: fromDisk.problems,
+      })
+      // Стенограмма есть и прочиталась целиком — другого источника не надо.
+      if (!fromDisk.missing && fromDisk.problems.length === 0) return diskNumbers()
+      const live = sessionQueryOf()
+      if (live) {
+        try {
+          const surface = await live.readSurface(entry.session)
+          const events = (surface && surface.events) || []
+          const numbers = {
+            usage: module.usageOfEvents(events),
+            turns: module.turnsOfEvents(events),
+            events: events.length,
+          }
+          // Стенограммы нет вовсе — это свежая сессия, и поверхность про неё полная:
+          // лучшее, что есть, без оговорок.
+          if (fromDisk.missing) return { ...numbers, problems: [] }
+          // Стенограмма есть, но не дочиталась: числа поверхности её короче, поэтому
+          // говорим об этом прямо, а не выдаём их за полные.
+          return {
+            ...numbers,
+            problems: ['сессия ' + entry.session + ': стенограмма не дочиталась (' +
+              fromDisk.problems.join('; ') + '), считаем по живой поверхности — в ней нет повторов шага и упавших' +
+              ' попыток, числа по сессии меньше настоящих'],
+          }
+        } catch (error) {
+          // Сессия недоступна живому чтению — остаётся стенограмма.
+        }
+      }
+      return diskNumbers()
+    }
+
+    // Карточка расхода по тикету: строки по ролям и итог, как их хочет видеть
+    // `dev_department_status`. Это заявление о данных, а не о работе: тикет без
+    // записи в книге — норма для тикетов, начатых до выкатки учёта, и об этом
+    // говорит `note`, а не пустая карточка без объяснения.
+    //
+    // `options.since` (ISO-время) оставляет записи не раньше этого момента — так
+    // сводка смены считает свои выдачи ролей, а не весь расход тикета за всё время.
+    // `options.sessions` — диалоги, которым смена дала ход: их записи входят в карточку
+    // смены независимо от `at`, потому что привязка у диалога одна и у доработки в тот
+    // же диалог она осталась от прошлой смены. Карточка статуса зовёт без обоих
+    // аргументов: она про тикет, а не про смену.
+    async function usageCard(project, issue, options) {
+      const snapshotAt = new Date().toISOString()
+      const since = options && options.since ? Date.parse(options.since) : NaN
+      const module = await loadUsageLedger()
+      if (module === null) {
+        return {
+          issue: issue.number,
+          title: issue.title,
+          sessions: [],
+          carried: 0,
+          totals: { in: 0, out: 0, cacheRead: 0, cacheWrite: 0 },
+          snapshotAt,
+          note: 'счёт токенов недоступен: рядом с диспетчером нет модуля учёта' +
+            (usageLedgerProblem ? ' — ' + usageLedgerProblem : ''),
+          problems: [],
+        }
+      }
+      let entries = []
+      let bound = []
+      let note = null
+      try {
+        bound = module.readLedger().filter((entry) => entry.project === project.id && entry.issue === issue.number)
+      } catch (error) {
+        note = 'книга учёта не читается: ' + (error && error.message ? error.message : String(error))
+      }
+      // Диалоги этой смены: id книги и id сессий пишутся по-разному (с префиксом
+      // session- и без), поэтому сравниваем нормализованные.
+      const prompted = new Set(((options && options.sessions) || []).map((id) => module.normalizeSessionId(id)))
+      const carriedEntry = (entry) => prompted.has(module.normalizeSessionId(entry.session))
+      // Запись с неразбираемой датой не выбрасываем: потерять сессию хуже, чем
+      // показать её в смене, к которой она могла не относиться.
+      const freshEntry = (entry) => {
+        if (!Number.isFinite(since)) return true
+        const at = Date.parse(entry.at)
+        return !Number.isFinite(at) || at >= since
+      }
+      // Свежая привязка или диалог, которому ход дала эта смена. Второе нужно
+      // отдельно: у доработки в тот же диалог `at` остался от прошлой смены.
+      entries = bound.filter((entry) => freshEntry(entry) || carriedEntry(entry))
+      // Сколько строк вошло только как продолжение прежнего диалога — их и помечаем
+      // в сводке, чтобы дневная цифра не выдавала себя за полностью свежую.
+      const carried = entries.filter((entry) => carriedEntry(entry) && !freshEntry(entry)).length
+      const summary = await module.summarizeIssue(entries, (entry) => usageOfSession(module, entry))
+      // `source` не выбрасываем: на этой машине сессию постановки открывает человек
+      // под пресетом `standard`, и по одной роли строку «постановка» не отличить от
+      // обычной роли конвейера.
+      const sessions = summary.sessions.map((row) => ({
+        role: row.role,
+        session: row.session,
+        source: row.source,
+        turns: row.turns,
+        in: row.in,
+        out: row.out,
+        cacheRead: row.cacheRead,
+        cacheWrite: row.cacheWrite,
+      }))
+      if (note === null) {
+        if (entries.length === 0) {
+          note = bound.length > 0
+            ? 'расход этой смены не выделен: сессии по тикету заведены раньше, и ход им давала не эта смена'
+            : 'тикет не привязан: в книге учёта нет записи — счёт пойдёт со следующей выдачи роли'
+        } else if (sessions.length > 0 && sessions.every((row) => row.turns === 0)) {
+          note = 'сессии открыты, ходов ещё нет: ' +
+            sessions.map((row) => (row.role || 'роль') + ' ' + row.session.slice(0, 8)).join(', ')
+        }
+      }
+      return {
+        issue: issue.number,
+        title: issue.title,
+        sessions,
+        carried,
+        totals: summary.totals,
+        snapshotAt,
+        note,
+        problems: summary.problems,
+      }
+    }
+
+    // Сессия, в которой родился тикет. Постановку пишет не наш код: с переездом
+    // GitHub на MCP-сервер issue создаёт чужой процесс, и крючка «тикет создан» у
+    // отдела нет. Поэтому привязка ищется на первом тике, который увидел новый
+    // тикет: берётся сессия каталога проекта, чья жизнь накрывает `created_at`
+    // тикета и которая ещё ни к одному тикету не привязана (подробности — в
+    // `findDraftSession`). Запись получает `source: "issue-created"`, и расход
+    // аналитика попадает в строки тикета, а не в блок «не привязано».
+    //
+    // Окно в три дня нужно не для скорости, а для честности: тикеты, заведённые до
+    // выкатки учёта, задним числом в книгу не попадают — их история видна только
+    // блоком «восстановлено по заголовку» в отчёте.
+    const DRAFT_BIND_WINDOW_MS = 3 * 24 * 60 * 60 * 1000
+    const DRAFT_BIND_SLACK_MS = 60 * 60 * 1000
+
+    const createdAtOf = (issue) => {
+      const raw = issue && (issue.created_at || issue.createdAt)
+      return raw === undefined || raw === null ? NaN : Date.parse(raw)
+    }
+
+    async function bindDraftSessions(project, issues) {
+      const module = await loadUsageLedger()
+      if (module === null) return 0
+      let ledger
+      try {
+        ledger = module.readLedger()
+      } catch (error) {
+        state.lastError = 'книга учёта: ' + (error && error.message ? error.message : String(error))
+        return 0
+      }
+      const mine = ledger.filter((entry) => entry.project === project.id)
+      const knownIssues = new Set(mine.map((entry) => Number(entry.issue)))
+      const boundSessions = mine.map((entry) => entry.session)
+      const now = Date.now()
+      // Тикет без единой записи книги — это кандидат: у тикета с записями сессия
+      // постановки либо уже привязана, либо её привязка не нужна.
+      const candidates = (issues || []).filter((issue) => {
+        if (!issue || knownIssues.has(Number(issue.number))) return false
+        const created = createdAtOf(issue)
+        if (!Number.isFinite(created)) return false
+        return now - created <= DRAFT_BIND_WINDOW_MS
+      })
+      if (candidates.length === 0) return 0
+      const listed = module.listSessionHeads(dshHome())
+      if (listed.problems.length > 0) {
+        state.lastError = 'книга учёта: ' + listed.problems.join('; ')
+      }
+      if (listed.heads.length === 0) return 0
+      let written = 0
+      for (const issue of candidates) {
+        const head = module.findDraftSession(listed.heads, {
+          created: createdAtOf(issue),
+          cwds: [project.workspace, project.humanClone],
+          bound: boundSessions,
+          slackMs: DRAFT_BIND_SLACK_MS,
+          windowMs: DRAFT_BIND_WINDOW_MS,
+        })
+        if (head === null) continue
+        const result = module.appendLedgerEntry({
+          at: new Date().toISOString(),
+          project: project.id,
+          issue: Number(issue.number),
+          role: head.preset || 'analyst',
+          session: head.session,
+          attempt: null,
+          source: 'issue-created',
+        })
+        if (result && result.reason) {
+          state.lastError = 'книга учёта: ' + result.reason
+          continue
+        }
+        boundSessions.push(head.session)
+        knownIssues.add(Number(issue.number))
+        written += 1
+        // Привязка должна быть видна человеку: она не спросила у агента согласия и
+        // догадывается по времени, поэтому её появление записывается в журнал.
+        appendShiftLog('книга учёта: сессия постановки ' + head.session +
+          (head.preset ? ' (' + head.preset + ')' : '') + ' привязана к тикету #' + issue.number +
+          ' по времени создания тикета')
+      }
+      return written
+    }
+
     async function startSession(project, presetId, prompt, issue) {
       const key = dialogKey(project, presetId, issue.number)
       const known = state.dialogs[key]
       if (known && await dialogIsResumable(known)) {
-        // Продолжаем тот же диалог, а не начинаем с нуля.
+        // Продолжаем тот же диалог, а не начинаем с нуля. Запись книги — на обоих
+        // путях и до первого хода: возврат в доработку тоже расходует токены.
         try {
-          await promptSession(known, prompt)
+          await recordUsageBinding(project, presetId, issue, known)
+          await promptSession(project, known, prompt)
           return known
         } catch (error) {
           // Диалог не ожил — смену не срываем, заводим новый.
@@ -1782,7 +2106,8 @@ export default {
       }
       state.dialogs[key] = sessionId
       writeDialogs(state.dialogs)
-      await promptSession(sessionId, prompt)
+      await recordUsageBinding(project, presetId, issue, sessionId)
+      await promptSession(project, sessionId, prompt)
       return sessionId
     }
 
@@ -2487,6 +2812,15 @@ export default {
 
       const issues = await loadIssues(project)
 
+      // Сессию постановки привязываем до раздачи: новый тикет входит в конвейер в
+      // том же тике, а привязка нужна раньше, чем по нему пойдёт расход ролей.
+      // Ошибка книги не должна останавливать смену — она уже названа в lastError.
+      try {
+        await bindDraftSessions(project, issues)
+      } catch (error) {
+        state.lastError = 'книга учёта: ' + (error && error.message ? error.message : String(error))
+      }
+
       // Тикет, снятый с конвейера, ждёт человека. Признак, что человек вернул его
       // в работу, один — метка ready-for-dev: её ставит только человек. Тогда
       // бюджет выдаётся заново целиком: и попытки, и доработки, и диалоги.
@@ -2599,6 +2933,10 @@ export default {
     async function finishProjectShift(project, now, reason) {
       const st = projectState(project.id)
       const run = st.run
+      // Тикет, на котором смена застала живой ход, в журнал смены ещё не попал:
+      // строка «закончил» появляется позже. Для отчёта о расходе он — участник
+      // смены, иначе сводка закрывала бы смену, утаив её самые дорогие токены.
+      const active = st.session
       st.run = null
       // Ключ смены записан в момент её старта и по умолчанию остаётся: так
       // смена не запускается второй раз за сутки. Но если смена закончилась
@@ -2623,8 +2961,69 @@ export default {
         for (const entry of run.entries) {
           lines.push('• #' + entry.number + ' ' + entry.title + ' — ' + entry.role + ': ' + entry.outcome)
         }
+      } else if (active) {
+        lines.push('')
+        lines.push('• #' + active.issue + ' ' + active.title + ' — ' + active.role + ': в работе, ход не закончен')
       } else {
         lines.push('Работы не было: подходящих тикетов не нашлось.')
+      }
+      // Расход смены: строка на тикет смены и общий итог. Считает модуль учёта —
+      // то же правило повтора, что в карточке статуса и в отчёте по токенам.
+      // Модуля нет (старая установка) — строк нет вовсе: выдумывать нули хуже,
+      // чем промолчать, а статус в этом случае прямо говорит о пропаже модуля.
+      const inShift = run ? run.entries.slice() : []
+      if (active) inShift.push({ number: active.issue, title: active.title, role: active.role })
+      const usageModule = inShift.length > 0 ? await loadUsageLedger() : null
+      if (usageModule !== null) {
+        const numbers = []
+        for (const entry of inShift) if (!numbers.includes(entry.number)) numbers.push(entry.number)
+        const rates = (config.values && config.values.usageRates) || null
+        const shiftTotals = { in: 0, out: 0, cacheRead: 0, cacheWrite: 0 }
+        const usageLines = []
+        let counted = 0
+        for (const number of numbers) {
+          const title = (inShift.filter((entry) => entry.number === number)[0] || {}).title || ''
+          // Смена отчитывается за СВОИ выдачи ролей: в книге лежат и записи прошлых
+          // смен, и прежние доработки того же тикета, и складывать их в дневную
+          // цифру нельзя — иначе «потрачено» пухнет с каждым возвратом в доработку.
+          // Но диалог, которому смена дала ход, — её расход, даже если привязка у него
+          // родилась в прошлой смене: доработка идёт в тот же диалог, и дедуп книги
+          // второй записи не делает. Такие сессии карточка берёт по набору смены.
+          const card = await usageCard(project, { number, title }, {
+            since: run ? run.startedAt : null,
+            sessions: run && run.prompted ? Array.from(run.prompted) : [],
+          })
+          if (card.sessions.length === 0) {
+            // Ноль вместо расхода не печатаем: у тикета, заведённого до книги, сессии
+            // есть только в заголовках отчёта, и «смена потратила 0» — неправда.
+            // Говорим то же, что говорит карточка статуса, и её же замечания.
+            usageLines.push('потрачено #' + number + ': ' + (card.note || 'данных о расходе нет'))
+            for (const problem of card.problems || []) usageLines.push('  ! ' + problem)
+            continue
+          }
+          counted += 1
+          shiftTotals.in += card.totals.in
+          shiftTotals.out += card.totals.out
+          shiftTotals.cacheRead += card.totals.cacheRead
+          shiftTotals.cacheWrite += card.totals.cacheWrite
+          const price = usageModule.formatCost(usageModule.costOf(card.totals, rates))
+          usageLines.push('потрачено #' + number + ': ' + usageModule.usageLine(card.totals) +
+            ' (' + card.sessions.length + ' ' + sessionWord(card.sessions.length) + ')' +
+            (card.carried > 0 ? ' · в т.ч. продолженный диалог: ' + card.carried : '') +
+            (price === null ? '' : ' · цена ' + price))
+          for (const problem of card.problems || []) usageLines.push('  ! ' + problem)
+        }
+        // Итог печатается только когда есть что складывать: сумма нулей — та же
+        // неправда, что строка с нулями по тикету.
+        if (counted > 0) {
+          const shiftPrice = usageModule.formatCost(usageModule.costOf(shiftTotals, rates))
+          usageLines.push('Итого за смену: ' + usageModule.usageLine(shiftTotals) +
+            (shiftPrice === null ? '' : ' · цена ' + shiftPrice))
+        }
+        if (usageLines.length > 0) {
+          lines.push('')
+          for (const line of usageLines) lines.push(line)
+        }
       }
       if (state.lastError) lines.push('\n⚠️ Последняя ошибка: ' + state.lastError)
       const summaryText = lines.join('\n')
@@ -2727,6 +3126,10 @@ export default {
               }
               : null
             row.queuedForDev = queued.map((i) => ({ number: i.number, title: i.title }))
+            // Расход по активному тикету: та же форма, что у отчёта
+            // `tools/issue-tokens.mjs`, — числа берутся из одной книги и одного
+            // правила повтора, поэтому карточка и отчёт не могут разойтись.
+            row.usage = active ? await usageCard(project, active.issue) : null
             row.nextStep = active
               ? (active.role === 'code-review'
                 ? 'поднять code-review по issue #' + active.issue.number

@@ -3,7 +3,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import zlib from 'node:zlib'
+import { readTranscript } from './zstd-frames.mjs'
 
 const needle = process.argv[2]
 const limit = Number(process.argv[3] || 10)
@@ -26,26 +26,8 @@ for (const dir of dirs) {
   console.log('=== ' + path.basename(dir) + ' ===')
   console.log('записан: ' + stat.mtime.toLocaleTimeString('ru-RU') + ', ' + Math.round(stat.size / 1024) + ' КБ')
 
-  // Стенограмма пишется несколькими кадрами zstd — распаковываем каждый.
-  const bytes = fs.readFileSync(file)
-  const parts = []
-  let start = -1
-  for (let i = 0; i + 4 <= bytes.length; i += 1) {
-    const magic = bytes[i] === 0x28 && bytes[i + 1] === 0xb5 && bytes[i + 2] === 0x2f && bytes[i + 3] === 0xfd
-    if (magic) {
-      if (start >= 0) {
-        try { parts.push(zlib.zstdDecompressSync(bytes.subarray(start, i)).toString('utf8')) } catch (error) { /* неполный кадр */ }
-      }
-      start = i
-    }
-  }
-  if (start >= 0) {
-    try { parts.push(zlib.zstdDecompressSync(bytes.subarray(start)).toString('utf8')) } catch (error) { /* неполный кадр */ }
-  }
-
-  const rows = parts.join('\n').split('\n').filter((l) => l.trim() !== '').map((l) => {
-    try { return JSON.parse(l) } catch (error) { return null }
-  }).filter(Boolean)
+  // Стенограмма пишется несколькими кадрами zstd — разбирает общий хелпер.
+  const { rows, brokenFrames, droppedLines } = readTranscript(file)
 
   const shown = []
   for (const row of rows) {
@@ -61,5 +43,8 @@ for (const dir of dirs) {
     if (e.type === 'turn/end') shown.push('  [ход завершён] ' + JSON.stringify(d))
   }
   console.log('событий: ' + rows.length)
+  // Молча потерянные события — это не «пусто», а недосчёт: говорим о них вслух.
+  if (brokenFrames > 0) console.log('! кадров разобрано не целиком: ' + brokenFrames + ' — часть событий в хвост не попала')
+  if (droppedLines > 0) console.log('! строк не разобрано: ' + droppedLines + ' — стенограмма оборвана или повреждена')
   console.log(shown.slice(-limit).join('\n'))
 }

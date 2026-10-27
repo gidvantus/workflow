@@ -28,6 +28,7 @@ profiles/                       хост-плоскость DSH: процесс�
       package.json              манифест пачки плагинов: без name+version DSH
                                 валит каждый запрос с REQUEST_EXTENSION
       dev-department.mjs        диспетчер отдела: роли, окна смен, Telegram-сводка
+      usage-ledger.mjs          книга привязок «сессия → тикет» и счёт токенов
       role-sessions.mjs         инструменты open_role_session / list_agent_presets
       role-permissions.mjs      роли получают danger-full-access (без запросов)
       tg-bridge.mjs             мост в Telegram
@@ -54,6 +55,7 @@ config/
 
 tools/
   tests/                        регрессионные наборы на реальных модулях
+  issue-tokens.mjs              отчёт по токенам на тикет: роли, сессии, итоги
   session-errors.mjs            здоровье потока модели по стенограммам
   session-tail.mjs              хвост стенограммы сессии роли
   github-probe.mjs              права токена GitHub, в т.ч. правка комментария
@@ -242,6 +244,9 @@ cd tools/tests
 node dev-department-dialogs.test.mjs    # конвейер, диалоги, сбой модели, сторож зависших
 node dev-department-windows.test.mjs    # расписание окон смен
 node github-probe.test.mjs              # github-probe.mjs: PATCH комментария, право и побайтовый возврат тела
+node usage-ledger.test.mjs              # книга учёта токенов, правило повтора, счёт по стенограмме
+node dev-department-usage.test.mjs      # привязка при выдаче роли, карточка usage в статусе, сводка смены
+node issue-tokens.test.mjs              # tools/issue-tokens.mjs: таблица по тикету, сверка, непривязанные сессии
 node plugin-manifests.test.mjs          # манифесты хост-плагинов: без name+version каждый ход падает с REQUEST_EXTENSION
 ```
 
@@ -256,6 +261,7 @@ node plugin-manifests.test.mjs          # манифесты хост-плаги
 ```powershell
 node tools/session-errors.mjs 24     # ходы, завершившиеся ошибкой, за сутки
 node tools/session-tail.mjs <часть-id-сессии> [сколько событий]
+node tools/issue-tokens.mjs workflow 14   # токены по тикету: роли, сессии, итоги
 ```
 
 ## Метки конвейера

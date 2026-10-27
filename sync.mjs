@@ -69,6 +69,7 @@ const HOST_FILES = [
   // перекрывает.
   'profiles/desktop/plugins/package.json',
   'profiles/desktop/plugins/dev-department.mjs',
+  'profiles/desktop/plugins/usage-ledger.mjs',
   'profiles/desktop/plugins/role-sessions.mjs',
   'profiles/desktop/plugins/role-permissions.mjs',
   'profiles/desktop/plugins/tg-bridge.mjs',

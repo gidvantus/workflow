@@ -4,32 +4,15 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import zlib from 'node:zlib'
+import { readTranscript } from './zstd-frames.mjs'
 
 const hours = Number(process.argv[2] || 24)
 const since = Date.now() - hours * 3600 * 1000
 const dshHome = process.env.DSH_HOME || path.join(os.homedir(), '.dsh')
 const root = path.join(dshHome, 'sessions')
 
-function unzstd(file) {
-  const bytes = fs.readFileSync(file)
-  const parts = []
-  let start = -1
-  for (let i = 0; i + 4 <= bytes.length; i += 1) {
-    const magic = bytes[i] === 0x28 && bytes[i + 1] === 0xb5 && bytes[i + 2] === 0x2f && bytes[i + 3] === 0xfd
-    if (!magic) continue
-    if (start >= 0) {
-      try { parts.push(zlib.zstdDecompressSync(bytes.subarray(start, i)).toString('utf8')) } catch (e) { /* неполный кадр */ }
-    }
-    start = i
-  }
-  if (start >= 0) {
-    try { parts.push(zlib.zstdDecompressSync(bytes.subarray(start)).toString('utf8')) } catch (e) { /* неполный кадр */ }
-  }
-  return parts.join('\n')
-}
-
 const rows = []
+let partial = 0
 for (const workspace of fs.readdirSync(root)) {
   const base = path.join(root, workspace)
   if (!fs.statSync(base).isDirectory()) continue
@@ -38,11 +21,11 @@ for (const workspace of fs.readdirSync(root)) {
     if (!fs.existsSync(file)) continue
     const stat = fs.statSync(file)
     if (stat.mtimeMs < since) continue
-    let text = ''
-    try { text = unzstd(file) } catch (e) { continue }
-    const events = text.split('\n').filter((l) => l.trim() !== '').map((l) => {
-      try { return JSON.parse(l) } catch (e) { return null }
-    }).filter(Boolean)
+    // Стенограмму разбирает общий хелпер: он же считает сбои чтения кадров.
+    let transcript
+    try { transcript = readTranscript(file) } catch (e) { continue }
+    if (transcript.brokenFrames > 0 || transcript.droppedLines > 0) partial += 1
+    const events = transcript.rows
     const errors = []
     let lastWrite = null
     for (const row of events) {
@@ -68,6 +51,11 @@ for (const workspace of fs.readdirSync(root)) {
 
 rows.sort((a, b) => b.mtime - a.mtime)
 console.log('сессии с ошибочными ходами за последние ' + hours + ' ч: ' + rows.length)
+// Оборванный кадр прячет самые свежие события: ошибка в хвосте такой стенограммы
+// в список не попадёт, и об этом надо сказать вслух.
+if (partial > 0) {
+  console.log('  ! стенограмм разобрано не целиком: ' + partial + ' — ошибки в их хвосте могли не попасть в список')
+}
 for (const row of rows) {
   console.log('  ' + row.mtime.toLocaleString('ru-RU') + '  ' + row.workspace + '  ' + row.session +
     '  ходов с ошибкой: ' + row.errors + '  событий: ' + row.events + '\n      ' + row.last)
