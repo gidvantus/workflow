@@ -2,7 +2,7 @@
 // берём из самого файла, а не из копии. Запуск: node .dev-department-windows-test.mjs
 import fs from 'node:fs'
 import path from 'node:path'
-import * as pluginPaths from './plugin-paths.mjs'
+import * as pluginPaths from '../plugin-paths.mjs'
 
 // Модуль берём в любой раскладке: рабочая копия, установленный пакет, старая.
 const plugin = pluginPaths.pluginFile('dev-department')

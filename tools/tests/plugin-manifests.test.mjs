@@ -16,7 +16,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import * as pluginPaths from './plugin-paths.mjs'
+import * as pluginPaths from '../plugin-paths.mjs'
 
 // Корень репозитория берём у помощника раскладок, каталог установки — из окружения.
 const repoRoot = pluginPaths.REPO_ROOT

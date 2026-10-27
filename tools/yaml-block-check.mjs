@@ -6,14 +6,21 @@
 //   node tools/yaml-block-check.mjs <файлы…>     ровно эти файлы (в том числе из
 //                                                установки: ~/.dsh/profiles/…)
 //
-// Без аргументов проверяются: патч бандла в корне (`cordis.patch.yml`, пока его
-// нет — пропуск), патчи профилей (`profiles/<имя>/cordis.patch.yml`) и композиции
-// пресетов (`agent-presets/<роль>/*.yml`). Это и есть файлы, которые ломаются
-// правкой; README и прочие каталоги в проверку не входят.
+// Без аргументов проверяются: патч бандла (`cordis.patch.yml` из корня, а если
+// его там нет — из установленного пакета), патчи профилей
+// (`profiles/<имя>/cordis.patch.yml`) и композиции пресетов
+// (`agent-presets/<роль>/*.yml`). Это и есть файлы, которые ломаются правкой;
+// README и прочие каталоги в проверку не входят.
+//
+// Пустой список без аргументов — отказ (exit 1), а не успех: иначе «проверка
+// чиста» означала бы «ничего не проверено», и сторож отключался бы молча, стоило
+// раскладке переехать или проверке запуститься из урезанного дерева.
 import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
+
+import { bundlePatchFile } from './plugin-paths.mjs'
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -35,8 +42,8 @@ function yamlFiles(dir) {
 
 function defaultFiles() {
   const files = []
-  const bundlePatch = path.join(repo, 'cordis.patch.yml')
-  if (fs.existsSync(bundlePatch)) files.push(bundlePatch)
+  const bundlePatch = bundlePatchFile({ repoRoot: repo })
+  if (bundlePatch !== null) files.push(bundlePatch)
   for (const name of subdirs(path.join(repo, 'profiles'))) {
     files.push(...yamlFiles(path.join(repo, 'profiles', name)))
   }
@@ -51,10 +58,13 @@ const shown = (file) => {
   return relative.startsWith('..') ? file : relative.split(path.sep).join('/')
 }
 
-const files = process.argv.slice(2).length > 0 ? process.argv.slice(2) : defaultFiles()
+const explicit = process.argv.slice(2)
+const files = explicit.length > 0 ? explicit : defaultFiles()
 if (files.length === 0) {
-  console.log('нечего проверять: ни одного YAML-файла не нашлось')
-  process.exit(0)
+  // Пустой список бывает только в режиме без аргументов: переданные файлы уже
+  // здесь. Проверять нечего — это провал проверки, а не её успех.
+  console.log('нечего проверять: ни одного YAML-файла не нашлось — это отказ, а не успех')
+  process.exit(1)
 }
 console.log('файлов на проверку: ' + files.length)
 

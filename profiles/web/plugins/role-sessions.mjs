@@ -29,16 +29,23 @@
 // перечисленных сервисов.
 //
 // ВАЖНО ПРО ДИАГНОСТИКУ: вывод console.* из плагинов НЕ попадает в логи
-// приложения, поэтому плагин ведёт собственный журнал рядом с собой —
-// role-sessions.log.
+// приложения, поэтому плагин ведёт собственный журнал в каталоге установки —
+// `<DSH_HOME>/role-sessions.log`, рядом с dev-department.log и
+// role-permissions.log. Рядом с модулем журнал держать нельзя: в раскладке
+// пакета модуль стоит в node_modules профиля, и файл исчезал бы при следующем
+// `dsh plugin add`.
 
 import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 
-const LOG_PATH = new URL('./role-sessions.log', import.meta.url)
+function logPath() {
+  return path.join(process.env.DSH_HOME || path.join(os.homedir(), '.dsh'), 'role-sessions.log')
+}
 
 function trace(line) {
   try {
-    fs.appendFileSync(LOG_PATH, new Date().toISOString() + ' [role-sessions] ' + line + '\n')
+    fs.appendFileSync(logPath(), new Date().toISOString() + ' [role-sessions] ' + line + '\n')
   } catch (error) {
     // журналирование не должно ломать плагин
   }

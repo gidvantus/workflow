@@ -10,7 +10,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import https from 'node:https'
-import * as pluginPaths from './plugin-paths.mjs'
+import * as pluginPaths from '../plugin-paths.mjs'
 
 // Каталог установки читаем ДО подмены DSH_HOME ниже: тестируем боевой модуль.
 // Модуль ищется в любой раскладке — рабочая копия, установленный пакет, старая.

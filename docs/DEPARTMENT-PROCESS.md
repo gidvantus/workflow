@@ -1,7 +1,9 @@
 # Процесс отдела разработки
 
 Состояние на 20.10.2026. Описывает поведение установленного диспетчера
-(`~/.dsh/profiles/desktop/plugins/dev-department.mjs`) и промтов, которые он выдаёт ролям.
+(`<пакет>/profiles/desktop/plugins/dev-department.mjs`, то есть
+`<DSH_HOME>/profiles/desktop/node_modules/dsh-dev-department/…`; в `~/.dsh` лежит
+только состояние отдела — см. §10) и промтов, которые он выдаёт ролям.
 
 ---
 

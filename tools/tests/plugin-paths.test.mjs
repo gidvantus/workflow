@@ -1,4 +1,4 @@
-// Проверка помощника `tools/tests/plugin-paths.mjs`: он отвечает за то, чтобы
+// Проверка помощника `tools/plugin-paths.mjs`: он отвечает за то, чтобы
 // наборы находили боевые модули в любой из трёх раскладок (рабочая копия,
 // установленный пакет, старая раскладка sync.mjs) и не молчали, когда нет ни одной.
 //
@@ -9,7 +9,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import * as pluginPaths from './plugin-paths.mjs'
+import * as pluginPaths from '../plugin-paths.mjs'
 
 let failures = 0
 function check(name, actual, expected) {
@@ -47,8 +47,8 @@ write(repoPlugin)
 check('рабочая копия: модуль профиля найден', pluginPaths.pluginFile('dev-department', options), repoPlugin)
 check('рабочая копия: имя без .mjs дополняется', pluginPaths.pluginFile('dev-department.mjs', options), repoPlugin)
 write(repoPreset)
-check('рабочая копия: каталог пресета найден', pluginPaths.presetDir('analyst', options), path.join(repoRoot, 'agent-presets', 'analyst'))
-check('рабочая копия: файл внутри пресета найден', pluginPaths.presetFile('analyst', 'preset.yml', options), repoPreset)
+check('рабочая копия: каталог пресета найден', pluginPaths.findHostFile('agent-presets/analyst', options), { layout: 'рабочая копия', file: path.join(repoRoot, 'agent-presets', 'analyst') })
+check('рабочая копия: файл внутри пресета найден', pluginPaths.findHostFile('agent-presets/analyst/preset.yml', options), { layout: 'рабочая копия', file: repoPreset })
 
 // ── 2. старая раскладка sync.mjs при живой рабочей копии ────────────────────
 write(legacyPlugin)
@@ -77,7 +77,7 @@ check('старая раскладка: каталог пакета не выд�
 
 // ── 6. пресеты старой раскладки лежат по другому пути ──────────────────────
 fs.rmSync(path.join(repoRoot, 'agent-presets'), { recursive: true, force: true })
-check('старая раскладка: пресет берётся из ~/.dsh/.agent-presets', pluginPaths.presetDir('analyst', options), path.join(dshHome, '.agent-presets', 'analyst'))
+check('старая раскладка: пресет берётся из ~/.dsh/.agent-presets', pluginPaths.findHostFile('agent-presets/analyst', options), { layout: 'старая раскладка', file: path.join(dshHome, '.agent-presets', 'analyst') })
 
 // ── 7. отказной сценарий: файла нет нигде ──────────────────────────────────
 let error = null

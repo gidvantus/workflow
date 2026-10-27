@@ -1,6 +1,8 @@
-// Один помощник для наборов `tools/tests`: где лежат боевые модули отдела.
+// Где лежат боевые модули отдела — в любой раскладке. Помощник общий: его
+// спрашивают и регрессионные наборы `tools/tests`, и боевой `sync.mjs`, поэтому
+// он живёт в `tools/`, а не в каталоге наборов.
 //
-// Надстройка живёт в трёх раскладках, и набор не должен знать, какая из них
+// Надстройка живёт в трёх раскладках, и вызывающий не должен знать, какая из них
 // сейчас на машине:
 //
 //   1. рабочая копия репозитория — `profiles/<профиль>/plugins/…`,
@@ -25,8 +27,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-/** Корень репозитория: помощник лежит в `tools/tests/`. */
-export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
+/** Корень репозитория: помощник лежит в `tools/`. */
+export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
 /** Имя bundle-пакета надстройки: то же, что в `package.json` в корне репозитория. */
 export const BUNDLE_PACKAGE = 'dsh-dev-department'
@@ -45,6 +47,16 @@ function settings(options = {}) {
 const slashed = (rel) => String(rel).split(/[\\/]/).filter((part) => part !== '' && part !== '.')
 
 /**
+ * Каталог установленного пакета надстройки в профиле — единственное место, где
+ * этот путь собран. Его читают и поиск раскладок (`candidates`), и
+ * `bundlePackageDir`: раньше путь собирался дважды, и вторая копия устаревала
+ * молча.
+ */
+function bundleDir(o) {
+  return path.join(o.dshHome, 'profiles', o.profile, 'node_modules', BUNDLE_PACKAGE)
+}
+
+/**
  * Все места, где боевой файл может лежать, в порядке поиска. Список отдаётся
  * целиком, чтобы сообщение об ошибке называло не «файла нет», а что именно
  * искали: иначе непонятно, сломан набор или раскладка.
@@ -52,7 +64,7 @@ const slashed = (rel) => String(rel).split(/[\\/]/).filter((part) => part !== ''
 export function candidates(rel, options = {}) {
   const o = settings(options)
   const parts = slashed(rel)
-  const bundle = path.join(o.dshHome, 'profiles', o.profile, 'node_modules', BUNDLE_PACKAGE, ...parts)
+  const bundle = path.join(bundleDir(o), ...parts)
   // Пресеты в старой раскладке лежат не по своему пути: ~/.dsh/.agent-presets/<роль>.
   const legacy = parts[0] === 'agent-presets'
     ? path.join(o.dshHome, '.agent-presets', ...parts.slice(1))
@@ -87,27 +99,20 @@ export function pluginFile(name, options = {}) {
   return hostFile('profiles/' + profile + '/plugins/' + file, options)
 }
 
-/** Каталог пресета роли: `analyst` → `agent-presets/analyst` в любой раскладке. */
-export function presetDir(role, options = {}) {
-  return hostFile('agent-presets/' + role, options)
-}
-
-/** Файл внутри пресета роли, например `preset.yml` или `skills/…/SKILL.md`. */
-export function presetFile(role, rel, options = {}) {
-  return hostFile('agent-presets/' + role + '/' + rel, options)
-}
-
 /**
  * Каталог установленного пакета надстройки или `null`. Это же место читает
  * патч бандла: `createRequire(baseUrl).resolve('dsh-dev-department/package.json')`.
  */
 export function bundlePackageDir(options = {}) {
-  const o = settings(options)
-  const dir = path.join(o.dshHome, 'profiles', o.profile, 'node_modules', BUNDLE_PACKAGE)
+  const dir = bundleDir(settings(options))
   return fs.existsSync(dir) ? dir : null
 }
 
-/** Патч бандла — из репозитория, если он там уже есть, иначе из установленного пакета. */
+/**
+ * Патч бандла — из репозитория, если он там есть, иначе из установленного
+ * пакета. Нужен `tools/yaml-block-check.mjs`: без аргументов он проверяет тот
+ * патч, который реально есть на машине, а не молча пропускает проверку.
+ */
 export function bundlePatchFile(options = {}) {
   const o = settings(options)
   const inRepo = path.join(o.repoRoot, 'cordis.patch.yml')
@@ -116,10 +121,4 @@ export function bundlePatchFile(options = {}) {
   if (inBundle === null) return null
   const file = path.join(inBundle, 'cordis.patch.yml')
   return fs.existsSync(file) ? file : null
-}
-
-/** Путь для печати: от корня репозитория, если он внутри него, иначе как есть. */
-export function shortPath(file) {
-  const relative = path.relative(REPO_ROOT, file)
-  return relative.startsWith('..') ? file : relative.split(path.sep).join('/')
 }

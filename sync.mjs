@@ -26,7 +26,7 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
-import { BUNDLE_PACKAGE, bundlePackageDir } from './tools/tests/plugin-paths.mjs'
+import { BUNDLE_PACKAGE, bundlePackageDir } from './tools/plugin-paths.mjs'
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
 

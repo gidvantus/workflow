@@ -269,13 +269,15 @@ npx playwright install --with-deps chromium
 
 | Раскладка | Где лежит модуль |
 |---|---|
-| рабочая копия репозитория | `tools/../profiles/<профиль>/plugins/…`, `agent-presets/<роль>/…` |
+| рабочая копия репозитория | `<репозиторий>/profiles/<профиль>/plugins/…`, `agent-presets/<роль>/…` |
 | установленный bundle-пакет (`dsh plugin add`) | `<DSH_HOME>/profiles/<профиль>/node_modules/dsh-dev-department/…` |
 | старая раскладка (`node sync.mjs apply`) | `<DSH_HOME>/profiles/<профиль>/plugins/…`, `<DSH_HOME>/.agent-presets/<роль>/…` |
 
-Раскладку знает один помощник — `tools/tests/plugin-paths.mjs`. Набор пишет
-`pluginFile('dev-department')` или `presetFile('analyst', 'preset.yml')` и получает
-путь в любой раскладке; порядок поиска — репозиторий, пакет, старая раскладка.
+Раскладку знает один помощник — `tools/plugin-paths.mjs`; он лежит в `tools/`, а
+не в каталоге наборов, потому что его же спрашивает боевой `sync.mjs`. Набор
+пишет `pluginFile('dev-department')` или
+`hostFile('agent-presets/analyst/preset.yml')` и получает путь в любой раскладке;
+порядок поиска — репозиторий, пакет, старая раскладка.
 Отказной сценарий называет всё, что искали, а не «файла нет»: иначе непонятно,
 сломан набор или раскладка.
 
