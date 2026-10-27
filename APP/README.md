@@ -8,8 +8,7 @@
 | `api` | FastAPI на Python 3.12 (uvicorn) | `API_PORT`, по умолчанию `8096` |
 | `web` | React на Vite под nginx, проксирует `/api/` в `api` | `FRONTEND_PORT`, по умолчанию `8095` |
 
-Сервис `web` собирается из `frontend/`; исходники фронтенда добавляет вторая половина
-задачи. До её слияния собираются и проверяются `db` и `api`:
+Поднимать можно и по частям — например, только базу с API:
 
 ```bash
 docker-compose -p workflow-agent up -d --build db api
@@ -33,7 +32,9 @@ docker-compose up -d --build
 docker-compose -p workflow-agent ps                     # db healthy, api и web Up
 curl.exe -s http://localhost:8096/api/health            # напрямую в api
 curl.exe -s http://localhost:8095/api/health            # через nginx
+curl.exe -s -o NUL -w "%{http_code}" http://localhost:8095/   # страница отдаётся, 200
 docker-compose -p workflow-agent exec api alembic current   # 0001_init (head)
+docker-compose -p workflow-agent exec web nginx -t          # конфиг nginx валиден
 ```
 
 Остановить стенд, сохранив данные базы:
@@ -78,6 +79,10 @@ APP/
 │   ├── app/             # config.py, db.py, main.py — приложение
 │   └── tests/           # pytest
 └── frontend/            # React + Vite + nginx
+    ├── Dockerfile       # node:22-alpine (deps → build) → nginx:1.27-alpine
+    ├── nginx.conf       # SPA try_files + прокси /api/ на api:8000
+    ├── package.json     # react, react-dom, vite, typescript
+    └── src/             # main.tsx, App.tsx, index.css — одна страница «APP»
 ```
 
 ## API
@@ -94,6 +99,30 @@ APP/
 `message` показывается пользователю дословно.
 
 Полная схема — в `/openapi.json` и `/docs` того же сервиса.
+
+## Страница фронтенда
+
+Одна страница «APP»: заголовок, строка состояния и кнопка «Проверить». Кнопка делает
+`GET /api/health` относительным путём — хост и порт не зашиты в код, запрос проксирует
+nginx на том же origin, поэтому CORS не нужен.
+
+| Что видно | Когда |
+|---|---|
+| строка состояния «не проверено» | до первой проверки |
+| кнопка неактивна, текст «Проверяю…» | запрос в полёте |
+| строка состояния `API: ok · БД: ok` | ответ `200`, блок ошибки не отрисован |
+| блок ошибки с текстом `message` дословно | ответ `503` (база недоступна) |
+| блок ошибки «Сервер не отвечает» | api недоступен: контейнер остановлен, сеть, прокси |
+
+Элементы для тестов помечены `data-testid`: `app-status`, `app-check`, `app-error`.
+Своих тестов и линтеров у фронтенда в этой задаче нет; типы проверяет `tsc --noEmit`
+внутри `npm run build`, то есть при сборке образа `web`.
+
+Пересобрать только фронтенд после правок:
+
+```bash
+docker-compose -p workflow-agent up -d --build web
+```
 
 ## Проверки в контейнере
 
