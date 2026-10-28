@@ -19,8 +19,11 @@ const home = path.join(process.cwd(), '.dev-department-test-home')
 fs.rmSync(home, { recursive: true, force: true })
 fs.mkdirSync(home, { recursive: true })
 
-// Общие настройки и реестр проектов — так, как их читает диспетчер.
-fs.writeFileSync(path.join(home, 'dev-department.json'), JSON.stringify({
+// Общие настройки и реестр проектов — так, как их читает диспетчер. Файлы
+// состояния отдела лежат в каталоге профиля, а не в корне каталога установки.
+const stateDir = path.join(home, 'profiles', 'desktop', 'dsh-dev-department')
+fs.mkdirSync(stateDir, { recursive: true })
+fs.writeFileSync(path.join(stateDir, 'dev-department.json'), JSON.stringify({
   windows: [{ start: '00:00', stop: '23:59' }],
   maxRework: 3,
   maxAttempts: 4,
@@ -45,7 +48,7 @@ function writeRegistry({ telegram }) {
     department: { enabled: true },
   }
   if (telegram) project.telegram = telegram
-  fs.writeFileSync(path.join(home, 'projects.json'), JSON.stringify({
+  fs.writeFileSync(path.join(stateDir, 'projects.json'), JSON.stringify({
     version: 1,
     default: 'vahta',
     projects: { vahta: project },
@@ -1029,7 +1032,7 @@ check('повторный вызов не дублирует область', [w
 console.log('\n=== сценарий 21: сводка уходит боту проекта из реестра ===')
 // Единственный источник бота — projects.<id>.telegram: общего файла бота больше
 // нет. Бот в поддельном реестре — и есть проверка отправки.
-const shiftLog = path.join(home, 'dev-department.log')
+const shiftLog = path.join(stateDir, 'dev-department.log')
 fs.rmSync(shiftLog, { force: true })
 writeRegistry({ telegram: FULL_BOT })
 telegram.length = 0

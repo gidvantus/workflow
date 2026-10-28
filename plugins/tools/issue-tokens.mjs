@@ -9,14 +9,19 @@
 // --dsh-home <путь> (ключ можно ставить где угодно в строке запуска).
 //
 // Отчёт не считает токены сам: правило «повтор шага после llm/retry-started
-// считается один раз» — достояние модуля учёта
-// profiles/desktop/plugins/usage-ledger.mjs, здесь только раскладка чисел по
-// тикетам и печать. Модуль берётся из каталога установки (туда его кладёт
-// `node sync.mjs apply`), а если его там ещё нет — из репозитория рядом с этим
-// файлом: так отчёт работает в рабочей копии до раскладки.
+// считается один раз» — достояние модуля учёта (usage-ledger.mjs в plugins/), а
+// здесь только раскладка чисел по тикетам и печать. Модуль берётся из каталога
+// установки (туда его кладёт `node sync.mjs apply`), а если его там ещё нет — из
+// репозитория рядом с этим файлом: так отчёт работает в рабочей копии до
+// раскладки.
+//
+// Где лежат книга привязок и реестр проектов, решает модуль путей состояния
+// (state-paths.mjs): оба файла переехали из корня каталога установки в каталог
+// профиля `<DSH_HOME>/profiles/desktop/dsh-dev-department/`. Своего пути от
+// `$DSH_HOME` отчёт не собирает — иначе перенос разошёлся бы с диспетчером молча.
 //
 // Привязка сессии к тикету, в порядке старшинства:
-//   1) запись книги ~/.dsh/dev-department-usage.json — её пишет диспетчер: при
+//   1) запись книги dev-department-usage.json — её пишет диспетчер: при
 //      запуске роли по тикету (`source: "dispatcher"`) и при рождении тикета
 //      (`source: "issue-created"` — сессия постановки, найденная по `created_at`
 //      тикета, потому что своего крючка «тикет создан» у отдела нет);
@@ -25,13 +30,14 @@
 //      дополнительно попадают в блок «восстановлено по заголовку»;
 //   3) ничего не совпало — блок «не привязано»; сессия не теряется.
 // Проект сессии, не названный ни книгой, ни заголовком, берётся из каталога
-// рабочей области (~/.dsh/projects.json: workspace и humanClone).
+// рабочей области (projects.json: workspace и humanClone).
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { readTranscript } from './zstd-frames.mjs'
+import { statePathsModule } from './plugin-paths.mjs'
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url))
 // Скрипт лежит в plugins/tools: корень репозитория — двумя уровнями выше.
@@ -43,8 +49,6 @@ const REPO_ROOT = path.resolve(SCRIPT_DIR, '..', '..')
 const LEDGER_MODULE = path.join('profiles', 'desktop', 'plugins', 'usage-ledger.mjs')
 const LEDGER_REPO = path.join('plugins', 'usage-ledger.mjs')
 const LEDGER_BUNDLE = path.join('profiles', 'desktop', 'node_modules', 'dsh-dev-department', 'plugins', 'usage-ledger.mjs')
-// Книга привязок рядом с каталогом установки.
-const LEDGER_FILE = 'dev-department-usage.json'
 // Заголовок сессии конвейера: «Код-ревьюер [workflow] #14 — …».
 const TITLE_PATTERN = /\[([\w-]+)\]\s*#(\d+)/
 // Контракт модуля учёта зафиксирован: ведра проекции tokenUsage называются ровно
@@ -455,9 +459,15 @@ export async function buildReport({ dshHome, project, issue } = {}) {
   const home = dshHome || defaultDshHome()
   if (!fs.existsSync(home)) throw new Error('каталог установки не найден: ' + home + ' (задай --dsh-home)')
 
+  // Пути книги и реестра берутся у модуля состояния, а он читает $DSH_HOME в
+  // момент вызова: каталог установки выставляем до первого обращения к нему.
+  // Модуль учёта спрашивается первым: его отсутствие — отказ понятнее, чем
+  // отсутствие помощника путей, и набор ждёт именно этой строки.
+  process.env.DSH_HOME = home
   const problems = []
   const ledger = await loadLedgerModule(home)
-  const ledgerPath = path.join(home, LEDGER_FILE)
+  const state = await statePathsModule({ dshHome: home })
+  const ledgerPath = state.readStateFile(state.STATE_FILES.usage)
 
   let rawLedger = []
   try {
@@ -469,7 +479,7 @@ export async function buildReport({ dshHome, project, issue } = {}) {
   }
   const book = normalizeLedger(rawLedger)
 
-  const registry = workspaceIndex(path.join(home, 'projects.json'))
+  const registry = workspaceIndex(state.readStateFile(state.STATE_FILES.projects))
   problems.push(...registry.problems)
 
   const collected = collectSessions(home, ledger.module, registry.index)

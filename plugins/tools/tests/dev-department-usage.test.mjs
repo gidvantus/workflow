@@ -27,9 +27,13 @@ const WORKSPACE = path.join(home, 'workspace')
 fs.mkdirSync(path.join(WORKSPACE, '.git'), { recursive: true })
 fs.mkdirSync(path.join(home, 'mcp', 'github-mcp-server'), { recursive: true })
 fs.writeFileSync(path.join(home, 'mcp', 'github-mcp-server', 'token'), 'test-token\n')
+// Файлы состояния отдела лежат в каталоге профиля, а не в корне каталога
+// установки: набор сеет их туда же, куда пишет боевой модуль.
+const stateDir = path.join(home, 'profiles', 'desktop', 'dsh-dev-department')
+fs.mkdirSync(stateDir, { recursive: true })
 // Бот проекта живёт только в реестре: сводку тест ловит поддельным Telegram,
 // поэтому бот задан полем telegram записи проекта, а не общим файлом.
-fs.writeFileSync(path.join(home, 'projects.json'), JSON.stringify({
+fs.writeFileSync(path.join(stateDir, 'projects.json'), JSON.stringify({
   version: 1,
   default: 'workflow',
   projects: {
@@ -44,7 +48,7 @@ fs.writeFileSync(path.join(home, 'projects.json'), JSON.stringify({
     },
   },
 }, null, 2))
-const configFile = path.join(home, 'dev-department.json')
+const configFile = path.join(stateDir, 'dev-department.json')
 const writeConfig = (extra) => fs.writeFileSync(configFile, JSON.stringify(Object.assign({
   windows: [{ start: '00:00', stop: '23:59' }],
   maxRework: 3,
@@ -54,7 +58,7 @@ const writeConfig = (extra) => fs.writeFileSync(configFile, JSON.stringify(Objec
 writeConfig()
 process.env.DSH_HOME = home
 
-const bookFile = path.join(home, 'dev-department-usage.json')
+const bookFile = path.join(stateDir, 'dev-department-usage.json')
 const readBook = () => (fs.existsSync(bookFile) ? JSON.parse(fs.readFileSync(bookFile, 'utf8')) : [])
 const writeBook = (entries) => fs.writeFileSync(bookFile, JSON.stringify(entries, null, 2) + '\n')
 

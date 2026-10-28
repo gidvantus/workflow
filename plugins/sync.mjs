@@ -11,8 +11,9 @@
 // apply и status, увидев в профиле установленный пакет, говорят об этом и
 // раскладку хост-плоскости не предлагают: вторая копия в каталоге установки
 // подняла бы второй диспетчер. За sync остались файлы, путь которых в установке
-// не совпадает с путём в репозитории (config/dev-department.json), и collect —
-// сбор правок из установки обратно в репозиторий.
+// не совпадает с путём в репозитории (plugins/config/dev-department.json лежит в
+// каталоге состояния отдела, а не в корне каталога установки), и collect — сбор
+// правок из установки обратно в репозиторий.
 //
 // Каталог установки: $DSH_HOME, иначе ~/.dsh; переопределяется ключом --dsh-home.
 // Корень репозитория: скрипт лежит в plugins/, поэтому корень — его родитель;
@@ -26,7 +27,7 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
-import { BUNDLE_PACKAGE, DEFAULT_PROFILE, bundlePackageDir } from './tools/plugin-paths.mjs'
+import { BUNDLE_PACKAGE, DEFAULT_PROFILE, bundlePackageDir, statePathsModule } from './tools/plugin-paths.mjs'
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
 
@@ -64,6 +65,14 @@ if (!fs.existsSync(repo)) {
   console.error('каталог репозитория не найден: ' + repo + ' (задай --repo)')
   process.exit(2)
 }
+
+// Состояние отдела живёт не в корне каталога установки, а в каталоге профиля
+// (`<DSH_HOME>/profiles/desktop/dsh-dev-department/`). Путь, имена файлов и
+// однократный перенос со старого места — достояние модуля состояния: sync их не
+// повторяет, иначе раскладка и плагины разошлись бы молча. Модуль читает
+// $DSH_HOME в момент вызова, поэтому каталог установки выставляем до него.
+process.env.DSH_HOME = dshHome
+const state = await statePathsModule({ dshHome, repoRoot: repo })
 
 // ── что синхронизируем ──────────────────────────────────────────────────────
 
@@ -136,10 +145,12 @@ function bundleRegistered(profile) {
 }
 
 // Файлы, у которых путь в каталоге установки не совпадает с путём в репозитории.
-// Расписание смен и лимиты диспетчер читает из ~/.dsh/dev-department.json, а в
-// репозитории они лежат в plugins/config/ рядом с образцом реестра проектов.
+// Расписание смен и лимиты диспетчер читает из dev-department.json в каталоге
+// профиля, а в репозитории они лежат в plugins/config/ рядом с образцом реестра
+// проектов. Имя файла состояния берётся у модуля состояния: имена и каталог
+// состояния меняет он, а не этот список.
 const HOME_FILES = [
-  { repo: 'plugins/config/dev-department.json', home: 'dev-department.json' },
+  { repo: 'plugins/config/dev-department.json', name: state.STATE_FILES.config },
 ]
 
 // Файлы профиля раскладываются только в СУЩЕСТВУЮЩИЙ профиль. Каталог
@@ -251,8 +262,10 @@ function pairs() {
   for (const { home, file } of repoHostFiles()) {
     list.push({ from: path.join(dshHome, home), to: path.join(repo, file), rel: home, kind: 'host' })
   }
-  for (const { repo: rel, home } of HOME_FILES) {
-    list.push({ from: path.join(dshHome, home), to: path.join(repo, rel), rel, kind: 'home' })
+  for (const { repo: rel, name } of HOME_FILES) {
+    // Для чтения и сбора место называет модуль состояния: файл может ещё лежать
+    // по старому пути, и собирать правки надо оттуда, где он есть.
+    list.push({ from: state.readStateFile(name), to: path.join(repo, rel), rel, kind: 'home', stateName: name })
   }
   for (const preset of repoPresets()) {
     const fromRoot = path.join(dshHome, '.agent-presets', preset)
@@ -285,6 +298,10 @@ function copyOne(from, to) {
 }
 
 const short = (full) => path.relative(repo, full).split(path.sep).join('/')
+// Путь в каталоге установки — так его видит человек, а не машина.
+const shortHome = (full) => path.relative(dshHome, full).split(path.sep).join('/')
+// Куда модуль состояния положит файл: каталог состояния плюс имя файла.
+const stateDirFile = (name) => path.join(state.stateDir(), name)
 
 // ── проверка секретов ───────────────────────────────────────────────────────
 
@@ -299,7 +316,9 @@ function secrets() {
     const value = fs.readFileSync(file, 'utf8').trim()
     if (value) found.push({ where: name, value })
   }
-  const projects = path.join(dshHome, 'projects.json')
+  // Реестр проектов лежит в каталоге состояния отдела, а не в корне каталога
+  // установки: путь спрашиваем у модуля, как и остальные файлы состояния.
+  const projects = state.readStateFile(state.STATE_FILES.projects)
   if (fs.existsSync(projects)) {
     const data = JSON.parse(fs.readFileSync(projects, 'utf8'))
     for (const [id, project] of Object.entries(data.projects || {})) {
@@ -395,9 +414,18 @@ if (mode === 'status') {
   let missingRepo = 0
   let missingHome = 0
   let skipped = 0
+  let legacy = 0
   for (const pair of synced) {
     const inRepo = hash(pair.to)
     const inHome = hash(pair.from)
+    // Файл состояния, ещё лежащий по старому пути, — не «не разложено», а
+    // недоделанный перенос: называем это отдельной строкой, иначе sync молчит о
+    // том, что состояние отдела до сих пор в корне каталога установки.
+    if (pair.stateName !== undefined && inHome !== null && pair.from === state.legacyFile(pair.stateName)) {
+      legacy += 1
+      console.log('  старое место ' + pair.rel + ' — файл лежит в ' +
+        shortHome(pair.from) + ', а не в ' + shortHome(stateDirFile(pair.stateName)))
+    }
     if (!hasProfile(pair.rel)) {
       if (inRepo !== null) {
         skipped += 1
@@ -428,7 +456,8 @@ if (mode === 'status') {
     }
   }
   console.log('совпадает: ' + same + ', различается: ' + diff + ', нет в репозитории: ' + missingRepo +
-    ', не разложено: ' + missingHome + ', профиля нет: ' + skipped + ', лишнего: ' + extra)
+    ', не разложено: ' + missingHome + ', профиля нет: ' + skipped + ', лишнего: ' + extra +
+    (legacy === 0 ? '' : ', в старом месте: ' + legacy))
   if (fromBundle) {
     console.log('(файлы, которые везёт пакет, из счёта исключены)')
   }
@@ -475,10 +504,13 @@ if (mode === 'apply') {
       continue
     }
     if (!fs.existsSync(pair.to)) continue
-    if (hash(pair.to) !== hash(pair.from)) {
-      copyOne(pair.to, pair.from)
+    // Пишем туда, куда файл состояния кладёт модуль: он же создаёт каталог и
+    // переносит легаси-файл со старого места, если тот ещё там.
+    const dest = pair.stateName === undefined ? pair.from : state.stateFile(pair.stateName)
+    if (hash(pair.to) !== hash(dest)) {
+      copyOne(pair.to, dest)
       copied += 1
-      console.log('  разложено ' + path.relative(dshHome, pair.from).split(path.sep).join('/'))
+      console.log('  разложено ' + shortHome(dest))
     }
   }
   console.log('')

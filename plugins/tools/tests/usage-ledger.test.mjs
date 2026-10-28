@@ -38,7 +38,10 @@ function checkText(name, haystack, needle) {
   console.log((ok ? 'ok    ' : 'ФЕЙЛ  ') + name + ' → ' + (ok ? 'есть «' + needle + '»' : 'НЕТ «' + needle + '»'))
 }
 
-const book = () => path.join(home, 'dev-department-usage.json')
+// Книга привязок живёт в каталоге состояния профиля, а не в корне каталога
+// установки: путь собирает модуль состояния, набор повторяет его один раз.
+const stateDir = (base) => path.join(base, 'profiles', 'desktop', 'dsh-dev-department')
+const book = () => path.join(stateDir(home), 'dev-department-usage.json')
 const readBook = () => JSON.parse(fs.readFileSync(book(), 'utf8'))
 
 const S1 = '11111111-1111-1111-1111-111111111111'
@@ -111,7 +114,7 @@ check('обёртка entries принята, повтор схлопнут, м�
 // Каталог установки — не константа модуля.
 process.env.DSH_HOME = homeEmpty
 check('DSH_HOME перечитан: другой каталог — другая книга', [ledger.ledgerFile(), ledger.readLedger().length],
-  [path.join(homeEmpty, 'dev-department-usage.json'), 0])
+  [path.join(stateDir(homeEmpty), 'dev-department-usage.json'), 0])
 process.env.DSH_HOME = home
 
 // ── правило повтора ─────────────────────────────────────────────────────────

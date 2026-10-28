@@ -7,10 +7,14 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import https from 'node:https'
+import { statePathsModule } from './plugin-paths.mjs'
 
 const home = process.env.DSH_HOME || path.join(os.homedir(), '.dsh')
 const token = fs.readFileSync(path.join(home, 'mcp', 'github-mcp-server', 'token'), 'utf8').trim()
-const registry = JSON.parse(fs.readFileSync(path.join(home, 'projects.json'), 'utf8'))
+// Реестр проектов лежит в каталоге состояния отдела, а не в корне каталога
+// установки: путь к нему собирает модуль состояния, а не этот скрипт.
+const state = await statePathsModule({ dshHome: home })
+const registry = JSON.parse(fs.readFileSync(state.readStateFile(state.STATE_FILES.projects), 'utf8'))
 
 function call(method, url, payload) {
   return new Promise((resolve, reject) => {
