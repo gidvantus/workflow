@@ -49,7 +49,7 @@ plugins/                        ОТДЕЛ РАЗРАБОТКИ: пакет и �
   role-sessions.mjs             инструменты open_role_session / list_agent_presets
   role-permissions.mjs          роли получают danger-full-access (без запросов)
   tg-bridge.mjs                 мост в Telegram
-  agent-presets/                агент-плоскость DSH: роли, они же десять пресетов в
+  plugins/agent-presets/                агент-плоскость DSH: роли, они же десять пресетов в
                                 списке (плагин кладёт их в ~/.dsh/.agent-presets)
     analyst/                    аналитик: разбор задачи, варианты, промт + план + issue
     dev-fullstack/              разработчик полного стека: оба дерева, тикеты без area:*
@@ -61,7 +61,7 @@ plugins/                        ОТДЕЛ РАЗРАБОТКИ: пакет и �
     design/                     дизайнер: макет к постановке, реализации не делает
     security-review/            ревью безопасности, вне конвейера
     jev/                        отраслевой пресет со своими решениями, вне конвейера
-  config/
+  plugins/config/
     projects.example.json       реестр проектов (без секретов)
     dev-department.json         общие настройки отдела: окна, лимиты
                                 (в установке ~/.dsh/dev-department.json)
@@ -69,8 +69,9 @@ plugins/                        ОТДЕЛ РАЗРАБОТКИ: пакет и �
     ARCHITECTURE.md             как устроена надстройка: роли, метки, окна, сбои
     DEPARTMENT-PROCESS.md       процесс отдела: кто какой статус ставит и при каком событии
     TESTING-WORKFLOW.md         полный workflow тестирования: инструменты, слои, вердикт
+    RELOAD-MATRIX.md            что DSH подхватывает на ходу, а что после перезапуска
     IDEAS.md                    идеи по доработке DSH: агенты, workflow, Telegram-мост
-  profiles/                     легаси-раскладка: хост-плоскость DSH для sync.mjs
+  profiles/                     легаси-раскладка: хост-плоскость DSH для plugins/sync.mjs
     desktop/
       cordis.patch.yml          раскладка профиля прежним способом: руками не
                                 подключается, если стоит пакет
@@ -80,7 +81,7 @@ plugins/                        ОТДЕЛ РАЗРАБОТКИ: пакет и �
     web/
       cordis.patch.yml          то же для профиля web
       plugins/role-sessions.mjs
-  tools/
+  plugins/tools/
     tests/                      регрессионные наборы на реальных модулях
     plugin-paths.mjs            один помощник раскладок: где лежат боевые модули
                                 (его же спрашивает plugins/sync.mjs и yaml-block-check)
