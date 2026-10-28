@@ -14,19 +14,19 @@
 // переносится на другие рубежи: PR-only, отсутствие автомержа и защита веток.
 //
 // ЖУРНАЛ: вывод console из плагинов в логи приложения не попадает, поэтому плагин
-// пишет ~/.dsh/role-permissions.log — по нему видно, сработал ли слушатель и на
-// каком событии.
+// пишет `<DSH_HOME>/profiles/desktop/dsh-dev-department/role-permissions.log` — по
+// нему видно, сработал ли слушатель и на каком событии. Каталог и перенос со старого
+// места называет `./state-paths.mjs`; рядом с модулем журнал держать нельзя —
+// переустановка пакета унесла бы его.
 
 import fs from 'node:fs'
-import os from 'node:os'
-import path from 'node:path'
+import { STATE_FILES, stateFile } from './state-paths.mjs'
 
 const ROLES = ['dev-fullstack', 'dev-backend', 'dev-frontend', 'design', 'tester', 'analyst', 'code-review', 'devops-delivery']
 const PERMISSION_PRESET = 'danger-full-access'
 
 function logPath() {
-  const home = process.env.DSH_HOME || path.join(os.homedir(), '.dsh')
-  return path.join(home, 'role-permissions.log')
+  return stateFile(STATE_FILES.rolePermissions)
 }
 
 function trace(line) {

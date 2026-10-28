@@ -1,11 +1,16 @@
 // Отдел разработки — диспетчер ролей, многопроектный, со своим отделом в каждом
 // проекте.
 //
-// ГДЕ ЧТО ЛЕЖИТ.
-//   ~/.dsh/projects.json     — проекты: repo, base, workspace, composeProject,
+// ГДЕ ЧТО ЛЕЖИТ. Состояние отдела живёт в каталоге профиля, а не в корне каталога
+// установки: `dsh plugin add` переустанавливает пакет, и файл рядом с модулем
+// исчезал бы вместе с прежней версией. Каталог и перенос со старого места называет
+// `./state-paths.mjs` — здесь только имена:
+//   <DSH_HOME>/profiles/desktop/dsh-dev-department/projects.json
+//                            — проекты: repo, base, workspace, composeProject,
 //                              метки и секция department (включён ли отдел,
 //                              расписание, лимиты).
-//   ~/.dsh/dev-department.json — только ОБЩИЕ значения по умолчанию для тех
+//   <DSH_HOME>/profiles/desktop/dsh-dev-department/dev-department.json
+//                            — только ОБЩИЕ значения по умолчанию для тех
 //                              проектов, которые своё не задали: windows,
 //                              maxRework, maxAttempts, stuckAfterMinutes.
 //
@@ -31,7 +36,8 @@
 // На каждый тикет у роли ровно ОДИН диалог. Доработка после test-failed, возврат
 // с код-ревью и повторный тест продолжаются в том же диалоге: у агента уже есть
 // ветка, коммиты и разбор прошлого вердикта. Карта диалогов лежит в
-// ~/.dsh/dev-department-dialogs.json и переживает перезапуск приложения.
+// <DSH_HOME>/profiles/desktop/dsh-dev-department/dev-department-dialogs.json и
+// переживает перезапуск приложения.
 //
 // Прогоны идут, пока запущен DSH Desktop. Приложение закрыто — прогонов нет,
 // и это ожидаемое поведение, а не сбой.
@@ -93,14 +99,15 @@
 // то, на чём остановились.
 
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import https from 'node:https'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { STATE_FILES, dshHome, readStateFile, stateFile } from './state-paths.mjs'
 
 // ОБЩИЕ значения по умолчанию для проектов, которые своё не задали. Данных
-// конкретного проекта здесь нет и быть не должно: они в ~/.dsh/projects.json.
+// конкретного проекта здесь нет и быть не должно: они в реестре проектов
+// (`STATE_FILES.projects`).
 const DEFAULTS = {
   startHour: 0,
   startMinute: 0,
@@ -177,7 +184,8 @@ function intInRange(value, min, max, fallback) {
 // ── Общие настройки смены ───────────────────────────────────────────────────
 
 // Необязательный тариф для перевода токенов в деньги. Числа тарифа задаёт человек
-// в ~/.dsh/dev-department.json; в коде их нет и быть не должно — валюта и цена
+// в `STATE_FILES.config` (`dev-department.json` в каталоге состояния отдела); в коде
+// их нет и быть не должно — валюта и цена
 // зависят от провайдера и меняются без правки отдела. Незаданный тариф значит «цену
 // не показываем», а не «цена ноль»: иначе сводка утверждала бы, что смена бесплатна.
 const USAGE_RATE_KEYS = ['inputUsdPerM', 'cacheReadUsdPerM', 'cacheWriteUsdPerM', 'outputUsdPerM']
@@ -202,7 +210,7 @@ function parseUsageRates(raw) {
 }
 
 function loadConfig() {
-  const file = path.join(dshHome(), 'dev-department.json')
+  const file = readStateFile(STATE_FILES.config)
   let raw
   try {
     raw = JSON.parse(stripBom(fs.readFileSync(file, 'utf8')))
@@ -263,8 +271,8 @@ function loadConfig() {
   for (const legacy of ['repo', 'workspacePath', 'projects']) {
     if (raw[legacy] !== undefined) {
       const where = legacy === 'projects'
-        ? 'теперь это поле department.enabled у каждого проекта в ~/.dsh/projects.json'
-        : 'переехало в ~/.dsh/projects.json'
+        ? 'теперь это поле department.enabled у каждого проекта в реестре проектов отдела (projects.json)'
+        : 'переехало в реестр проектов отдела (projects.json)'
       problems.push(legacy + ': ' + where)
     }
   }
@@ -339,10 +347,6 @@ function localStamp(date) {
   const pad = (n) => String(n).padStart(2, '0')
   return date.getFullYear() + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate()) +
     ' ' + pad(date.getHours()) + ':' + pad(date.getMinutes())
-}
-
-function dshHome() {
-  return process.env.DSH_HOME || path.join(os.homedir(), '.dsh')
 }
 
 // ── Роли: раскладка пресетов в пользовательский корень ──────────────────────
@@ -534,7 +538,7 @@ function normalizePath(value) {
 }
 
 function readRegistry() {
-  const file = path.join(dshHome(), 'projects.json')
+  const file = readStateFile(STATE_FILES.projects)
   let raw
   try {
     raw = JSON.parse(stripBom(fs.readFileSync(file, 'utf8')))
@@ -688,7 +692,7 @@ let mcpQueue = Promise.resolve()
 
 function mcpLog(text) {
   try {
-    fs.appendFileSync(path.join(dshHome(), 'dev-department-mcp.log'), new Date().toISOString() + ' ' + text + '\n')
+    fs.appendFileSync(stateFile(STATE_FILES.mcpLog), new Date().toISOString() + ' ' + text + '\n')
   } catch (error) {
     // журнал транспорта не должен ломать смену
   }
@@ -1005,7 +1009,7 @@ function request(options, body) {
 // сохранить в любом случае.
 function appendShiftLog(text) {
   try {
-    fs.appendFileSync(path.join(dshHome(), 'dev-department.log'), '\n===== ' + new Date().toISOString() + ' =====\n' + text + '\n')
+    fs.appendFileSync(stateFile(STATE_FILES.shiftLog), '\n===== ' + new Date().toISOString() + ' =====\n' + text + '\n')
   } catch (error) {
     // журнал не должен ломать смену
   }
@@ -1016,7 +1020,7 @@ function appendShiftLog(text) {
 // нуля. Номер тикета уникален только внутри проекта, поэтому проект входит в
 // ключ: у vahta #52 и у brain #52 — разные задачи.
 function dialogsFile() {
-  return path.join(dshHome(), 'dev-department-dialogs.json')
+  return stateFile(STATE_FILES.dialogs)
 }
 
 function readDialogs() {
@@ -3412,7 +3416,7 @@ export default {
     // workspaceRegistry.create идемпотентен и возвращает уже заведённую область.
     const workspacesTool = define(
       'dev_department_workspaces',
-      'Завести рабочие области агентов в реестре рабочих областей DSH для всех проектов из ~/.dsh/projects.json (включая проекты с выключенным отделом) и сказать, у какого проекта нет каталога или git-клона. Повторный вызов ничего не дублирует: заведённая область возвращается как есть.',
+      'Завести рабочие области агентов в реестре рабочих областей DSH для всех проектов из реестра проектов отдела (projects.json в каталоге состояния отдела, включая проекты с выключенным отделом) и сказать, у какого проекта нет каталога или git-клона. Повторный вызов ничего не дублирует: заведённая область возвращается как есть.',
       { type: 'object', properties: {}, additionalProperties: false },
       async () => {
         config = loadConfig()

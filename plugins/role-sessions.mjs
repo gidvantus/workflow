@@ -29,18 +29,18 @@
 // перечисленных сервисов.
 //
 // ВАЖНО ПРО ДИАГНОСТИКУ: вывод console.* из плагинов НЕ попадает в логи
-// приложения, поэтому плагин ведёт собственный журнал в каталоге установки —
-// `<DSH_HOME>/role-sessions.log`, рядом с dev-department.log и
-// role-permissions.log. Рядом с модулем журнал держать нельзя: в раскладке
+// приложения, поэтому плагин ведёт собственный журнал —
+// `<DSH_HOME>/profiles/desktop/dsh-dev-department/role-sessions.log`, рядом с
+// dev-department.log и role-permissions.log. Каталог и перенос со старого места
+// называет `./state-paths.mjs`. Рядом с модулем журнал держать нельзя: в раскладке
 // пакета модуль стоит в node_modules профиля, и файл исчезал бы при следующем
 // `dsh plugin add`.
 
 import fs from 'node:fs'
-import os from 'node:os'
-import path from 'node:path'
+import { STATE_FILES, stateFile } from './state-paths.mjs'
 
 function logPath() {
-  return path.join(process.env.DSH_HOME || path.join(os.homedir(), '.dsh'), 'role-sessions.log')
+  return stateFile(STATE_FILES.roleSessions)
 }
 
 function trace(line) {
