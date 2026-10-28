@@ -1,7 +1,7 @@
 # Процесс отдела разработки
 
 Состояние на 20.10.2026. Описывает поведение установленного диспетчера
-(`<пакет>/profiles/desktop/plugins/dev-department.mjs`, то есть
+(`<пакет>/plugins/dev-department.mjs`, то есть
 `<DSH_HOME>/profiles/desktop/node_modules/dsh-dev-department/…`; в `~/.dsh` лежит
 только состояние отдела — см. §10) и промтов, которые он выдаёт ролям.
 
@@ -84,7 +84,7 @@
 ### 2.3 Что обязана содержать постановка
 
 Состав постановки задаёт скилл аналитика
-`agent-presets/analyst/skills/task-analysis/SKILL.md` (фаза 2) — здесь только два правила, без которых
+`plugins/agent-presets/analyst/skills/task-analysis/SKILL.md` (фаза 2) — здесь только два правила, без которых
 постановка не работает. **Правка постановки переезжает в тело issue** через `mcp__github__issue_write` с `"method": "update"`; в
 комментарии остаётся одна строка-уведомление. **«Контракт половин» обязателен**, когда задача идёт
 полным стеком: таблица контракта в теле — единственное, что связывает две половины, пока идёт
@@ -473,8 +473,8 @@ DevOps-инженера.
 
 | Что | Где |
 |---|---|
-| Диспетчер и тексты заданий | `<пакет>/profiles/desktop/plugins/dev-department.mjs` |
-| Разрешения ролей (список `ROLES`) | `<пакет>/profiles/desktop/plugins/role-permissions.mjs` |
+| Диспетчер и тексты заданий | `<пакет>/plugins/dev-department.mjs` |
+| Разрешения ролей (список `ROLES`) | `<пакет>/plugins/role-permissions.mjs` |
 | Строки плагинов отдела в композиции | `<пакет>/cordis.patch.yml` — патч бандла |
 | Роли: промт, описание, скиллы (`agent.cordis.yml`, `preset.yml`, `skills/`) | `<пакет>/agent-presets/<id>/` — карта ролей в разделе 2.1 |
 | Скилл макета (роль `design`) | `<пакет>/agent-presets/design/skills/mockup-delivery/SKILL.md` |
@@ -493,7 +493,7 @@ DevOps-инженера.
 github:gidvantus/workflow#<commit>`, перезапуск DSH. Правка файла прямо в
 `node_modules` пропадёт при следующей установке и не попадёт в репозиторий.
 
-Раньше то же самое раскладывалось `node sync.mjs apply` в
+Раньше то же самое раскладывалось `node plugins/sync.mjs apply` в
 `~/.dsh/profiles/<профиль>/plugins/` и `~/.dsh/.agent-presets/<id>/`. Эта
 раскладка поддерживается только для машин, где пакет ещё не поставлен: две
 копии диспетчера в одной композиции — это два тикера на одни тикеты.

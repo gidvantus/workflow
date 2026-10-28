@@ -17,8 +17,10 @@ import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 
-const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const presetsDir = path.join(repo, 'agent-presets')
+// Скрипт лежит в plugins/tools, поэтому корень репозитория — два уровня выше, а
+// роли — в каталоге пакета отдела (plugins/agent-presets).
+const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
+const presetsDir = path.join(repo, 'plugins', 'agent-presets')
 
 // Маркер идемпотентности: первая строка блока, по ней же живёт режим check.
 const MARKER = 'ЗАПРЕТЫ: разрушающие команды PowerShell'

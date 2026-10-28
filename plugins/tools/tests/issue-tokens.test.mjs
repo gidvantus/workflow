@@ -22,12 +22,15 @@ import fs from 'node:fs'
 import path from 'node:path'
 import zlib from 'node:zlib'
 import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 
-const cli = path.join(process.cwd(), '..', 'issue-tokens.mjs')
-const home = path.join(process.cwd(), '.issue-tokens-home')
-const homeNoModule = path.join(process.cwd(), '.issue-tokens-nomodule-home')
-// Настоящий модуль половины `profiles/`: сильнее эталона, когда он есть.
-const REPO_LEDGER = path.join(process.cwd(), '..', '..', 'profiles', 'desktop', 'plugins', 'usage-ledger.mjs')
+// Тест лежит в plugins/tools/tests: рядом — CLI, двумя уровнями выше — модуль учёта.
+const TEST_DIR = path.dirname(fileURLToPath(import.meta.url))
+const cli = path.resolve(TEST_DIR, '..', 'issue-tokens.mjs')
+const home = path.join(TEST_DIR, '.issue-tokens-home')
+const homeNoModule = path.join(TEST_DIR, '.issue-tokens-nomodule-home')
+// Настоящий модуль учёта: сильнее эталона, когда он есть.
+const REPO_LEDGER = path.resolve(TEST_DIR, '..', '..', 'usage-ledger.mjs')
 
 let failures = 0
 function check(name, actual, expected) {
@@ -588,7 +591,7 @@ const bareDir = path.join(process.cwd(), '.issue-tokens-bare')
 fs.rmSync(bareDir, { recursive: true, force: true })
 fs.mkdirSync(bareDir, { recursive: true })
 fs.copyFileSync(cli, path.join(bareDir, 'issue-tokens.mjs'))
-fs.copyFileSync(path.join(process.cwd(), '..', 'zstd-frames.mjs'), path.join(bareDir, 'zstd-frames.mjs'))
+fs.copyFileSync(path.resolve(TEST_DIR, '..', 'zstd-frames.mjs'), path.join(bareDir, 'zstd-frames.mjs'))
 const bareCli = path.join(bareDir, 'issue-tokens.mjs')
 
 console.log('\n=== запуск node tools/issue-tokens.mjs ===')

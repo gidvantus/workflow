@@ -1,4 +1,4 @@
-// Проверка модуля учёта токенов: profiles/desktop/plugins/usage-ledger.mjs.
+// Проверка модуля учёта токенов: plugins/usage-ledger.mjs.
 //
 // Модуль — единственное место, где живут книга привязок «сессия → тикет» и правило
 // повтора. Поэтому проверяется именно он, а не его копия в тесте отчёта: карточка
@@ -8,12 +8,14 @@
 // Настоящий ~/.dsh не читается и не пишется: весь тест живёт в песочном $DSH_HOME,
 // который подставляется в `process.env.DSH_HOME` — модуль читает каталог установки
 // в момент вызова, а не на момент импорта, и это здесь же проверяется.
-// Запуск: node usage-ledger.test.mjs (из каталога tools/tests)
+// Запуск: node usage-ledger.test.mjs
 import fs from 'node:fs'
 import path from 'node:path'
 import zlib from 'node:zlib'
+import { fileURLToPath } from 'node:url'
 
-const moduleFile = path.join(process.cwd(), '..', '..', 'profiles', 'desktop', 'plugins', 'usage-ledger.mjs')
+// Тест лежит в plugins/tools/tests, модуль учёта — в plugins/.
+const moduleFile = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'usage-ledger.mjs')
 const home = path.join(process.cwd(), '.usage-ledger-home')
 const homeEmpty = path.join(process.cwd(), '.usage-ledger-empty-home')
 fs.rmSync(home, { recursive: true, force: true })

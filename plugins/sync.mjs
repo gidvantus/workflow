@@ -15,10 +15,10 @@
 // сбор правок из установки обратно в репозиторий.
 //
 // Каталог установки: $DSH_HOME, иначе ~/.dsh; переопределяется ключом --dsh-home.
-// Корень репозитория: каталог самого скрипта; переопределяется ключом --repo или
-// полем repo в sync.local.json. Скрипт лежит в корне репозитория и переезжает
-// вместе с ним: отдельного «пути к папке» внутри кода нет, поэтому переезд
-// каталога не ломает синхронизацию.
+// Корень репозитория: скрипт лежит в plugins/, поэтому корень — его родитель;
+// переопределяется ключом --repo или полем repo в sync.local.json. Отдельного
+// «пути к папке» внутри кода нет, поэтому переезд каталога не ломает
+// синхронизацию.
 // Черновики (*.bak-*), логи, артефакты тестов и секреты не синхронизируются.
 import fs from 'node:fs'
 import os from 'node:os'
@@ -59,7 +59,7 @@ if (fs.existsSync(localConfig)) {
 const repoFlag = argv.indexOf('--repo')
 const repo = repoFlag !== -1
   ? path.resolve(argv[repoFlag + 1])
-  : (local.repo ? path.resolve(local.repo) : scriptDir)
+  : (local.repo ? path.resolve(local.repo) : path.resolve(scriptDir, '..'))
 if (!fs.existsSync(repo)) {
   console.error('каталог репозитория не найден: ' + repo + ' (задай --repo)')
   process.exit(2)
@@ -75,7 +75,7 @@ if (!fs.existsSync(repo)) {
 
 // Роли отдела: один каталог — один пресет.
 function repoPresets() {
-  const root = path.join(repo, 'agent-presets')
+  const root = path.join(repo, 'plugins', 'agent-presets')
   if (!fs.existsSync(root)) return []
   return fs.readdirSync(root, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && !EXCLUDE_PATH.test(entry.name))
@@ -83,11 +83,26 @@ function repoPresets() {
     .sort()
 }
 
-// Хост-плоскость: путь внутри каталога установки совпадает с путём в репозитории.
+// Хост-плоскость. Пакет держит плагины плоско в plugins/, а легаси-слои профилей
+// (патч, манифест пачки, voice-input) — в plugins/profiles/<профиль>/. Путь в
+// каталоге установки при этом прежний: profiles/<профиль>/…
 function repoHostFiles() {
-  return walk(path.join(repo, 'profiles'))
-    .map((rel) => 'profiles/' + rel.split(path.sep).join('/'))
-    .sort()
+  const list = []
+  const flat = path.join(repo, 'plugins')
+  if (fs.existsSync(flat)) {
+    for (const entry of fs.readdirSync(flat, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith('.mjs')) continue
+      list.push({
+        home: 'profiles/' + DEFAULT_PROFILE + '/plugins/' + entry.name,
+        file: 'plugins/' + entry.name,
+      })
+    }
+  }
+  for (const rel of walk(path.join(repo, 'plugins', 'profiles'))) {
+    const slashed = rel.split(path.sep).join('/')
+    list.push({ home: 'profiles/' + slashed, file: 'plugins/profiles/' + slashed })
+  }
+  return list.sort((a, b) => a.file.localeCompare(b.file))
 }
 
 // Установленный bundle-пакет надстройки: `dsh plugin add` кладёт его зависимостью
@@ -122,9 +137,9 @@ function bundleRegistered(profile) {
 
 // Файлы, у которых путь в каталоге установки не совпадает с путём в репозитории.
 // Расписание смен и лимиты диспетчер читает из ~/.dsh/dev-department.json, а в
-// репозитории они лежат в config/ рядом с образцом реестра проектов.
+// репозитории они лежат в plugins/config/ рядом с образцом реестра проектов.
 const HOME_FILES = [
-  { repo: 'config/dev-department.json', home: 'dev-department.json' },
+  { repo: 'plugins/config/dev-department.json', home: 'dev-department.json' },
 ]
 
 // Файлы профиля раскладываются только в СУЩЕСТВУЮЩИЙ профиль. Каталог
@@ -143,11 +158,10 @@ function hasProfile(rel) {
   return fs.existsSync(path.join(dshHome, 'profiles', name))
 }
 
-// docs/ и tools/ живут только в репозитории: это документация процесса и
-// инструменты проверки, а не надстройка каталога установки. В ~/.dsh они не
-// кладутся и обратно не раскладываются. Раньше их источник задавался полем
-// toolsSource в sync.local.json и указывал на рабочую область человека; теперь
-// источник у них один — этот каталог, поэтому поле больше не нужно.
+// plugins/docs и plugins/tools живут только в репозитории: это документация
+// процесса и инструменты проверки, а не надстройка каталога установки. В ~/.dsh
+// они не кладутся и обратно не раскладываются: их список не ведётся руками,
+// потому что раскладка перечисляет только хост-файлы и пресеты.
 
 // Что не синхронизируется никогда: черновики, логи, артефакты прогонов.
 const EXCLUDE = /\.bak(-|\.|$)|\.log(-|\.|$)|^\.coverage$|^coverage-|\.tmp$/
@@ -210,7 +224,7 @@ function mirrorRoots() {
     if (!fs.existsSync(source)) continue
     roots.push({
       source,
-      target: path.join(repo, 'agent-presets', preset),
+      target: path.join(repo, 'plugins', 'agent-presets', preset),
       keep: new Set(walk(source)),
     })
   }
@@ -234,15 +248,15 @@ function prune(roots) {
 
 function pairs() {
   const list = []
-  for (const rel of repoHostFiles()) {
-    list.push({ from: path.join(dshHome, rel), to: path.join(repo, rel), rel, kind: 'host' })
+  for (const { home, file } of repoHostFiles()) {
+    list.push({ from: path.join(dshHome, home), to: path.join(repo, file), rel: home, kind: 'host' })
   }
   for (const { repo: rel, home } of HOME_FILES) {
     list.push({ from: path.join(dshHome, home), to: path.join(repo, rel), rel, kind: 'home' })
   }
   for (const preset of repoPresets()) {
     const fromRoot = path.join(dshHome, '.agent-presets', preset)
-    const toRoot = path.join(repo, 'agent-presets', preset)
+    const toRoot = path.join(repo, 'plugins', 'agent-presets', preset)
     // Перечисляем ОБЕ стороны: на новой машине пресетов в каталоге установки
     // ещё нет, и файлы приезжают только со стороны репозитория. Раньше список
     // строился по одной стороне, и `apply` на чистой машине не создавал ни

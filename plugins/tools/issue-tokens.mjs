@@ -34,10 +34,15 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { readTranscript } from './zstd-frames.mjs'
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url))
-const REPO_ROOT = path.dirname(SCRIPT_DIR)
+// Скрипт лежит в plugins/tools: корень репозитория — двумя уровнями выше.
+const REPO_ROOT = path.resolve(SCRIPT_DIR, '..', '..')
 
-// Модуль учёта: единственное место, где живёт правило повтора.
+// Модуль учёта: единственное место, где живёт правило повтора. В каталоге
+// установки он лежит рядом с диспетчером (это путь DSH), в репозитории и в
+// bundle-пакете — плоско в plugins/.
 const LEDGER_MODULE = path.join('profiles', 'desktop', 'plugins', 'usage-ledger.mjs')
+const LEDGER_REPO = path.join('plugins', 'usage-ledger.mjs')
+const LEDGER_BUNDLE = path.join('profiles', 'desktop', 'node_modules', 'dsh-dev-department', 'plugins', 'usage-ledger.mjs')
 // Книга привязок рядом с каталогом установки.
 const LEDGER_FILE = 'dev-department-usage.json'
 // Заголовок сессии конвейера: «Код-ревьюер [workflow] #14 — …».
@@ -192,14 +197,15 @@ export function addUsage(left, right) {
 
 export async function loadLedgerModule(dshHome) {
   const candidates = [
-    path.join(dshHome, LEDGER_MODULE), // как разложил sync.mjs apply
-    path.join(REPO_ROOT, LEDGER_MODULE), // рабочая копия до раскладки
+    path.join(dshHome, LEDGER_MODULE), // раскладка sync.mjs
+    path.join(dshHome, LEDGER_BUNDLE), // установленный bundle-пакет
+    path.join(REPO_ROOT, LEDGER_REPO), // рабочая копия репозитория
   ]
   const found = candidates.find((file) => fs.existsSync(file))
   if (found === undefined) {
     throw new Error(
       'модуль учёта не найден: ' + candidates.join(' или ') + '\n' +
-      '  его кладёт `node sync.mjs apply` из ' + path.join(REPO_ROOT, LEDGER_MODULE) + '\n' +
+      '  он едет в пакете и в рабочей копии: ' + path.join(REPO_ROOT, LEDGER_REPO) + '\n' +
       '  без модуля считать нечем: правило повтора живёт только там')
   }
   // Модуль читает книгу по $DSH_HOME, поэтому каталог установки выставляем до

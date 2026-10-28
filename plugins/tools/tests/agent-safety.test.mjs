@@ -32,16 +32,21 @@ check('маркер блока стабилен', typeof marker === 'string' && 
 // Репозиторий не должен сам учить агентов этой конструкции: файлы пресетов проверяет
 // checkPresets, а скрипты — отдельный взгляд по коду.
 import fs from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
+// Корень репозитория считаем от файла теста, а не от cwd: тест лежит в
+// plugins/tools/tests, и запускать его можно из любого каталога.
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const codeFiles = []
 function walk(dir) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     if (entry.name === 'node_modules' || entry.name === '.git') continue
     const full = path.join(dir, entry.name)
     if (entry.isDirectory()) walk(full)
-    else if (/\.(ps1|mjs|cjs|js)$/.test(entry.name) && !full.includes('tools' + path.sep + 'tests')) codeFiles.push(full)
+    else if (/\.(ps1|mjs|cjs|js)$/.test(entry.name) && !full.split(path.sep).join('/').includes('/tools/tests/')) codeFiles.push(full)
   }
 }
-walk(path.join(process.cwd(), '..', '..'))
+walk(repoRoot)
 
 const banned = /(\$HOME|\$home)\s*=\s*['"]/i
 const offenders = codeFiles.filter((file) => {
@@ -51,7 +56,7 @@ const offenders = codeFiles.filter((file) => {
   return banned.test(text)
 })
 check('в скриптах нет присваивания $home/$HOME', offenders.length === 0,
-  offenders.map((file) => path.relative(process.cwd(), file)).join(', '))
+  offenders.map((file) => path.relative(repoRoot, file)).join(', '))
 
 console.log('')
 if (failures > 0) {

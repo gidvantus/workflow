@@ -1,16 +1,17 @@
 // Где лежат боевые модули отдела — в любой раскладке. Помощник общий: его
-// спрашивают и регрессионные наборы `tools/tests`, и боевой `sync.mjs`, поэтому
-// он живёт в `tools/`, а не в каталоге наборов.
+// спрашивают и регрессионные наборы `plugins/tools/tests`, и боевой `sync.mjs`,
+// поэтому он живёт в `plugins/tools/`, а не в каталоге наборов.
 //
-// Надстройка живёт в трёх раскладках, и вызывающий не должен знать, какая из них
-// сейчас на машине:
+// Раскладки, в которых надстройка может оказаться на машине:
 //
-//   1. рабочая копия репозитория — `profiles/<профиль>/plugins/…`,
-//      `agent-presets/<роль>/…`;
+//   1. рабочая копия репозитория — `plugins/<плагин>.mjs`, `plugins/agent-presets/
+//      <роль>/…`, `plugins/cordis.patch.yml`;
 //   2. установленный bundle-пакет — `dsh plugin add` кладёт его зависимостью
 //      профиля, то есть в `<DSH_HOME>/profiles/<профиль>/node_modules/
 //      dsh-dev-department/…`; адресация строк в патче бандла — спецификатор
-//      пакета, а не относительный путь;
+//      пакета, а не относительный путь. Пакет из этого репозитория держит файлы в
+//      `plugins/`, пакет прежних версий — в `profiles/<профиль>/plugins/` и в
+//      корне; помощник знает обе;
 //   3. старая раскладка `node sync.mjs apply` — `<DSH_HOME>/profiles/<профиль>/
 //      plugins/…` и `<DSH_HOME>/.agent-presets/<роль>/…`.
 //
@@ -27,8 +28,11 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-/** Корень репозитория: помощник лежит в `tools/`. */
-export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+/** Корень репозитория: помощник лежит в `plugins/tools/`. */
+export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
+
+/** Каталог пакета надстройки внутри репозитория — `plugins/`. */
+export const REPO_PACKAGE_DIR = path.join(REPO_ROOT, 'plugins')
 
 /** Имя bundle-пакета надстройки: то же, что в `package.json` в корне репозитория. */
 export const BUNDLE_PACKAGE = 'dsh-dev-department'
@@ -57,6 +61,20 @@ function bundleDir(o) {
 }
 
 /**
+ * Путь боевого файла внутри пакета: вызывающий называет файл так, как его видит
+ * DSH (`profiles/desktop/plugins/x.mjs`, `agent-presets/<роль>/…`,
+ * `cordis.patch.yml`), а пакет держит всё это под `plugins/`, кроме хост-плагинов,
+ * которые лежат там плоско.
+ */
+function packagePath(root, rel) {
+  const parts = slashed(rel)
+  if (parts[0] === 'profiles' && parts[2] === 'plugins' && parts.length === 4) {
+    return path.join(root, 'plugins', parts[3])
+  }
+  return path.join(root, 'plugins', ...parts)
+}
+
+/**
  * Все места, где боевой файл может лежать, в порядке поиска. Список отдаётся
  * целиком, чтобы сообщение об ошибке называло не «файла нет», а что именно
  * искали: иначе непонятно, сломан набор или раскладка.
@@ -64,14 +82,16 @@ function bundleDir(o) {
 export function candidates(rel, options = {}) {
   const o = settings(options)
   const parts = slashed(rel)
-  const bundle = path.join(bundleDir(o), ...parts)
+  const bundle = bundleDir(o)
   // Пресеты в старой раскладке лежат не по своему пути: ~/.dsh/.agent-presets/<роль>.
   const legacy = parts[0] === 'agent-presets'
     ? path.join(o.dshHome, '.agent-presets', ...parts.slice(1))
     : path.join(o.dshHome, ...parts)
   return [
-    { layout: 'рабочая копия', file: path.join(o.repoRoot, ...parts) },
-    { layout: 'пакет', file: bundle },
+    { layout: 'рабочая копия', file: packagePath(o.repoRoot, rel) },
+    { layout: 'пакет', file: packagePath(bundle, rel) },
+    // Пакет прежних версий держал файлы по путям DSH, без `plugins/`.
+    { layout: 'пакет (прежний)', file: path.join(bundle, ...parts) },
     { layout: 'старая раскладка', file: legacy },
   ]
 }
@@ -92,7 +112,7 @@ export function hostFile(rel, options = {}) {
   throw new Error('не найден ' + rel + ' ни в одной раскладке. Искал:\n' + tried)
 }
 
-/** Модуль хост-плагина профиля: `dev-department` → `profiles/desktop/plugins/dev-department.mjs`. */
+/** Модуль хост-плагина профиля: `dev-department` → `plugins/dev-department.mjs`. */
 export function pluginFile(name, options = {}) {
   const profile = options.profile ?? DEFAULT_PROFILE
   const file = String(name).endsWith('.mjs') ? String(name) : String(name) + '.mjs'
@@ -110,15 +130,18 @@ export function bundlePackageDir(options = {}) {
 
 /**
  * Патч бандла — из репозитория, если он там есть, иначе из установленного
- * пакета. Нужен `tools/yaml-block-check.mjs`: без аргументов он проверяет тот
- * патч, который реально есть на машине, а не молча пропускает проверку.
+ * пакета. Нужен `plugins/tools/yaml-block-check.mjs`: без аргументов он
+ * проверяет тот патч, который реально есть на машине, а не молча пропускает
+ * проверку.
  */
 export function bundlePatchFile(options = {}) {
   const o = settings(options)
-  const inRepo = path.join(o.repoRoot, 'cordis.patch.yml')
+  const inRepo = path.join(o.repoRoot, 'plugins', 'cordis.patch.yml')
   if (fs.existsSync(inRepo)) return inRepo
   const inBundle = bundlePackageDir(o)
   if (inBundle === null) return null
-  const file = path.join(inBundle, 'cordis.patch.yml')
-  return fs.existsSync(file) ? file : null
+  for (const file of [path.join(inBundle, 'plugins', 'cordis.patch.yml'), path.join(inBundle, 'cordis.patch.yml')]) {
+    if (fs.existsSync(file)) return file
+  }
+  return null
 }

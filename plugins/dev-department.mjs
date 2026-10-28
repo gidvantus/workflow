@@ -97,6 +97,7 @@ import os from 'node:os'
 import path from 'node:path'
 import https from 'node:https'
 import { spawn } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 
 // ОБЩИЕ значения по умолчанию для проектов, которые своё не задали. Данных
 // конкретного проекта здесь нет и быть не должно: они в ~/.dsh/projects.json.
@@ -342,6 +343,188 @@ function localStamp(date) {
 
 function dshHome() {
   return process.env.DSH_HOME || path.join(os.homedir(), '.dsh')
+}
+
+// ── Роли: раскладка пресетов в пользовательский корень ──────────────────────
+//
+// Роли едут внутри пакета (`plugins/agent-presets/`), но жить они обязаны в
+// пользовательском корне пресетов `~/.dsh/.agent-presets`: Desktop собирает
+// строку `agent-presets` последним патчем и оставляет в ней ровно два корня —
+// штатный (внутри app.asar) и этот, — а поле `roots` из bundle-патча
+// выбрасывает. Добавить корень в рантайме тоже нечем: `resolvedRoots` сервиса
+// считается один раз в конструкторе. Поэтому плагин раскладывает свои пресеты
+// туда сам при загрузке. Именно КОПИЯ, а не ссылка на `node_modules`:
+// переустановка пакета не должна уносить роли с собой, а правка роли идёт
+// через git и новую версию пакета.
+//
+// Каталог ищется в двух местах: в пакете роли лежат рядом с плагином
+// (`plugins/agent-presets/`), а в прежней раскладке
+// `profiles/desktop/plugins/` — на два уровня выше.
+const PRESETS_SOURCE = ['./agent-presets/', '../../../agent-presets/']
+  .map((rel) => fileURLToPath(new URL(rel, import.meta.url)))
+  .find((dir) => fs.existsSync(dir)) ||
+  fileURLToPath(new URL('./agent-presets/', import.meta.url))
+
+// Файлы каталога рекурсивно, путями относительно него: источник и цель
+// сравниваются одним словарём, и «чего в источнике больше нет» видно сразу.
+function listPresetFiles(dir, prefix = '') {
+  let entries
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true })
+  } catch (error) {
+    return []
+  }
+  const out = []
+  for (const entry of entries) {
+    const rel = prefix ? prefix + '/' + entry.name : entry.name
+    if (entry.isDirectory()) out.push(...listPresetFiles(path.join(dir, entry.name), rel))
+    else if (entry.isFile()) out.push(rel)
+  }
+  return out.sort()
+}
+
+// Убрать опустевшие каталоги (после удаления устаревших файлов роли). Корень не
+// трогаем: он принадлежит пресетам целиком, а не одной роли.
+function pruneEmptyDirs(dir, root) {
+  let entries
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true })
+  } catch (error) {
+    return false
+  }
+  let empty = true
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      empty = false
+      continue
+    }
+    if (!pruneEmptyDirs(path.join(dir, entry.name), root)) empty = false
+  }
+  if (empty && dir !== root) {
+    try {
+      fs.rmdirSync(dir)
+    } catch (error) {
+      return false
+    }
+  }
+  return empty
+}
+
+// Разложить пресеты ролей в пользовательский корень.
+//
+// Правила, которые важнее «просто скопировать»:
+//   • чужие пресеты не трогаем: каталог может принадлежать человеку, и его
+//     собственные роли обязаны пережить установку отдела (в отчёте они —
+//     foreign и остаются на месте);
+//   • файлы, которых в пакете больше нет, удаляем ТОЛЬКО у своих ролей: иначе
+//     скилл, убранный из роли, продолжал бы подгружаться из прошлой версии;
+//   • содержимое сравниваем побайтно, а не по mtime: переустановка пакета
+//     переписывает файлы с новыми метками, но тем же содержимым, и лишняя
+//     запись на каждом старте никому не нужна;
+//   • ссылку вместо каталога не разворачиваем: это чужое решение, и молчаливая
+//     замена ссылки копией сломала бы ожидания того, кто её сделал.
+export function deployPresets(options = {}) {
+  const source = options.source || PRESETS_SOURCE
+  const target = options.target || path.join(dshHome(), '.agent-presets')
+  const result = {
+    source,
+    target,
+    presets: [],
+    foreign: [],
+    written: 0,
+    updated: 0,
+    removed: 0,
+    unchanged: 0,
+    problem: null,
+  }
+
+  let ids
+  try {
+    ids = fs.readdirSync(source, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort()
+  } catch (error) {
+    result.problem = 'нет каталога пресетов рядом с плагином (' + source + ')'
+    return result
+  }
+  if (ids.length === 0) {
+    result.problem = 'каталог пресетов пуст: ' + source
+    return result
+  }
+
+  if (fs.existsSync(target)) {
+    let stat = null
+    try {
+      stat = fs.lstatSync(target)
+    } catch (error) {
+      stat = null
+    }
+    if (stat && stat.isSymbolicLink()) {
+      result.problem = 'корень пресетов ' + target +
+        ' — ссылка; плагин раскладывает реальные файлы и ссылку не заменяет'
+      return result
+    }
+    if (stat && !stat.isDirectory()) {
+      result.problem = 'корень пресетов ' + target + ' существует и это не каталог'
+      return result
+    }
+  }
+  try {
+    fs.mkdirSync(target, { recursive: true })
+  } catch (error) {
+    result.problem = 'не создаётся корень пресетов ' + target + ': ' + (error && error.message ? error.message : String(error))
+    return result
+  }
+
+  for (const id of ids) {
+    const from = path.join(source, id)
+    const to = path.join(target, id)
+    const wanted = listPresetFiles(from)
+    try {
+      fs.mkdirSync(to, { recursive: true })
+      for (const rel of wanted) {
+        const absFrom = path.join(from, rel)
+        const absTo = path.join(to, rel)
+        fs.mkdirSync(path.dirname(absTo), { recursive: true })
+        let same = false
+        try {
+          same = fs.readFileSync(absFrom).equals(fs.readFileSync(absTo))
+        } catch (error) {
+          same = false
+        }
+        if (same) {
+          result.unchanged += 1
+          continue
+        }
+        const existed = fs.existsSync(absTo)
+        fs.copyFileSync(absFrom, absTo)
+        if (existed) result.updated += 1
+        else result.written += 1
+      }
+      for (const rel of listPresetFiles(to)) {
+        if (wanted.includes(rel)) continue
+        fs.rmSync(path.join(to, rel), { force: true })
+        result.removed += 1
+      }
+      pruneEmptyDirs(to, to)
+      result.presets.push(id)
+    } catch (error) {
+      result.problem = 'роль ' + id + ': ' + (error && error.message ? error.message : String(error))
+      return result
+    }
+  }
+
+  // Что лежит в корне помимо ролей отдела: это человеково, не наше дело.
+  const known = new Set(ids)
+  try {
+    for (const entry of fs.readdirSync(target, { withFileTypes: true })) {
+      if (entry.isDirectory() && !known.has(entry.name)) result.foreign.push(entry.name)
+    }
+  } catch (error) {
+    result.problem = 'не читается корень пресетов ' + target
+  }
+  return result
 }
 
 // ── Реестр проектов ─────────────────────────────────────────────────────────
@@ -1098,6 +1281,26 @@ export default {
       if (renamed) writeDialogs(state.dialogs)
     } catch (error) {
       // Диалоги переедут при следующем запуске.
+    }
+
+    // Роли обязаны лежать в пользовательском корне пресетов ДО первого запроса
+    // сессии: без них agentPresets.resolve('dev-backend') падает ещё до создания
+    // диалога, а человек видит это как «поставил метку, а агент задачу не взял».
+    // Раскладка идёт на загрузке плагина, то есть при старте приложения и после
+    // установки новой версии пакета.
+    try {
+      const deployed = deployPresets()
+      if (deployed.problem) {
+        state.lastError = 'пресеты ролей: ' + deployed.problem
+      } else if (deployed.written + deployed.updated + deployed.removed > 0) {
+        appendShiftLog('🛠 Пресеты ролей разложены в ' + deployed.target + ': ' +
+          deployed.presets.join(', ') +
+          ' (новых файлов ' + deployed.written + ', обновлено ' + deployed.updated +
+          ', убрано ' + deployed.removed + ').' +
+          (deployed.foreign.length > 0 ? ' Свои пресеты не тронуты: ' + deployed.foreign.join(', ') + '.' : ''))
+      }
+    } catch (error) {
+      state.lastError = 'пресеты ролей: ' + (error && error.message ? error.message : String(error))
     }
 
     // ── чтение состояния из GitHub ─────────────────────────────────────────

@@ -1,10 +1,11 @@
-// Проверка помощника `tools/plugin-paths.mjs`: он отвечает за то, чтобы
-// наборы находили боевые модули в любой из трёх раскладок (рабочая копия,
-// установленный пакет, старая раскладка sync.mjs) и не молчали, когда нет ни одной.
+// Проверка помощника `plugins/tools/plugin-paths.mjs`: он отвечает за то, чтобы
+// наборы находили боевые модули в любой раскладке (рабочая копия, установленный
+// пакет — нового и прежнего устройства, старая раскладка sync.mjs) и не молчали,
+// когда нет ни одной.
 //
 // Живёт в песочном каталоге внутри $TEMP: боевой ~/.dsh не читается и не пишется,
 // каталог установки передаётся помощнику ключом dshHome.
-// Запуск: node tools/tests/plugin-paths.test.mjs
+// Запуск: node plugins/tools/tests/plugin-paths.test.mjs
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -33,10 +34,16 @@ const write = (file) => {
   fs.writeFileSync(file, '// песочный модуль\n')
 }
 
-const repoPlugin = path.join(repoRoot, 'profiles', 'desktop', 'plugins', 'dev-department.mjs')
-const bundlePlugin = path.join(dshHome, 'profiles', 'desktop', 'node_modules', 'dsh-dev-department', 'profiles', 'desktop', 'plugins', 'dev-department.mjs')
+// Рабочая копия: пакет лежит в plugins/, корень репозитория — над ним.
+const repoPlugin = path.join(repoRoot, 'plugins', 'dev-department.mjs')
+// Установленный пакет текущего устройства: файлы плоско в plugins/.
+const bundleDir = path.join(dshHome, 'profiles', 'desktop', 'node_modules', 'dsh-dev-department')
+const bundlePlugin = path.join(bundleDir, 'plugins', 'dev-department.mjs')
+// Установленный пакет прежних версий: файлы по путям DSH.
+const oldBundlePlugin = path.join(bundleDir, 'profiles', 'desktop', 'plugins', 'dev-department.mjs')
+// Старая раскладка sync.mjs.
 const legacyPlugin = path.join(dshHome, 'profiles', 'desktop', 'plugins', 'dev-department.mjs')
-const repoPreset = path.join(repoRoot, 'agent-presets', 'analyst', 'preset.yml')
+const repoPreset = path.join(repoRoot, 'plugins', 'agent-presets', 'analyst', 'preset.yml')
 const legacyPreset = path.join(dshHome, '.agent-presets', 'analyst', 'preset.yml')
 
 console.log('=== рабочий каталог: ' + sandbox + ' ===')
@@ -47,7 +54,7 @@ write(repoPlugin)
 check('рабочая копия: модуль профиля найден', pluginPaths.pluginFile('dev-department', options), repoPlugin)
 check('рабочая копия: имя без .mjs дополняется', pluginPaths.pluginFile('dev-department.mjs', options), repoPlugin)
 write(repoPreset)
-check('рабочая копия: каталог пресета найден', pluginPaths.findHostFile('agent-presets/analyst', options), { layout: 'рабочая копия', file: path.join(repoRoot, 'agent-presets', 'analyst') })
+check('рабочая копия: каталог пресета найден', pluginPaths.findHostFile('agent-presets/analyst', options), { layout: 'рабочая копия', file: path.join(repoRoot, 'plugins', 'agent-presets', 'analyst') })
 check('рабочая копия: файл внутри пресета найден', pluginPaths.findHostFile('agent-presets/analyst/preset.yml', options), { layout: 'рабочая копия', file: repoPreset })
 
 // ── 2. старая раскладка sync.mjs при живой рабочей копии ────────────────────
@@ -55,28 +62,38 @@ write(legacyPlugin)
 write(legacyPreset)
 check('при обеих раскладках побеждает рабочая копия', pluginPaths.pluginFile('dev-department', options), repoPlugin)
 
-// ── 3. установленный пакет ──────────────────────────────────────────────────
+// ── 3. установленный пакет нового устройства ───────────────────────────────
 fs.rmSync(repoPlugin)
 write(bundlePlugin)
 check('пакет: модуль найден в node_modules профиля', pluginPaths.pluginFile('dev-department', options), bundlePlugin)
 check('пакет: приоритетнее старой раскладки', pluginPaths.pluginFile('dev-department', options) !== legacyPlugin, true)
-check('пакет: каталог пакета назван', pluginPaths.bundlePackageDir(options), path.join(dshHome, 'profiles', 'desktop', 'node_modules', 'dsh-dev-department'))
+check('пакет: каталог пакета назван', pluginPaths.bundlePackageDir(options), bundleDir)
+
+// ── 3a. установленный пакет прежних версий ─────────────────────────────────
+fs.rmSync(bundlePlugin)
+write(oldBundlePlugin)
+check('пакет прежний: модуль по пути DSH найден', pluginPaths.pluginFile('dev-department', options), oldBundlePlugin)
+check('пакет прежний: раскладка названа явно', pluginPaths.findHostFile('profiles/desktop/plugins/dev-department.mjs', options).layout, 'пакет (прежний)')
 
 // ── 4. патч бандла ─────────────────────────────────────────────────────────
-const repoPatch = path.join(repoRoot, 'cordis.patch.yml')
+const repoPatch = path.join(repoRoot, 'plugins', 'cordis.patch.yml')
 write(repoPatch)
 check('патч бандла: из репозитория, пока он там есть', pluginPaths.bundlePatchFile(options), repoPatch)
 fs.rmSync(repoPatch)
-write(path.join(dshHome, 'profiles', 'desktop', 'node_modules', 'dsh-dev-department', 'cordis.patch.yml'))
-check('патч бандла: из установленного пакета', pluginPaths.bundlePatchFile(options), path.join(dshHome, 'profiles', 'desktop', 'node_modules', 'dsh-dev-department', 'cordis.patch.yml'))
+write(path.join(bundleDir, 'plugins', 'cordis.patch.yml'))
+check('патч бандла: из установленного пакета', pluginPaths.bundlePatchFile(options), path.join(bundleDir, 'plugins', 'cordis.patch.yml'))
+fs.rmSync(path.join(bundleDir, 'plugins', 'cordis.patch.yml'))
+write(path.join(bundleDir, 'cordis.patch.yml'))
+check('патч бандла: из пакета прежних версий', pluginPaths.bundlePatchFile(options), path.join(bundleDir, 'cordis.patch.yml'))
 
 // ── 5. старая раскладка как единственная ───────────────────────────────────
-fs.rmSync(path.join(dshHome, 'profiles', 'desktop', 'node_modules', 'dsh-dev-department'), { recursive: true, force: true })
+fs.rmSync(bundleDir, { recursive: true, force: true })
 check('старая раскладка: модуль профиля найден', pluginPaths.pluginFile('dev-department', options), legacyPlugin)
 check('старая раскладка: каталог пакета не выдуман', pluginPaths.bundlePackageDir(options), null)
+check('старая раскладка: патча бандла нет', pluginPaths.bundlePatchFile(options), null)
 
 // ── 6. пресеты старой раскладки лежат по другому пути ──────────────────────
-fs.rmSync(path.join(repoRoot, 'agent-presets'), { recursive: true, force: true })
+fs.rmSync(path.join(repoRoot, 'plugins', 'agent-presets'), { recursive: true, force: true })
 check('старая раскладка: пресет берётся из ~/.dsh/.agent-presets', pluginPaths.findHostFile('agent-presets/analyst', options), { layout: 'старая раскладка', file: path.join(dshHome, '.agent-presets', 'analyst') })
 
 // ── 7. отказной сценарий: файла нет нигде ──────────────────────────────────
@@ -87,8 +104,8 @@ try {
   error = caught.message
 }
 checkText('нет файла: ошибка называет искомый путь', error, 'profiles/desktop/plugins/tg-bridge.mjs')
-checkText('нет файла: ошибка перечисляет рабочую копию', error, 'рабочая копия: ' + path.join(repoRoot, 'profiles', 'desktop', 'plugins', 'tg-bridge.mjs'))
-checkText('нет файла: ошибка перечисляет пакет', error, 'пакет: ' + path.join(dshHome, 'profiles', 'desktop', 'node_modules', 'dsh-dev-department', 'profiles', 'desktop', 'plugins', 'tg-bridge.mjs'))
+checkText('нет файла: ошибка перечисляет рабочую копию', error, 'рабочая копия: ' + path.join(repoRoot, 'plugins', 'tg-bridge.mjs'))
+checkText('нет файла: ошибка перечисляет пакет', error, 'пакет: ' + path.join(bundleDir, 'plugins', 'tg-bridge.mjs'))
 checkText('нет файла: ошибка перечисляет старую раскладку', error, 'старая раскладка: ' + legacyPlugin.replace('dev-department', 'tg-bridge'))
 
 // ── 8. DSH_HOME из окружения не подменяет явный каталог ─────────────────────

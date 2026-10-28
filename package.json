@@ -1,28 +1,29 @@
 {
   "name": "dsh-dev-department",
-  "version": "1.0.0",
-  "description": "Отдел разработки для DeepSeek Harness: bundle-патч профиля (четыре хост-плагина) и десять ролей как system-корень пресетов",
+  "version": "1.1.0",
+  "description": "Отдел разработки для DeepSeek Harness: bundle-патч профиля (четыре хост-плагина) и десять ролей, которые плагин раскладывает в ~/.dsh/.agent-presets",
   "type": "module",
   "exports": {
-    "./plugins/dev-department.mjs": "./profiles/desktop/plugins/dev-department.mjs",
-    "./plugins/role-sessions.mjs": "./profiles/desktop/plugins/role-sessions.mjs",
-    "./plugins/role-permissions.mjs": "./profiles/desktop/plugins/role-permissions.mjs",
-    "./plugins/tg-bridge.mjs": "./profiles/desktop/plugins/tg-bridge.mjs",
-    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./plugins/dev-department.mjs": "./plugins/dev-department.mjs",
+    "./plugins/role-sessions.mjs": "./plugins/role-sessions.mjs",
+    "./plugins/role-permissions.mjs": "./plugins/role-permissions.mjs",
+    "./plugins/tg-bridge.mjs": "./plugins/tg-bridge.mjs",
+    "./plugins/usage-ledger.mjs": "./plugins/usage-ledger.mjs",
+    "./cordis.patch.yml": "./plugins/cordis.patch.yml",
     "./package.json": "./package.json"
   },
   "files": [
-    "/cordis.patch.yml",
-    "profiles/desktop/plugins/dev-department.mjs",
-    "profiles/desktop/plugins/role-sessions.mjs",
-    "profiles/desktop/plugins/role-permissions.mjs",
-    "profiles/desktop/plugins/tg-bridge.mjs",
-    "profiles/desktop/plugins/usage-ledger.mjs",
-    "agent-presets"
+    "/plugins/cordis.patch.yml",
+    "/plugins/dev-department.mjs",
+    "/plugins/role-sessions.mjs",
+    "/plugins/role-permissions.mjs",
+    "/plugins/tg-bridge.mjs",
+    "/plugins/usage-ledger.mjs",
+    "/plugins/agent-presets"
   ],
   "dsh": {
     "bundle": {
-      "patch": "./cordis.patch.yml"
+      "patch": "./plugins/cordis.patch.yml"
     }
   }
 }

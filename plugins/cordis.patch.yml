@@ -16,34 +16,15 @@
 
 # ── Пресеты ролей ────────────────────────────────────────────────────────────
 #
-# Десять каталогов ролей лежат внутри этого же пакета (`agent-presets/`), поэтому
-# копировать их в `~/.dsh/.agent-presets` не нужно: строка `agent-presets`
-# получает корень с trust `system`. Пресеты системного корня — только чтение
-# (`agentPresets.copy()` для них не работает): правка роли идёт через git, а не
-# через каталог установки.
-#
-# Патч заменяет config строки ЦЕЛИКОМ (`applyEntryPatches` присваивает ключ, а не
-# смешивает значения). Поэтому `default`, `includeShippedRoot` и
-# `includeUserRoot` повторены здесь в прежних значениях: `default` — обязательное
-# поле ростера, без него строка не загрузится, а выключенный `include*` молча
-# убрал бы штатные (`includeShippedRoot`) или пользовательские
-# (`includeUserRoot`) пресеты из списка.
-#
-# `!!js` вычисляется при активации строки как `with (ctx) { eval(expr) }`, где
-# `baseUrl` — каталог профиля. Резолв имени пакета идёт обычным правилом Node от
-# профиля, то есть попадает в `profiles/<профиль>/node_modules/…`, куда пакет и
-# ставит `dsh plugin add`; `./package.json` в `exports` пакета нужен именно для
-# этого resolve. Скаляр обязан быть в кавычках: без них YAML-парсер падает на
-# `: ` внутри выражения.
-- id: agent-presets
-  name: '@deepseek-ai/dsh-agent-presets'
-  config:
-    default: standard
-    includeShippedRoot: true
-    includeUserRoot: true
-    roots:
-      - path: !!js 'process.getBuiltinModule("node:path").join(process.getBuiltinModule("node:path").dirname(process.getBuiltinModule("node:module").createRequire(baseUrl).resolve("dsh-dev-department/package.json")), "agent-presets")'
-        trust: system
+# Строки `agent-presets` здесь НЕТ намеренно. Десять каталогов ролей лежат внутри
+# этого же пакета (`plugins/agent-presets/`), но корень пресетов из бандла до
+# сервиса не доезжает: Desktop собирает строку `agent-presets` ПОСЛЕДНИМ патчем и
+# оставляет в ней только штатный корень (внутри `app.asar`) и
+# `~/.dsh/.agent-presets`, выбрасывая любые `roots` из бандла, а `resolvedRoots`
+# сервиса считается один раз в конструкторе — добавить корень в рантайме нечем.
+# Поэтому роли раскладывает в пользовательский корень сам `dev-department` при
+# загрузке (см. `deployPresets` в `plugins/dev-department.mjs`). Побочная выгода:
+# роли переживают переустановку пакета.
 
 # ── Хост-плоскость отдела ────────────────────────────────────────────────────
 - insert:

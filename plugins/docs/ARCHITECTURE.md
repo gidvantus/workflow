@@ -183,7 +183,7 @@
 Метки должны **существовать в репозитории**: поставить метку, которой там нет,
 GitHub не даст (422), и шаг конвейера упадёт. Набор меток один для всех ролей, его
 отдаёт `project_info.labels`, а проверяют и создают
-`tools/pipeline-labels-probe.mjs` и `tools/pipeline-labels-create.mjs`.
+`plugins/tools/pipeline-labels-probe.mjs` и `plugins/tools/pipeline-labels-create.mjs`.
 
 Приоритет выбора задачи: сначала ступень макета (`needs-mockup` без
 `mockups-ready`), затем активные (`for-code-review` → `ready-for-test` →
@@ -238,20 +238,20 @@ GitHub не даст (422), и шаг конвейера упадёт. Набо�
 
 | Файл | Ответственность |
 |---|---|
-| `package.json` (корень) | манифест bundle-пакета `dsh-dev-department`: `name`/`version`, `exports` на четыре модуля плагинов, патч и сам манифест, `files`, `dsh.bundle.patch` |
-| `cordis.patch.yml` (корень) | патч бандла: строки четырёх хост-плагинов (спецификатором пакета) и переопределение строки `agent-presets` с корнем пресетов внутри пакета |
-| `profiles/desktop/cordis.patch.yml` | раскладка профиля прежним способом (`sync.mjs`) и машинная настройка человека — MCP GitHub и Playwright MCP; вместе с пакетом не подключается |
-| `profiles/desktop/plugins/package.json` | манифест пачки хост-плагинов для раскладки `sync.mjs`: без непустых `name` и `version` DSH валит каждый запрос с `REQUEST_EXTENSION` |
-| `profiles/desktop/plugins/dev-department.mjs` | расписание смен, выбор задачи, запуск ролей, диалоги, сторож, сводка в Telegram |
-| `profiles/desktop/plugins/usage-ledger.mjs` | книга привязок «сессия → тикет» и счёт токенов по правилу проекции `tokenUsage` |
-| `profiles/desktop/plugins/role-sessions.mjs` | инструменты `open_role_session`, `list_agent_presets`; создаёт сессию роли в нужной рабочей области |
-| `profiles/desktop/plugins/role-permissions.mjs` | выдаёт ролевым сессиям `danger-full-access` |
-| `profiles/desktop/plugins/tg-bridge.mjs` | мост в Telegram |
-| `profiles/desktop/plugins/voice-input/` | голосовой ввод в GUI: кнопка в композере и ручка `POST /dsh-voice/transcribe` (в пакет не входит) |
-| `agent-presets/<id>/agent.cordis.yml` | композиция роли: персона, скиллы, инструменты, строка `mcp-github` |
-| `agent-presets/<id>/preset.yml` | имя и описание роли в списке пресетов |
-| `agent-presets/<id>/skills/*/SKILL.md` | рабочий контракт роли: порядок действий, команды, границы |
-| `profiles/desktop/cordis.patch.yml` (строка `mcp-github`) | единственный доступ к GitHub: штатный `github/github-mcp-server`, инструменты `mcp__github__*` |
+| `package.json` (корень) | манифест bundle-пакета `dsh-dev-department`: `name`/`version`, `exports` на модули плагинов, патч и сам манифест, `files`, `dsh.bundle.patch` |
+| `plugins/cordis.patch.yml` | патч бандла: строки четырёх хост-плагинов, адресованные спецификатором пакета |
+| `plugins/profiles/desktop/cordis.patch.yml` | раскладка профиля прежним способом (`plugins/sync.mjs`) и машинная настройка человека — MCP GitHub и Playwright MCP; вместе с пакетом не подключается |
+| `plugins/profiles/desktop/plugins/package.json` | манифест пачки хост-плагинов для раскладки `plugins/sync.mjs`: без непустых `name` и `version` DSH валит каждый запрос с `REQUEST_EXTENSION` |
+| `plugins/dev-department.mjs` | расписание смен, выбор задачи, запуск ролей, диалоги, сторож, сводка в Telegram, раскладка ролей в `~/.dsh/.agent-presets` |
+| `plugins/usage-ledger.mjs` | книга привязок «сессия → тикет» и счёт токенов по правилу проекции `tokenUsage` |
+| `plugins/role-sessions.mjs` | инструменты `open_role_session`, `list_agent_presets`; создаёт сессию роли в нужной рабочей области |
+| `plugins/role-permissions.mjs` | выдаёт ролевым сессиям `danger-full-access` |
+| `plugins/tg-bridge.mjs` | мост в Telegram |
+| `plugins/profiles/desktop/plugins/voice-input/` | голосовой ввод в GUI: кнопка в композере и ручка `POST /dsh-voice/transcribe` (в пакет не входит) |
+| `plugins/agent-presets/<id>/agent.cordis.yml` | композиция роли: персона, скиллы, инструменты, строка `mcp-github` |
+| `plugins/agent-presets/<id>/preset.yml` | имя и описание роли в списке пресетов |
+| `plugins/agent-presets/<id>/skills/*/SKILL.md` | рабочий контракт роли: порядок действий, команды, границы |
+| `plugins/profiles/desktop/cordis.patch.yml` (строка `mcp-github`) | единственный доступ к GitHub: штатный `github/github-mcp-server`, инструменты `mcp__github__*` |
 
 ## Карта пакета
 
@@ -263,36 +263,45 @@ github:gidvantus/workflow#<commit>` кладёт `dsh-dev-department` завис
 
 | Что | Куда едет | Почему |
 |---|---|---|
-| `cordis.patch.yml` (корень) | `dsh.bundle.patch` пакета | это и есть слой композиции профиля |
-| `profiles/desktop/plugins/*.mjs` | `exports` (`./plugins/<файл>.mjs`) и `files` | строки патча адресуются спецификатором `dsh-dev-department/plugins/…`; относительный путь резолвился бы от профиля, а не от пакета |
-| `agent-presets/` | `files` | строка `agent-presets` получает этот каталог корнем пресетов с trust `system` |
-| `docs/`, `tools/`, `config/` | **не едут** | документация процесса и инструменты проверки, а не надстройка каталога установки |
-| `profiles/desktop/plugins/voice-input/`, MCP-строки | **не едут** | ~640 МБ внешних бинарников и машинная настройка человека (пути к бинарникам и браузеру) |
+| `plugins/cordis.patch.yml` | `dsh.bundle.patch` пакета | это и есть слой композиции профиля |
+| `plugins/*.mjs` | `exports` (`./plugins/<файл>.mjs`) и `files` | строки патча адресуются спецификатором `dsh-dev-department/plugins/…`; относительный путь резолвился бы от профиля, а не от пакета |
+| `plugins/agent-presets/` | `files`; затем копируется плагином в `~/.dsh/.agent-presets` | Desktop выбрасывает `roots` из бандла, поэтому роли раскладывает сам диспетчер при загрузке (см. ниже) |
+| `plugins/docs/`, `plugins/tools/`, `plugins/config/`, `plugins/profiles/` | **не едут** | документация и инструменты процесса, легаси-раскладка и машинная настройка человека, а не содержимое пакета |
+| `plugins/profiles/desktop/plugins/voice-input/`, MCP-строки | **не едут** | ~640 МБ внешних бинарников и машинная настройка человека (пути к бинарникам и браузеру) |
 
-Пресеты системного корня — только чтение: `agentPresets.copy()` для них не
-работает, правка роли идёт через git (commit + повторный `dsh plugin add`).
-`~/.dsh/.agent-presets` при этом остаётся пользовательским корнем
-(`includeUserRoot`): там по-прежнему можно держать свои пресеты.
+### Куда плагин раскладывает роли
 
-Устройство строки `agent-presets` в патче бандла — одна из ловушек: патч
-**заменяет `config` строки целиком**, а не смешивает с прежним. Поэтому в нём
-повторены `default`, `includeShippedRoot` и `includeUserRoot`: без `default`
-ростер не загрузится (обязательное поле), а выключенный `include*` молча убрал бы
-штатные или пользовательские пресеты из списка.
+`dsh-agent-presets` читает роли только из своих корней. Desktop собирает строку
+`agent-presets` **последним** патчем и оставляет в ней ровно два корня — штатный
+(внутри `app.asar`) и `~/.dsh/.agent-presets`, — а любые `roots` из бандла
+выбрасывает; добавить корень в рантайме тоже нечем, `resolvedRoots` сервиса
+считается один раз в конструкторе. Поэтому `dev-department.mjs` при загрузке сам
+копирует `plugins/agent-presets/*` в `~/.dsh/.agent-presets`:
+
+- копия, а не ссылка на `node_modules`: переустановка пакета не уносит роли;
+- содержимое сравнивается побайтно — на каждом старте ничего не переписывается;
+- файлы, которых в пакете больше нет, удаляются только у ролей отдела, а чужие
+  пресеты в корне остаются нетронутыми (`includeUserRoot` по-прежнему работает);
+- если корень оказался ссылкой, плагин её не разворачивает и пишет причину в
+  `lastError`.
+
+Тот же код без запуска приложения — `node plugins/tools/deploy-presets.mjs`;
+правила закреплены тестом `plugins/tools/tests/deploy-presets.test.mjs`.
 
 ### Если добавляешь хост-плагин
 
-1. Файл кладётся в `profiles/desktop/plugins/`.
+1. Файл кладётся в `plugins/<имя>.mjs` — пакет держит плагины плоско.
 2. Он вписывается в `exports` и `files` в корневом `package.json` — иначе в
    установленном пакете его нет и строка патча падает с «плагин не найден».
-3. Строка добавляется в **корневой** `cordis.patch.yml` (имя —
+3. Строка добавляется в `plugins/cordis.patch.yml` (имя —
    `dsh-dev-department/plugins/<файл>.mjs`), а строка обязана объявить в `inject`
    все хост-сервисы, которые потребляет (см. шапку патча).
-4. Для прежней раскладки `sync.mjs` файл сам попадёт в список: он собирается
-   обходом `profiles/`, ручных массивов больше нет.
-5. `plugins/package.json` в пакете не нужен: ближайший манифест над модулями —
-   сам `package.json` пакета, а он несёт `name` и `version`. Файл остаётся для
-   раскладки `sync.mjs`, где ближайший манифест — профильный, а у того `version`
+4. Для прежней раскладки `plugins/sync.mjs` файл сам попадёт в список: он собирается
+   обходом `plugins/*.mjs`, ручных массивов больше нет.
+5. `plugins/profiles/desktop/plugins/package.json` в пакете не нужен: ближайший
+   манифест над модулями — сам `package.json` пакета, а он несёт `name` и
+   `version`. Файл остаётся для раскладки `plugins/sync.mjs`, где ближайший
+   манифест — профильный, а у того `version`
    нет: без `name`+`version` каждый ход падает с
    `DeepSeek request extension preparation failed` и кодом `REQUEST_EXTENSION` —
    плагин при этом загружается нормально, и в журнале хоста нет ничего, кроме
@@ -302,10 +311,10 @@ github:gidvantus/workflow#<commit>` кладёт `dsh-dev-department` завис
 
 ### Если добавляешь новую роль
 
-1. Скопируй ближайший по смыслу пресет в `agent-presets/<id>/` и перепиши
+1. Скопируй ближайший по смыслу пресет в `plugins/agent-presets/<id>/` и перепиши
    `preset.yml`, персону и скилл. Ничего больше вписывать не нужно: каталог
-   подхватывается и пакетом (он едет целиком), и `sync.mjs` (он обходит
-   `agent-presets/`).
+   подхватывается и пакетом (он едет целиком), и `plugins/sync.mjs` (он обходит
+   `plugins/agent-presets/`).
 2. Добавь `<id>` в `ROLES` в `role-permissions.mjs` — иначе сессия роли будет
    упираться в запросы подтверждения.
 3. Если роль должна участвовать в конвейере — научи диспетчер её запускать.
@@ -328,7 +337,7 @@ usage-чанк потока попытки). Отделу не хватало о
 набор из четырёх видов сообщений, в ней нет ни `assistant/attempt`, ни
 `llm/retry-started`, ни вытесненных сжатием ходов. На шаге с повтором у
 провалившейся попытки свой usage, и сумма по поверхности меньше журнала, а отчёт
-`tools/issue-tokens.mjs` читает стенограмму целиком — значит карточка и сводка
+`plugins/tools/issue-tokens.mjs` читает стенограмму целиком — значит карточка и сводка
 разошлись бы с ним по той же сессии. Поверхность остаётся источником для сессии,
 которой на диске ещё нет (свежая выдача роли); если стенограмма есть, но не
 дочиталась, числа поверхности берутся с замечанием в `problems` — молчаливых
@@ -354,7 +363,7 @@ usage-чанк потока попытки). Отделу не хватало о
 Где видно счёт: карточка `dev_department_status` (`usage` по активному тикету —
 `sessions[]` с ролью и id плюс `totals`), сводка смены (строка `потрачено #N: …`
 по каждому тикету смены и общий `Итого за смену: …`) и отчёт
-`tools/issue-tokens.mjs`. Деньги считаются только при заданном тарифе
+`plugins/tools/issue-tokens.mjs`. Деньги считаются только при заданном тарифе
 `usageRates { inputUsdPerM, cacheReadUsdPerM, cacheWriteUsdPerM, outputUsdPerM }`
 в `~/.dsh/dev-department.json`: чисел тарифа в коде нет, при незаданном блоке
 строки с ценой нет вовсе.
@@ -390,7 +399,7 @@ usage-чанк потока попытки). Отделу не хватало о
   старше трёх дней задним числом не привязываются: их история видна только блоком
   «восстановлено по заголовку» в отчёте. Нечитаемую книгу никто не перезаписывает:
   привязки теряются молча только так.
-- `tools/issue-tokens.mjs` — отчёт по токенам: `node tools/issue-tokens.mjs [проект] [номер]`
+- `plugins/tools/issue-tokens.mjs` — отчёт по токенам: `node plugins/tools/issue-tokens.mjs [проект] [номер]`
   печатает по тикету таблицу `тикет / роль / сессия / ходов / вход / выход / кэш-чтение`
   с итогом, блоками «восстановлено по заголовку» (привязка по регулярке в заголовке
   сессии, не из книги) и «не привязано» (сессии без тикета). Строка постановки
@@ -399,7 +408,7 @@ usage-чанк потока попытки). Отделу не хватало о
   книги и стенограмм через `usage-ledger.mjs`, поэтому карточка `dev_department_status`,
   сводка смены и отчёт не могут разойтись ни в правиле повтора, ни в числе ходов
   (правило ходов тоже живёт в модуле).
-- `tools/session-errors.mjs` — по стенограммам находит ходы, завершившиеся
+- `plugins/tools/session-errors.mjs` — по стенограммам находит ходы, завершившиеся
   ошибкой, и группирует по причине (обрыв SSE, отказ оплаты).
-- `tools/session-tail.mjs` — последние события сессии роли: чем занята сейчас.
-- `tools/tests/*` — регрессионные наборы на боевых модулях.
+- `plugins/tools/session-tail.mjs` — последние события сессии роли: чем занята сейчас.
+- `plugins/tools/tests/*` — регрессионные наборы на боевых модулях.

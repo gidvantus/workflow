@@ -1,5 +1,5 @@
-// Проверка второй половины учёта токенов на РЕАЛЬНОМ модуле диспетчера:
-// profiles/desktop/plugins/dev-department.mjs (и его usage-ledger.mjs рядом).
+// Проверка второй половины учёта токенов на РЕАЛЬНОМ модуле диспетчера
+// (plugins/dev-department.mjs и его usage-ledger.mjs рядом).
 //
 // Проверяется то, что не видно по CLI: привязка «сессия → тикет» появляется ДО
 // первого хода, повторная выдача в тот же диалог не делает вторую запись, карточка
@@ -10,14 +10,18 @@
 //
 // Поддельные сеть, часы и сервисы; настоящий ~/.dsh не читается и не пишется —
 // каталог установки подменяется на песочный ДО импорта модуля.
-// Запуск: node dev-department-usage.test.mjs (из каталога tools/tests)
+// Запуск: node dev-department-usage.test.mjs
 import fs from 'node:fs'
 import path from 'node:path'
 import https from 'node:https'
 import zlib from 'node:zlib'
+import { fileURLToPath } from 'node:url'
+import { pluginFile as hostPluginFile } from '../plugin-paths.mjs'
 
-const pluginFile = path.join(process.cwd(), '..', '..', 'profiles', 'desktop', 'plugins', 'dev-department.mjs')
-const home = path.join(process.cwd(), '.dev-department-usage-home')
+// Раскладки знает помощник: боевой модуль берётся из рабочей копии, из
+// установленного пакета или из старой раскладки — что найдётся.
+const pluginFile = hostPluginFile('dev-department')
+const home = path.join(path.dirname(fileURLToPath(import.meta.url)), '.dev-department-usage-home')
 fs.rmSync(home, { recursive: true, force: true })
 const WORKSPACE = path.join(home, 'workspace')
 fs.mkdirSync(path.join(WORKSPACE, '.git'), { recursive: true })
@@ -436,7 +440,7 @@ function writeTranscriptFor(id, events) {
 writeTranscriptFor(devSession, [msg(1, 1, 1000, 100), msg(2, 1, 500, 50), msg(3, 1, 400, 40)])
 writeTranscriptFor(reviewSession, [msg(1, 1, 2000, 200)])
 writeTranscriptFor(ANALYST_SESSION, [msg(1, 1, 300, 30)])
-const cliModule = await import('file:///' + path.join(process.cwd(), '..', 'issue-tokens.mjs').replace(/\\/g, '/') + '?v=' + Date.now())
+const cliModule = await import('file:///' + path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'issue-tokens.mjs').replace(/\\/g, '/') + '?v=' + Date.now())
 const report = await cliModule.buildReport({ dshHome: home, project: 'workflow', issue: 15 })
 const cliTicket = (report.tickets.find((ticket) => ticket.issue === 15)) || { totals: {} }
 check('CLI по тому же тикету считает те же числа', {
