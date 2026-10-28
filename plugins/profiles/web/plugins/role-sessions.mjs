@@ -29,18 +29,24 @@
 // перечисленных сервисов.
 //
 // ВАЖНО ПРО ДИАГНОСТИКУ: вывод console.* из плагинов НЕ попадает в логи
-// приложения, поэтому плагин ведёт собственный журнал в каталоге установки —
-// `<DSH_HOME>/role-sessions.log`, рядом с dev-department.log и
-// role-permissions.log. Рядом с модулем журнал держать нельзя: в раскладке
-// пакета модуль стоит в node_modules профиля, и файл исчезал бы при следующем
-// `dsh plugin add`.
+// приложения, поэтому плагин ведёт собственный журнал —
+// `<DSH_HOME>/profiles/desktop/dsh-dev-department/role-sessions.log`, рядом с
+// dev-department.log и role-permissions.log. Каталог, имена и перенос со старого
+// места называет модуль состояния (`plugins/state-paths.mjs`), а не этот файл.
+// Рядом с модулем журнал держать нельзя: в раскладке пакета модуль стоит в
+// node_modules профиля, и файл исчезал бы при следующем `dsh plugin add`.
+//
+// КОПИЯ ДЛЯ ПРОФИЛЯ web. Файл раскладывается `node plugins/sync.mjs apply` в
+// `<DSH_HOME>/profiles/web/plugins/` и в пакет не входит. Модуль состояния лежит
+// в профиле desktop рядом с такой же копией диспетчера или в пакете, поэтому
+// отсюда он берётся относительным путём на два уровня вверх — в репозитории
+// такого файла нет и быть не должно, здесь это адрес на месте раскладки.
 
 import fs from 'node:fs'
-import os from 'node:os'
-import path from 'node:path'
+import { STATE_FILES, stateFile } from '../../desktop/plugins/state-paths.mjs'
 
 function logPath() {
-  return path.join(process.env.DSH_HOME || path.join(os.homedir(), '.dsh'), 'role-sessions.log')
+  return stateFile(STATE_FILES.roleSessions)
 }
 
 function trace(line) {

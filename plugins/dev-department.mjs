@@ -103,7 +103,7 @@ import path from 'node:path'
 import https from 'node:https'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { STATE_FILES, dshHome, readStateFile, stateFile } from './state-paths.mjs'
+import { STATE_FILES, dshHome, legacyFile, readStateFile, stateDir, stateFile } from './state-paths.mjs'
 
 // ОБЩИЕ значения по умолчанию для проектов, которые своё не задали. Данных
 // конкретного проекта здесь нет и быть не должно: они в реестре проектов
@@ -347,6 +347,37 @@ function localStamp(date) {
   const pad = (n) => String(n).padStart(2, '0')
   return date.getFullYear() + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate()) +
     ' ' + pad(date.getHours()) + ':' + pad(date.getMinutes())
+}
+
+// ── Состояние отдела: переезд в каталог профиля ─────────────────────────────
+//
+// Сам перенос делает `./state-paths.mjs`; здесь — только повод его запустить.
+// Повод нужен отдельный, потому что читать отдел умеет из обоих мест
+// (`readStateFile`: новый → старый → новый), а переносит только запись
+// (`stateFile`). Реестр проектов и файл настроек отдел не пишет ВООБЩЕ: без этого
+// обхода `~/.dsh/projects.json` (там токены Telegram и рабочие области) и
+// `~/.dsh/dev-department.json` остались бы в корне каталога установки навсегда, и
+// никто бы этого не заметил — `readStateFile` продолжал бы читать их оттуда.
+// Ровно ради этих двух файлов тикет и затевался.
+//
+// Обход идемпотентен: `stateFile` создаёт каталог, переносит легаси-файл и на
+// втором вызове не делает ничего; восемь вызовов стоят микросекунды. Возвращаем,
+// что именно произошло: строка об этом уходит в журнал смены, чтобы переезд был
+// виден человеку, а не случился молча.
+function migrateStateFiles() {
+  const moved = []
+  const copied = []
+  for (const name of Object.values(STATE_FILES)) {
+    const legacy = legacyFile(name)
+    const hadLegacy = fs.existsSync(legacy)
+    stateFile(name)
+    if (!hadLegacy) continue
+    // Файл остался на старом месте — значит `rename` не удался и модуль состояния
+    // скопировал его (EXDEV/EPERM). Старое не удаляем: так записано в контракте.
+    if (fs.existsSync(legacy)) copied.push(name)
+    else moved.push(name)
+  }
+  return { moved, copied }
 }
 
 // ── Роли: раскладка пресетов в пользовательский корень ──────────────────────
@@ -1227,6 +1258,23 @@ export default {
       disabledIds: [],
       lastError: null,
       lastTickAt: null,
+    }
+
+    // Переезд состояния со старого места (корень каталога установки) в каталог
+    // профиля — один раз, на старте плагина, до первого чтения реестра и настроек
+    // в этом тике. См. `migrateStateFiles` выше: без этого обхода два файла, которые
+    // отдел только читает, не переехали бы никогда.
+    try {
+      const migration = migrateStateFiles()
+      if (migration.moved.length > 0 || migration.copied.length > 0) {
+        appendShiftLog('🛠 Состояние отдела в ' + stateDir() + ': перенесено ' +
+          (migration.moved.length > 0 ? migration.moved.join(', ') : 'ничего') +
+          (migration.copied.length > 0
+            ? '; скопировано, старое оставлено: ' + migration.copied.join(', ')
+            : '') + '.')
+      }
+    } catch (error) {
+      state.lastError = 'состояние отдела: ' + (error && error.message ? error.message : String(error))
     }
 
     function projectState(id) {
