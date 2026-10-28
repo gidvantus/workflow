@@ -95,7 +95,8 @@
 
 ## 3. Метки: кто ставит, при каком событии, кто снимает
 
-Имена по умолчанию; проект может переопределить их в `~/.dsh/projects.json` → `projects.<id>.labels`.
+Имена по умолчанию; проект может переопределить их в реестре проектов отдела
+(`profiles/desktop/dsh-dev-department/projects.json`) → `projects.<id>.labels`.
 
 | Метка | Ставит | Событие | Снимает |
 |---|---|---|---|
@@ -478,11 +479,11 @@ DevOps-инженера.
 | Строки плагинов отдела в композиции | `<пакет>/cordis.patch.yml` — патч бандла |
 | Роли: промт, описание, скиллы (`agent.cordis.yml`, `preset.yml`, `skills/`) | `<пакет>/agent-presets/<id>/` — карта ролей в разделе 2.1 |
 | Скилл макета (роль `design`) | `<пакет>/agent-presets/design/skills/mockup-delivery/SKILL.md` |
-| Проекты, ветки, каталоги, метки | `~/.dsh/projects.json` |
-| Общие расписание и лимиты | `~/.dsh/dev-department.json` |
-| Карта диалогов роль↔тикет | `~/.dsh/dev-department-dialogs.json` |
-| Журнал смен | `~/.dsh/dev-department.log` |
-| Книга привязок «сессия → тикет» | `~/.dsh/dev-department-usage.json` |
+| Проекты, ветки, каталоги, метки | `~/.dsh/profiles/desktop/dsh-dev-department/projects.json` |
+| Общие расписание и лимиты | `~/.dsh/profiles/desktop/dsh-dev-department/dev-department.json` |
+| Карта диалогов роль↔тикет | `~/.dsh/profiles/desktop/dsh-dev-department/dev-department-dialogs.json` |
+| Журнал смен | `~/.dsh/profiles/desktop/dsh-dev-department/dev-department.log` |
+| Книга привязок «сессия → тикет» | `~/.dsh/profiles/desktop/dsh-dev-department/dev-department-usage.json` |
 | MCP GitHub и Playwright MCP (машинная настройка) | `~/.dsh/profiles/<профиль>/cordis.patch.yml` |
 | Рендер макета в PNG | `~/.dsh/tools/mockup-shot.mjs` |
 

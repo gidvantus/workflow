@@ -174,24 +174,27 @@ check('в первой строке давний комментарий', full[0
 check('во второй строке авторы и push', [full[1].includes('авторов комментариев 2'), full[1].includes('push: true')], [true, true])
 
 // 9. Реестр проектов: «не прочитан» и «пуст» — разные ответы, и ни один не
-//    подменяется захардкоженным списком.
+//    подменяется захардкоженным списком. Путь к реестру собирает модуль состояния
+//    отдела: файл лежит в каталоге профиля, а не в корне каталога установки.
 const home = path.join(process.cwd(), '.github-probe-home')
+const stateDir = path.join(home, 'profiles', 'desktop', 'dsh-dev-department')
+const registryFile = path.join(stateDir, 'projects.json')
 const prevHome = process.env.DSH_HOME
 fs.rmSync(home, { recursive: true, force: true })
-fs.mkdirSync(home, { recursive: true })
+fs.mkdirSync(stateDir, { recursive: true })
 process.env.DSH_HOME = home
-fs.writeFileSync(path.join(home, 'projects.json'), '{ это не json')
-const registryBroken = mod.reposFromRegistry()
+fs.writeFileSync(registryFile, '{ это не json')
+const registryBroken = await mod.reposFromRegistry()
 check('нечитаемый реестр назван проблемой', /не читается реестр проектов/.test(registryBroken.problem || ''), true)
 check('и репозиториев из него не берётся', registryBroken.repos, [])
-fs.writeFileSync(path.join(home, 'projects.json'), JSON.stringify({ default: 'a', projects: { a: { repo: '' } } }))
-const registryEmpty = mod.reposFromRegistry()
+fs.writeFileSync(registryFile, JSON.stringify({ default: 'a', projects: { a: { repo: '' } } }))
+const registryEmpty = await mod.reposFromRegistry()
 check('реестр без repo — отдельная проблема', /нет ни одного проекта с repo/.test(registryEmpty.problem || ''), true)
-fs.writeFileSync(path.join(home, 'projects.json'), JSON.stringify({
+fs.writeFileSync(registryFile, JSON.stringify({
   default: 'a',
   projects: { a: { repo: 'o/a' }, b: { repo: 'o/b' }, c: { repo: 'o/a' } },
 }))
-const registryOk = mod.reposFromRegistry()
+const registryOk = await mod.reposFromRegistry()
 check('репозитории из реестра без повторов', [registryOk.repos, registryOk.problem], [['o/a', 'o/b'], null])
 fs.rmSync(home, { recursive: true, force: true })
 if (prevHome === undefined) delete process.env.DSH_HOME

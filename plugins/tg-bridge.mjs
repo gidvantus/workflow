@@ -16,11 +16,13 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
+import { STATE_FILES, readStateFile } from './state-paths.mjs'
 
 // Боты берутся ТОЛЬКО из реестра проектов: поле telegram записи проекта в
-// ~/.dsh/projects.json. Другого источника нет — общего файла бота плагин не
-// читает. Проект без своего бота работает без Telegram: события, разрешения и
-// вопросы его сессий остаются в GUI, и это нормальное состояние, а не сбой.
+// `<DSH_HOME>/profiles/desktop/dsh-dev-department/projects.json`. Другого источника
+// нет — общего файла бота плагин не читает. Проект без своего бота работает без
+// Telegram: события, разрешения и вопросы его сессий остаются в GUI, и это
+// нормальное состояние, а не сбой.
 //
 // Секрета в исходнике нет намеренно: токен, зашитый в код, уезжает вместе с
 // плагином. Нет настроенного бота — нет моста, и об этом пишется в лог.
@@ -28,10 +30,6 @@ import { spawn } from 'node:child_process'
 function stripBom(text) {
   const value = String(text)
   return value.charCodeAt(0) === 0xFEFF ? value.slice(1) : value
-}
-
-function dshHomeDir() {
-  return process.env.DSH_HOME || path.join(process.env.USERPROFILE || '', '.dsh')
 }
 
 function readJsonConfig(file) {
@@ -46,9 +44,11 @@ function normalizePath(value) {
   return String(value || '').replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase()
 }
 
-// Проекты: id, название, рабочая область и, если задан, свой бот.
+// Проекты: id, название, рабочая область и, если задан, свой бот. Путь реестра
+// называет модуль состояния: он же читает легаси-место в корне каталога установки,
+// пока файл не перенесён на запись.
 function readProjectsRegistry() {
-  const raw = readJsonConfig(path.join(dshHomeDir(), 'projects.json'))
+  const raw = readJsonConfig(readStateFile(STATE_FILES.projects))
   const projects = (raw && raw.projects) || {}
   return Object.keys(projects).map((id) => {
     const row = projects[id] || {}

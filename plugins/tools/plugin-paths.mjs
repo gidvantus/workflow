@@ -26,7 +26,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 /** Корень репозитория: помощник лежит в `plugins/tools/`. */
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -117,6 +117,21 @@ export function pluginFile(name, options = {}) {
   const profile = options.profile ?? DEFAULT_PROFILE
   const file = String(name).endsWith('.mjs') ? String(name) : String(name) + '.mjs'
   return hostFile('profiles/' + profile + '/plugins/' + file, options)
+}
+
+/**
+ * Модуль путей состояния отдела (`state-paths.mjs`) в любой раскладке. Это
+ * единственное, что `plugins/tools/` знает о состоянии: имена файлов, каталог и
+ * правило переноса лежат в самом модуле, поэтому инструменты не собирают
+ * `path.join(home, …)` для этих файлов сами — иначе перенос каталога разошёлся бы
+ * у плагинов и у инструментов молча.
+ *
+ * Модуль читает `$DSH_HOME` в момент вызова, поэтому кэш импорта не мешает
+ * подменять каталог установки между вызовами: путь спрашивают у функций модуля,
+ * а не у запомненной константы.
+ */
+export async function statePathsModule(options = {}) {
+  return import(pathToFileURL(pluginFile('state-paths', options)).href)
 }
 
 /**

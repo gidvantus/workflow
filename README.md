@@ -24,7 +24,9 @@
 обслуживание (документация, инструменты, настройки), `app/` — продукт, который
 отдел делает на заказ.
 
-Репозиторий обслуживает сам себя: в реестре `~/.dsh/projects.json` он записан как
+Репозиторий обслуживает сам себя: в реестре проектов отдела
+(`~/.dsh/profiles/desktop/dsh-dev-department/projects.json`, см. «Где живёт
+состояние отдела») он записан как
 проект `workflow` (`gidvantus/workflow`, рабочая копия отдела `D:\Agents\Workflow`,
 клон человека — этот каталог) с включённым отделом.
 
@@ -46,6 +48,8 @@ plugins/                        ОТДЕЛ РАЗРАБОТКИ: пакет и �
   dev-department.mjs            диспетчер отдела: роли, окна смен, Telegram-сводка,
                                 раскладка ролей в ~/.dsh/.agent-presets
   usage-ledger.mjs              книга привязок «сессия → тикет» и счёт токенов
+  state-paths.mjs               где живёт состояние отдела: каталог, восемь имён,
+                                однократный перенос со старого места
   role-sessions.mjs             инструменты open_role_session / list_agent_presets
   role-permissions.mjs          роли получают danger-full-access (без запросов)
   tg-bridge.mjs                 мост в Telegram
@@ -64,7 +68,8 @@ plugins/                        ОТДЕЛ РАЗРАБОТКИ: пакет и �
   plugins/config/
     projects.example.json       реестр проектов (без секретов)
     dev-department.json         общие настройки отдела: окна, лимиты
-                                (в установке ~/.dsh/dev-department.json)
+                                (в установке — каталог состояния отдела, см.
+                                «Где живёт состояние отдела»)
   docs/                         документация процесса и устройства
     ARCHITECTURE.md             как устроена надстройка: роли, метки, окна, сбои
     DEPARTMENT-PROCESS.md       процесс отдела: кто какой статус ставит и при каком событии
@@ -168,12 +173,18 @@ DSH собирается из композиций Cordis. Здесь их дв�
    списке пресетов должны появиться десять ролей отдела, а
    `~/.dsh/.agent-presets` — оставаться пустым: роли приезжают из пакета.
 4. Общие настройки отдела — расписание смен и лимиты — живут в
-   `~/.dsh/dev-department.json` и в пакет не входят (это настройки человека, а не
+   `~/.dsh/profiles/desktop/dsh-dev-department/dev-department.json` и в пакет не
+   входят (это настройки человека, а не
    содержимое надстройки): разложить их из репозитория можно командой
    `node plugins/sync.mjs apply` или написать файл руками.
-5. Создать `~/.dsh/projects.json` по образцу `config/projects.example.json` и
+5. Создать `~/.dsh/profiles/desktop/dsh-dev-department/projects.json` по образцу
+   `config/projects.example.json` и
    заполнить своими значениями: репозиторий, базовая ветка, каталог рабочей копии
    отдела и каталог клона человека, имя compose-проекта, порты, каталог артефактов.
+   Каталог состояния отдела создаёт сам отдел — при первом запуске (перенос
+   состояния и журнал смены) или командой `node plugins/sync.mjs apply`. Если
+   пишете файл руками на чистой машине, сначала создайте каталог:
+   `New-Item -ItemType Directory -Force "$env:USERPROFILE\.dsh\profiles\desktop\dsh-dev-department"`.
    Затем проверить, что в репозиториях есть все метки конвейера:
    `node plugins/tools/pipeline-labels-probe.mjs` (см. раздел «Метки конвейера»).
 6. Положить секреты — в репозитории их нет и быть не должно:
@@ -181,7 +192,7 @@ DSH собирается из композиций Cordis. Здесь их дв�
    | Файл | Что внутри |
    |---|---|
    | `~/.dsh/mcp/github-mcp-server/token` | токен GitHub для MCP-сервера (fine-grained; Issues, Contents, Pull requests read+write на нужные репозитории) |
-   | `~/.dsh/projects.json` | `telegram.token` и `telegram.chatId` каждого проекта |
+   | `<каталог состояния>/projects.json` | `telegram.token` и `telegram.chatId` каждого проекта |
 
    Бот задаётся только в `projects.<id>.telegram` — та же тройка полей
    `token`/`chatId`/`voiceLang`; у проекта без бота Telegram нет и это не ошибка.
@@ -219,7 +230,7 @@ DSH собирается из композиций Cordis. Здесь их дв�
 
 8. Перезапустить DSH Desktop ещё раз (если ставили что-то после шага 3).
    `dev_department_status` должен ответить. Не отвечает — смотреть причину в
-   журнале `~/.dsh/dev-department.log`.
+   журнале `~/.dsh/profiles/desktop/dsh-dev-department/dev-department.log`.
 
 ### Что остаётся человеку
 
@@ -228,8 +239,8 @@ DSH собирается из композиций Cordis. Здесь их дв�
 
 | Что | Где | Почему не в пакете |
 |---|---|---|
-| Реестр проектов | `~/.dsh/projects.json` | адреса, ветки, порты и каталоги — свои у каждой машины |
-| Расписание смен и лимиты | `~/.dsh/dev-department.json` | решение человека, а не содержимое надстройки |
+| Реестр проектов | `~/.dsh/profiles/desktop/dsh-dev-department/projects.json` | адреса, ветки, порты и каталоги — свои у каждой машины |
+| Расписание смен и лимиты | `~/.dsh/profiles/desktop/dsh-dev-department/dev-department.json` | решение человека, а не содержимое надстройки |
 | Токен GitHub | `~/.dsh/mcp/github-mcp-server/token` | секрет |
 | Бот Telegram | `projects.<id>.telegram` | секрет |
 | Метки конвейера | репозитории проектов | их создаёт `plugins/tools/pipeline-labels-create.mjs` по токену |
@@ -247,9 +258,47 @@ DSH собирается из композиций Cordis. Здесь их дв�
 `~/.dsh/profiles/desktop/plugins/`, десять каталогов в `~/.dsh/.agent-presets/` и
 строки отдела в живом `~/.dsh/profiles/desktop/cordis.patch.yml`. Их снимает
 человек — это файлы установки, а не данные (диалоги
-`~/.dsh/dev-department-dialogs.json`, книга токенов, журнал и сессии не трогаются).
+`~/.dsh/profiles/desktop/dsh-dev-department/dev-department-dialogs.json`, книга
+токенов, журнал и сессии не трогаются).
 Иначе в композиции окажутся две строки диспетчера, то есть два тикера на одни
 тикеты.
+
+## Где живёт состояние отдела
+
+Всё изменяемое состояние отдела — реестр проектов, общие настройки, карта диалогов,
+книга учёта токенов и журналы — лежит в одном каталоге профиля:
+
+```
+~/.dsh/profiles/desktop/dsh-dev-department/
+  projects.json                  реестр проектов (в т.ч. токены Telegram)
+  dev-department.json            расписание смен и лимиты
+  dev-department-dialogs.json    карта диалогов роль↔тикет
+  dev-department-usage.json      книга привязок «сессия → тикет»
+  dev-department.log             журнал смены
+  dev-department-mcp.log         журнал транспорта MCP
+  role-sessions.log              журнал role-sessions
+  role-permissions.log           журнал role-permissions
+```
+
+Почему не рядом с модулями: `dsh plugin add` переустанавливает пакет, и файл внутри
+`node_modules` исчезает вместе с прежней версией — а в `projects.json` лежат токены и
+рабочие области. Почему не в корне `~/.dsh`: корень принадлежит DSH (`mcp/`,
+`sessions/`, `storages/`, `.agent-presets`), и отдел не должен его засорять. Каталог
+профиля pnpm не трогает — это компромисс, который переживает установку и не спорит
+с DSH.
+
+Путь, имена файлов и правило переноса собраны в одном модуле —
+`plugins/state-paths.mjs`. Его спрашивают все: плагины пишут через него, инструменты
+`plugins/tools/` читают через него. Свой `path.join(dshHome(), …)` для этих восьми
+файлов не собирает никто: иначе перенос каталога разошёлся бы у плагинов и у
+инструментов молча.
+
+Переход со старого места однократный и без потери данных: первый вызов
+`stateFile()` переносит легаси-файл из корня `~/.dsh` в каталог состояния
+(`rename`); если `rename` не удался (`EXDEV` — другой диск, `EPERM` — чужое право),
+файл копируется, старый остаётся, а в `dev-department.log` пишется строка «миграция:
+скопировано, старое оставлено». Чтение старое место понимает всегда, поэтому ручной
+возврат файла в корень не оставляет отдел без реестра.
 
 ## plugins/sync.mjs
 
@@ -276,7 +325,9 @@ PowerShell: на этой машине выполнение `.ps1` запрещ�
 работать в любой раскладке: он собирает правки из каталога установки в репозиторий.
 
 Общие настройки отдела лежат в репозитории как `plugins/config/dev-department.json`, а в
-каталоге установки — как `~/.dsh/dev-department.json`: `apply` раскладывает их,
+каталоге установки — как
+`~/.dsh/profiles/desktop/dsh-dev-department/dev-department.json`: `apply`
+раскладывает их,
 `collect` собирает обратно. Файлы профиля (`profiles/<имя>/…`) раскладываются
 только в **существующий** профиль: каталог `profiles/<имя>` — это профиль DSH с
 манифестом `package.json`, и половина профиля (патч с плагинами без манифеста) —
@@ -338,6 +389,7 @@ node github-probe.test.mjs              # github-probe.mjs: PATCH коммент
 node usage-ledger.test.mjs              # книга учёта токенов, правило повтора, счёт по стенограмме
 node dev-department-usage.test.mjs      # привязка при выдаче роли, карточка usage в статусе, сводка смены
 node issue-tokens.test.mjs              # plugins/tools/issue-tokens.mjs: таблица по тикету, сверка, непривязанные сессии
+node state-paths.test.mjs               # модуль путей состояния: каталог, восемь имён, однократный перенос
 node plugin-manifests.test.mjs          # манифесты хост-плагинов: без name+version каждый ход падает с REQUEST_EXTENSION
 node plugin-paths.test.mjs              # сам помощник раскладок: порядок поиска, приоритет, отказной сценарий
 ```
@@ -376,7 +428,7 @@ node plugins/tools/pipeline-labels-probe.mjs    # что есть и чего н
 node plugins/tools/pipeline-labels-create.mjs   # создать недостающее (существующее не трогает)
 ```
 
-Оба читают реестр `~/.dsh/projects.json` и токен из `~/.dsh/mcp/github-mcp-server/token`.
+Оба читают реестр проектов отдела и токен из `~/.dsh/mcp/github-mcp-server/token`.
 `probe` только читает; `create` создаёт недостающие метки во всех проектах
 реестра, у которых задан `repo`, а также снимает с тикетов и удаляет из
 репозитория метки выведенных маршрутов (`ready-for-design`).

@@ -30,7 +30,8 @@
 // посмотреть на комментарий, а не приговор схеме.
 //
 // Запуск: node tools/github-probe.mjs [owner/repo …]
-// Без аргументов репозитории берутся из реестра проектов (~/.dsh/projects.json).
+// Без аргументов репозитории берутся из реестра проектов — путь к нему собирает
+// модуль путей состояния (каталог профиля, а не корень каталога установки).
 // Нечитаемый реестр — отказ с кодом 2: проба, которая пишет, не выбирает себе
 // цель по захардкоженному списку.
 import fs from 'node:fs'
@@ -38,6 +39,7 @@ import os from 'node:os'
 import path from 'node:path'
 import https from 'node:https'
 import { fileURLToPath } from 'node:url'
+import { statePathsModule } from './plugin-paths.mjs'
 
 function dshHome() {
   return process.env.DSH_HOME || path.join(os.homedir(), '.dsh')
@@ -171,9 +173,11 @@ export function reportLines(rights) {
 }
 
 // Реестр проектов: «не прочитан» и «пуст» — разные ответы, и оба не повод
-// подставлять репозитории, которых оператор не называл.
-export function reposFromRegistry() {
-  const file = path.join(dshHome(), 'projects.json')
+// подставлять репозитории, которых оператор не называл. Путь к реестру собирает
+// модуль состояния: файл переехал из корня каталога установки в каталог профиля.
+export async function reposFromRegistry() {
+  const state = await statePathsModule()
+  const file = state.readStateFile(state.STATE_FILES.projects)
   let raw
   try {
     raw = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''))
@@ -217,7 +221,7 @@ async function main() {
   const fromArgs = process.argv.slice(2).filter((a) => a.indexOf('/') !== -1)
   let repos = fromArgs
   if (repos.length === 0) {
-    const registry = reposFromRegistry()
+    const registry = await reposFromRegistry()
     if (registry.problem) {
       console.error(registry.problem + '. Передайте owner/repo аргументом, если цель названа вручную')
       process.exit(2)

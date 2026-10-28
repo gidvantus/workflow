@@ -4,6 +4,7 @@
   "description": "Отдел разработки для DeepSeek Harness: bundle-патч профиля (четыре хост-плагина) и десять ролей, которые плагин раскладывает в ~/.dsh/.agent-presets",
   "type": "module",
   "exports": {
+    "./plugins/state-paths.mjs": "./plugins/state-paths.mjs",
     "./plugins/dev-department.mjs": "./plugins/dev-department.mjs",
     "./plugins/role-sessions.mjs": "./plugins/role-sessions.mjs",
     "./plugins/role-permissions.mjs": "./plugins/role-permissions.mjs",
@@ -14,6 +15,7 @@
   },
   "files": [
     "/plugins/cordis.patch.yml",
+    "/plugins/state-paths.mjs",
     "/plugins/dev-department.mjs",
     "/plugins/role-sessions.mjs",
     "/plugins/role-permissions.mjs",

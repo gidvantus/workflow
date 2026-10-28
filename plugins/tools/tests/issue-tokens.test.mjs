@@ -31,6 +31,9 @@ const home = path.join(TEST_DIR, '.issue-tokens-home')
 const homeNoModule = path.join(TEST_DIR, '.issue-tokens-nomodule-home')
 // Настоящий модуль учёта: сильнее эталона, когда он есть.
 const REPO_LEDGER = path.resolve(TEST_DIR, '..', '..', 'usage-ledger.mjs')
+// Модуль путей состояния: он лежит рядом с модулем учёта и импортируется им
+// относительным путём, поэтому в песочницу едет вместе с ним.
+const REPO_STATE_PATHS = path.resolve(TEST_DIR, '..', '..', 'state-paths.mjs')
 
 let failures = 0
 function check(name, actual, expected) {
@@ -59,7 +62,7 @@ function dshHome() {
 }
 
 export function readLedger() {
-  const file = path.join(dshHome(), 'dev-department-usage.json')
+  const file = path.join(dshHome(), 'profiles', 'desktop', 'dsh-dev-department', 'dev-department-usage.json')
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8'))
   } catch (error) {
@@ -147,12 +150,25 @@ export function turnsOfEvents(events) {
 
 // Модуль учёта для песочницы: настоящий из репозитория, если он уже есть, иначе
 // эталон. Так тест не может разойтись с продуктом в правиле повтора.
+//
+// Модуль учёта берёт пути состояния относительным `./state-paths.mjs`, поэтому
+// модуль состояния едет в песочницу рядом с ним: без него копия модуля учёта
+// падает на импорте, а не на проверяемом правиле.
 function installLedger(targetHome) {
   const dir = path.join(targetHome, 'profiles', 'desktop', 'plugins')
   fs.mkdirSync(dir, { recursive: true })
   const source = fs.existsSync(REPO_LEDGER) ? fs.readFileSync(REPO_LEDGER, 'utf8') : REFERENCE_MODULE
   fs.writeFileSync(path.join(dir, 'usage-ledger.mjs'), source)
+  if (fs.existsSync(REPO_STATE_PATHS)) fs.copyFileSync(REPO_STATE_PATHS, path.join(dir, 'state-paths.mjs'))
   return fs.existsSync(REPO_LEDGER) ? 'настоящий модуль репозитория' : 'эталон проекции в тесте'
+}
+
+// Файлы состояния отдела лежат в каталоге профиля, а не в корне каталога
+// установки: набор сеет их туда же, куда пишет боевой модуль.
+const stateFile = (base, name) => {
+  const dir = path.join(base, 'profiles', 'desktop', 'dsh-dev-department')
+  fs.mkdirSync(dir, { recursive: true })
+  return path.join(dir, name)
 }
 
 const msg = (turn, step, input, output, cacheRead = 0, cacheWrite = 0) => ({
@@ -209,7 +225,7 @@ fs.writeFileSync(path.join(homeBadContract, 'profiles', 'desktop', 'plugins', 'u
   'export function turnsOfEvents() { return 0 }',
   '',
 ].join('\n'))
-fs.writeFileSync(path.join(homeBadContract, 'projects.json'), JSON.stringify({ version: 1, projects: {} }))
+fs.writeFileSync(stateFile(homeBadContract, 'projects.json'), JSON.stringify({ version: 1, projects: {} }))
 
 // Песочница «в модуле учёта нет правила ходов»: отчёт обязан отказаться, а не
 // считать ходы по своей копии правила — иначе колонка «ходов» разойдётся с
@@ -222,12 +238,12 @@ fs.writeFileSync(path.join(homeNoTurns, 'profiles', 'desktop', 'plugins', 'usage
   'export function usageOfEvents() { return { uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 } }',
   '',
 ].join('\n'))
-fs.writeFileSync(path.join(homeNoTurns, 'projects.json'), JSON.stringify({ version: 1, projects: {} }))
+fs.writeFileSync(stateFile(homeNoTurns, 'projects.json'), JSON.stringify({ version: 1, projects: {} }))
 
 fs.rmSync(home, { recursive: true, force: true })
 fs.rmSync(homeNoModule, { recursive: true, force: true })
 const ledgerSource = installLedger(home)
-fs.writeFileSync(path.join(home, 'projects.json'), JSON.stringify({
+fs.writeFileSync(stateFile(home, 'projects.json'), JSON.stringify({
   version: 1,
   default: 'workflow',
   projects: {
@@ -247,7 +263,7 @@ const book = [
   { at: '2026-10-26T13:00:00.000Z', project: 'vahta', issue: 193, role: 'dev-backend', session: S6, attempt: 1, source: 'dispatcher' },
   { at: '2026-10-26T14:00:00.000Z', project: 'workflow', issue: 14, role: 'dev-frontend' },
 ]
-fs.writeFileSync(path.join(home, 'dev-department-usage.json'), JSON.stringify(book, null, 2))
+fs.writeFileSync(stateFile(home, 'dev-department-usage.json'), JSON.stringify(book, null, 2))
 
 // S1: три хода, во втором ходе две ступени, в третьем — повтор шага после
 // llm/retry-started: 700 не должна попасть в сумму, 800 — должна.
@@ -281,7 +297,7 @@ const homeBroken = path.join(process.cwd(), '.issue-tokens-broken-home')
 fs.rmSync(homeBroken, { recursive: true, force: true })
 fs.mkdirSync(homeBroken, { recursive: true })
 installLedger(homeBroken)
-fs.writeFileSync(path.join(homeBroken, 'projects.json'), fs.readFileSync(path.join(home, 'projects.json')))
+fs.writeFileSync(stateFile(homeBroken, 'projects.json'), fs.readFileSync(stateFile(home, 'projects.json')))
 
 function transcriptDir(base, workspace, id) {
   const dir = path.join(base, 'sessions', workspace, 'session-' + id)
@@ -350,7 +366,7 @@ const homeRule = path.join(process.cwd(), '.issue-tokens-rule-home')
 fs.rmSync(homeRule, { recursive: true, force: true })
 fs.mkdirSync(homeRule, { recursive: true })
 installLedger(homeRule)
-fs.writeFileSync(path.join(homeRule, 'projects.json'), fs.readFileSync(path.join(home, 'projects.json')))
+fs.writeFileSync(stateFile(homeRule, 'projects.json'), fs.readFileSync(stateFile(home, 'projects.json')))
 
 // Запись потока — в настоящей форме стенограммы DSH: { type: 'chunk', time,
 // chunk: { type: 'usage', usage: {…} } }. Выдуманная плоская форма { type: 'usage',
@@ -403,7 +419,7 @@ check('нечисловой номер объяснён', /номер тикет
 
 console.log('\n=== каталог сессии в каталоге установки ===')
 check('D:\\Agents\\Workflow → --D-Agents-Workflow--', mod.workspaceDirName('D:\\Agents\\Workflow'), '--D-Agents-Workflow--')
-const index = mod.workspaceIndex(path.join(home, 'projects.json'))
+const index = mod.workspaceIndex(stateFile(home, 'projects.json'))
 check('реестр: рабочая область и клон человека — один проект',
   [index.index.get('--d-agents-workflow--'), index.index.get('--d-development-videcoding-workflow--')], ['workflow', 'workflow'])
 check('реестр: чужой проект подписан своим именем', index.index.get('--d-agents-vahta--'), 'vahta')
@@ -411,7 +427,7 @@ check('реестр: чужой проект подписан своим име�
 // ── книга привязок ──────────────────────────────────────────────────────────
 
 console.log('\n=== книга привязок ===')
-const normalized = mod.normalizeLedger(JSON.parse(fs.readFileSync(path.join(home, 'dev-department-usage.json'), 'utf8')))
+const normalized = mod.normalizeLedger(JSON.parse(fs.readFileSync(stateFile(home, 'dev-department-usage.json'), 'utf8')))
 check('четыре годные записи, повтор схлопнут', [normalized.entries.length, normalized.duplicates], [4, 1])
 check('битая запись отброшена и посчитана', normalized.broken, 1)
 check('префикс session- убран', normalized.entries[0].session, S1)
@@ -592,6 +608,8 @@ fs.rmSync(bareDir, { recursive: true, force: true })
 fs.mkdirSync(bareDir, { recursive: true })
 fs.copyFileSync(cli, path.join(bareDir, 'issue-tokens.mjs'))
 fs.copyFileSync(path.resolve(TEST_DIR, '..', 'zstd-frames.mjs'), path.join(bareDir, 'zstd-frames.mjs'))
+// Помощник раскладок — сосед отчёта по импорту: без него копия не загрузится.
+fs.copyFileSync(path.resolve(TEST_DIR, '..', 'plugin-paths.mjs'), path.join(bareDir, 'plugin-paths.mjs'))
 const bareCli = path.join(bareDir, 'issue-tokens.mjs')
 
 console.log('\n=== запуск node tools/issue-tokens.mjs ===')

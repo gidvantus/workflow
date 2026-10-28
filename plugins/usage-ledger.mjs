@@ -9,10 +9,12 @@
 // `findDraftSession`; своего крючка на создание issue у отдела нет — GitHub идёт
 // через MCP-сервер).
 //
-// Файл книги — `<DSH_HOME>/dev-department-usage.json`, append-only массив записей
-// `{ at, project, issue, role, session, attempt, source }`. Каталог читается НА
-// МОМЕНТ ВЫЗОВА (`process.env.DSH_HOME || ~/.dsh`), а не на момент импорта модуля:
-// так отчёт `tools/issue-tokens.mjs` может указать другой каталог установки.
+// Файл книги — `<DSH_HOME>/profiles/desktop/dsh-dev-department/dev-department-
+// usage.json`: каталог состояния называет `./state-paths.mjs`, а не этот модуль.
+// Записи append-only массив `{ at, project, issue, role, session, attempt, source }`.
+// Каталог читается НА МОМЕНТ ВЫЗОВА (`$DSH_HOME`, читается внутри `state-paths.mjs`),
+// а не на момент импорта модуля: так отчёт `tools/issue-tokens.mjs` может указать
+// другой каталог установки.
 //
 // Главное правило здесь — правило повтора, и оно одно на весь отдел: карточка
 // `dev_department_status`, сводка смены и отчёт по токенам обязаны показывать одни
@@ -37,26 +39,24 @@
 // разбора кадров `zstd` повторяет `tools/zstd-frames.mjs`: импортировать его отсюда
 // нельзя, каталог `tools/` в установку не раскладывается.
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import zlib from 'node:zlib'
+import { STATE_FILES, dshHome, readStateFile, stateFile } from './state-paths.mjs'
 
-// Имя книги рядом с каталогом установки.
-export const LEDGER_NAME = 'dev-department-usage.json'
+// Имя книги. Каталог и перенос называет `./state-paths.mjs`; здесь остаётся только
+// имя, чтобы вызывающие не повторяли литерал.
+export const LEDGER_NAME = STATE_FILES.usage
 
-export function dshHome() {
-  return process.env.DSH_HOME || path.join(os.homedir(), '.dsh')
-}
-
-// Путь книги считается на каждый вызов: DSH_HOME читается в момент обращения.
+// Путь книги считается на каждый вызов: `$DSH_HOME` читается в момент обращения.
+// Запись идёт в новое место, перенос легаси-файла делает модуль состояния.
 export function ledgerFile() {
-  return path.join(dshHome(), LEDGER_NAME)
+  return stateFile(LEDGER_NAME)
 }
 
 // Журнал отдела есть всегда; строка о проблеме книги не должна ломать смену.
 function logLine(text) {
   try {
-    fs.appendFileSync(path.join(dshHome(), 'dev-department.log'),
+    fs.appendFileSync(stateFile(STATE_FILES.shiftLog),
       '\n===== ' + new Date().toISOString() + ' =====\nкнига учёта: ' + text + '\n')
   } catch (error) {
     // журнал не должен мешать работе
@@ -105,7 +105,9 @@ function cleanEntry(entry) {
 // читается, файл не разбирается. Различать нужно: нечитаемую книгу нельзя
 // перезаписывать, иначе теряется вся история привязок.
 function readRaw() {
-  const file = ledgerFile()
+  // Чтение не переносит файл: путь для чтения отдаёт модуль состояния, он же
+  // умеет взять легаси-файл из корня каталога установки.
+  const file = readStateFile(LEDGER_NAME)
   let text
   try {
     text = fs.readFileSync(file, 'utf8')
@@ -632,8 +634,9 @@ export function usageLine(totals, options) {
   return parts.join(' · ')
 }
 
-// Цена по тарифу. Числа тарифа приходят из ~/.dsh/dev-department.json
-// (`usageRates`), в коде их нет: валюта и тариф — решение человека, а не отдела.
+// Цена по тарифу. Числа тарифа приходят из
+// `<DSH_HOME>/profiles/desktop/dsh-dev-department/dev-department.json` (`usageRates`),
+// в коде их нет: валюта и тариф — решение человека, а не отдела.
 // Незаданный тариф — строки с ценой нет вовсе, а не «$0.00» рядом с нулём.
 export function costOf(totals, rates) {
   if (!rates || typeof rates !== 'object') return null
