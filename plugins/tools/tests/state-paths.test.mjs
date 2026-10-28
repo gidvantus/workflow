@@ -72,7 +72,11 @@ check('старый путь файла — корень каталога уст
 console.log('\n=== имена файлов состояния ===')
 // Имена — часть контракта: их знают плагины и инструменты. Переименование в
 // модуле обязано ломать набор, а не тихо оставлять файл на старом месте.
-check('восемь имён из постановки', state.STATE_FILES, {
+//
+// Сравнение — как множество, а не как последовательность: порядок ключей в
+// объекте постановкой не задан, и набор не должен краснеть на корректном модуле,
+// который объявил те же восемь имён в другом порядке.
+const WANTED = {
   projects: 'projects.json',
   config: 'dev-department.json',
   dialogs: 'dev-department-dialogs.json',
@@ -81,7 +85,10 @@ check('восемь имён из постановки', state.STATE_FILES, {
   mcpLog: 'dev-department-mcp.log',
   roleSessions: 'role-sessions.log',
   rolePermissions: 'role-permissions.log',
-})
+}
+check('восемь имён из постановки (без учёта порядка)',
+  Object.entries(state.STATE_FILES).sort(), Object.entries(WANTED).sort())
+check('кроме восьми имён ничего нет', Object.keys(state.STATE_FILES).length, 8)
 
 // ── каталог создаётся, файл — нет ───────────────────────────────────────────
 

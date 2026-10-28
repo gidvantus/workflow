@@ -459,11 +459,10 @@ export async function buildReport({ dshHome, project, issue } = {}) {
   const home = dshHome || defaultDshHome()
   if (!fs.existsSync(home)) throw new Error('каталог установки не найден: ' + home + ' (задай --dsh-home)')
 
-  // Пути книги и реестра берутся у модуля состояния, а он читает $DSH_HOME в
-  // момент вызова: каталог установки выставляем до первого обращения к нему.
+  // Каталог установки уже выставлен в `$DSH_HOME` внутри `loadLedgerModule`, и он
+  // вызывается первой строкой ниже — до первого обращения к модулю состояния.
   // Модуль учёта спрашивается первым: его отсутствие — отказ понятнее, чем
   // отсутствие помощника путей, и набор ждёт именно этой строки.
-  process.env.DSH_HOME = home
   const problems = []
   const ledger = await loadLedgerModule(home)
   const state = await statePathsModule({ dshHome: home })

@@ -418,13 +418,20 @@ if (mode === 'status') {
   for (const pair of synced) {
     const inRepo = hash(pair.to)
     const inHome = hash(pair.from)
-    // Файл состояния, ещё лежащий по старому пути, — не «не разложено», а
-    // недоделанный перенос: называем это отдельной строкой, иначе sync молчит о
-    // том, что состояние отдела до сих пор в корне каталога установки.
-    if (pair.stateName !== undefined && inHome !== null && pair.from === state.legacyFile(pair.stateName)) {
-      legacy += 1
-      console.log('  старое место ' + pair.rel + ' — файл лежит в ' +
-        shortHome(pair.from) + ', а не в ' + shortHome(stateDirFile(pair.stateName)))
+    // Легаси-файл ищем по существованию, а не по тому, откуда читали: после
+    // переноса копией (rename упал на EXDEV/EPERM) в каталоге установки лежат оба
+    // файла, `readStateFile` отдаёт новый — и «читается новый» ничего не говорит
+    // о копии, оставшейся в корне. Молчать о ней нельзя: это состояние с токеном
+    // бота и расписанием, которое человек считает перенесённым.
+    if (pair.stateName !== undefined) {
+      const old = state.legacyFile(pair.stateName)
+      if (fs.existsSync(old)) {
+        legacy += 1
+        console.log('  старое место ' + shortHome(old) + ' — ' +
+          (fs.existsSync(stateDirFile(pair.stateName))
+            ? 'копия осталась после переноса, рабочий файл в ' + shortHome(stateDirFile(pair.stateName))
+            : 'файл ещё не перенесён в ' + shortHome(stateDirFile(pair.stateName))))
+      }
     }
     if (!hasProfile(pair.rel)) {
       if (inRepo !== null) {
