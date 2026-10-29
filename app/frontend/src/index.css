@@ -562,11 +562,6 @@ body {
   color: var(--muted);
 }
 
-/* Окно формы шире обычного диалога: десять ролей в две колонки. */
-.dialog--wide {
-  width: min(34rem, 100%);
-}
-
 .time-block {
   display: flex;
   flex-direction: column;
@@ -737,6 +732,14 @@ body {
   border-radius: 0.875rem;
   box-shadow: 0 24px 48px -30px rgba(23, 23, 15, 0.45);
   animation: dialog-in 120ms ease-out;
+}
+
+/* Окно формы отдела шире обычного диалога: десять ролей в две колонки.
+   Стоит сразу за `.dialog`, потому что специфичность у обоих правил одинаковая
+   (`0,1,0`), и побеждает то, что ниже в файле: выше `.dialog` перебивал эту ширину,
+   и на десктопе окно оставалось 28 rem вместо 34 rem из макета. */
+.dialog--wide {
+  width: min(34rem, 100%);
 }
 
 .dialog:focus-visible {
