@@ -152,6 +152,28 @@ def test_duplicate_name_ignores_register(client: TestClient) -> None:
     assert response.json() == {"detail": "Проект с таким названием уже есть"}
 
 
+def test_duplicate_name_is_caught_by_index(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Гонка двух `POST`: предварительная проверка отключена, `409` держит индекс.
+
+    Так поведение двух одновременных запросов одним именем: оба проходят
+    `_name_is_taken`, второй ловит `IntegrityError` частичного индекса
+    `uq_projects_name_alive` и получает тот же текст контракта. Тест разом
+    проверяет, что индекс привязан к таблице (его создаёт `create_all`) и что
+    ветка `except IntegrityError` в `_commit_or_conflict` жива.
+    """
+    _create(client)
+    monkeypatch.setattr(api, "_name_is_taken", lambda *args, **kwargs: False)
+
+    response = client.post("/api/projects", json={**PROJECT, "repo_url": "gidvantus/other"})
+
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert response.json() == {"detail": "Проект с таким названием уже есть"}
+    assert len(client.get("/api/projects").json()) == 1
+
+
 @pytest.mark.parametrize(
     ("payload", "detail"),
     [
@@ -173,6 +195,25 @@ def test_create_rejects_invalid_fields(
 
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     assert response.json() == {"detail": detail}
+
+
+def test_repo_url_over_500_characters_uses_format_text(client: TestClient) -> None:
+    """Ссылка длиннее 500 символов отвечает текстом про формат, а не про длину.
+
+    Набор текстов `422` в контракте закрыт: отдельной формулировки про 500 символов
+    в нём нет, поэтому длинная, но валидная ссылка получает форматный отказ. Тест
+    фиксирует этот выбор в наборе: если постановщик добавит «Адрес репозитория
+    длиннее 500 символов», здесь появится новый текст и отдельная константа.
+    """
+    long_repo = "https://example.com/" + "a" * (501 - len("https://example.com/"))
+    assert len(long_repo) == 501
+
+    response = client.post("/api/projects", json={**PROJECT, "repo_url": long_repo})
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert response.json() == {
+        "detail": "Адрес репозитория должен быть ссылкой или вида owner/repo"
+    }
 
 
 def test_create_trims_name_and_repo_url(client: TestClient) -> None:
