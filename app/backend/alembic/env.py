@@ -6,6 +6,10 @@ from sqlalchemy import engine_from_config, pool
 
 from alembic import context
 from app.config import get_settings
+from app.db import Base
+
+# Импорт модели нужен ради метаданных: без него таблица `projects` в них не попадёт.
+from app.models import Project  # noqa: F401
 
 config = context.config
 
@@ -15,9 +19,8 @@ if config.config_file_name is not None:
 # Никакого URL в alembic.ini: он приходит из DATABASE_URL.
 config.set_main_option("sqlalchemy.url", get_settings().database_url)
 
-# Доменных моделей в этой задаче нет: первая ревизия пустая и нужна только для того,
-# чтобы в базе появилась таблица `alembic_version`.
-target_metadata = None
+# Метаданные моделей: по ним пишутся и сверяются ревизии (`0002_projects` — таблица проектов).
+target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
