@@ -14,6 +14,12 @@
   --border: #e4e1d9;
   --ink: #17170f;
   --muted: #6f6d64;
+  /*
+   * Второй уровень текста на сером рейле. `--muted` на `--rail` даёт 4.34:1 —
+   * меньше требуемых 4.5:1 (WCAG 2.1 AA, 1.4.3), поэтому подписи меню берут это
+   * значение: 4.56:1. На белых панелях `--muted` остаётся, там 5.19:1.
+   */
+  --muted-rail: #6b6a61;
   --muted-2: #9c9a90;
   --dark: #1b1b16;
   --dark-hover: #2e2e26;
@@ -89,7 +95,7 @@ body {
 .brand__sub {
   margin: 0;
   font-size: 0.75rem;
-  color: var(--muted);
+  color: var(--muted-rail);
 }
 
 .nav {
@@ -105,7 +111,7 @@ body {
   font-weight: 500;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--muted);
+  color: var(--muted-rail);
 }
 
 .nav__item {
