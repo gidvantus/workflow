@@ -253,13 +253,21 @@ const answerOf = (botId) => {
   const last = lastOf(botId, 'answerCallbackQuery')
   return last ? last.payload.text : undefined
 }
+// Последний экран бота — новое сообщение ИЛИ правка прежнего, что пришло позже.
+// Выбирать по методу нельзя: после правки клавиатуры (editMessageText) команда
+// отвечает новым сообщением (sendMessage), и предпочтение метода вернуло бы
+// экран, которого человек уже не видит.
+const lastScreen = (botId) => {
+  const list = sendsOf(botId).filter((s) => s.method === 'sendMessage' || s.method === 'editMessageText')
+  return list[list.length - 1]
+}
 const buttonsOf = (botId) => {
-  const last = lastOf(botId, 'editMessageText') || lastOf(botId, 'sendMessage')
+  const last = lastScreen(botId)
   const rows = (last && last.payload.reply_markup && last.payload.reply_markup.inline_keyboard) || []
   return rows.flat().map((b) => b.callback_data)
 }
 const textOf = (botId) => {
-  const last = lastOf(botId, 'editMessageText') || lastOf(botId, 'sendMessage')
+  const last = lastScreen(botId)
   return last ? String(last.payload.text || '') : ''
 }
 
@@ -330,7 +338,7 @@ check('заголовок считает все области', textOf('vahta')
 check('в списке все области реестра', buttonsOf('vahta'), [
   'proj:w-vahta', 'proj:w-vahta-human', 'proj:w-workflow', 'proj:w-brain', 'proj:w-cloudpass', 'proj:w-crm',
 ])
-check('в логе бот default назван', logs.some((l) => l === '[tg-bridge] бот "vahta" видит проекты: vahta'), true)
+check('в логе бот default называет все проекты реестра', logs.some((l) => l === '[tg-bridge] бот "vahta" видит проекты: vahta, workflow, cloudpass, brain, crm'), true)
 
 // ── сценарий 3: telegram.projects — свой проект первым ─────────────────────
 console.log('\n=== сценарий 3: бот с telegram.projects видит свой проект и перечисленный ===')
@@ -341,6 +349,20 @@ check('свой проект первым, затем перечисленный
   'proj:w-workflow', 'proj:w-vahta', 'proj:w-vahta-human',
 ])
 check('в логе порядок видимости', logs.some((l) => l === '[tg-bridge] бот "workflow" видит проекты: workflow, vahta'), true)
+
+// ── сценарий 3б: непустой telegram.projects сильнее правила default ───────
+console.log('\n=== сценарий 3б: у проекта из default явный список сужает видимость ===')
+// `default` — вахта, и у неё же непустой список: по README бот сужается до
+// своего проекта плюс перечисленных, то есть перестаёт быть обзорным.
+const registryNarrowDefault = registryMain()
+registryNarrowDefault.projects.vahta.telegram.projects = ['workflow']
+app = await boot(registryNarrowDefault)
+await command(app, 'vahta', '/projects')
+check('обзорный бот сужен до своего и перечисленного', textOf('vahta').split('\n')[0], '📂 Проекты (3):')
+check('в списке только свой проект и перечисленный', buttonsOf('vahta'), [
+  'proj:w-vahta', 'proj:w-vahta-human', 'proj:w-workflow',
+])
+check('в логе названы только видимые проекты', logs.some((l) => l === '[tg-bridge] бот "vahta" видит проекты: vahta, workflow'), true)
 
 // ── сценарий 5: /sessions и /sessions N считают только видимых ─────────────
 console.log('\n=== сценарий 5: /sessions и /sessions N считают только видимые области ===')
@@ -433,6 +455,38 @@ check('сессия создана в своей области', created.map((c
 check('после создания показана активация', textOf('workflow').includes('✅ Текущая сессия:'), true)
 await command(app, 'workflow', '/new dev')
 check('/new создаёт сессию в своей области', created.map((c) => c.cwd), [P.workflow, P.workflow])
+
+// ── сценарий 11: номер и id из списка «только чтение» не открывают диалог ──
+// Дыра, которую нашло ревью: отказ стоял только в callback'е `use:`, а /use
+// зовёт switchTarget напрямую. При этом lastSessions наполняется чужими
+// диалогами (sessionsText нумерует весь видимый список, sessionsPayload —
+// открытый на чтение проект), так что id знать не нужно: номер берётся из
+// списка, который само изменение сделало «только чтение».
+console.log('\n=== сценарий 11: /use номером или id чужой диалог не открывает ===')
+app = await boot(registryMain())
+await command(app, 'workflow', '/sessions')
+// Видимый список: свой проект первым, перечисленная вахта — вторым номером.
+await command(app, 'workflow', '/use 2')
+check('номер чужого диалога из /sessions — отказ', textOf('workflow'), 'Диалог другого бота — откройте его в боте этого проекта')
+await command(app, 'workflow', 'привет')
+check('сообщение по-прежнему уходит в свой диалог', followups[followups.length - 1].sessionId, 'session-wf-1')
+
+// Тот же обход через список «только чтение»: proj: чужого проекта кладёт его
+// диалоги в нумерацию /sessions, и /use 1 не должен делать их активными.
+await press(app, 'workflow', 'proj:w-vahta')
+const readOnlyButtons = buttonsOf('workflow')
+check('список открыт на чтение', readOnlyButtons.includes('hist:session-vahta-1:10'), true)
+await command(app, 'workflow', '/use 1')
+check('номер из списка чтения — отказ', textOf('workflow'), 'Диалог другого бота — откройте его в боте этого проекта')
+await command(app, 'workflow', 'ещё')
+check('и после списка чтения сообщение идёт в свой диалог', followups[followups.length - 1].sessionId, 'session-wf-1')
+
+await command(app, 'workflow', '/use session-vahta-1')
+check('прямой id чужой сессии — отказ', textOf('workflow'), 'Диалог другого бота — откройте его в боте этого проекта')
+check('чужой диалог так и не стал активным', followups.every((f) => f.sessionId === 'session-wf-1'), true)
+// Свой диалог команда по-прежнему открывает.
+await command(app, 'workflow', '/use session-wf-1')
+check('свой диалог /use открывает как раньше', textOf('workflow').includes('✅ Текущая сессия: session-wf-1'), true)
 
 // ── итог ────────────────────────────────────────────────────────────────────
 fs.rmSync(home, { recursive: true, force: true })

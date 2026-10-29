@@ -362,7 +362,8 @@ export default {
     }, { prepend: true })
 
     // У каждого бота свой опрос: свои offset, активный диалог и счётчики.
-    for (const bridge of bridges) {
+    for (const bot of bots) {
+      const bridge = byToken.get(bot.token)
       bridge.cleanTmp()
       ctx.effect(() => ctx.interval(async () => {
         if (bridge.polling) return
@@ -375,8 +376,13 @@ export default {
           bridge.polling = false
         }
       }, 1000), 'tg-bridge:poll:' + bridge.key)
-      // Сценарий привязки виден без чтения кода: одна строка на бота.
-      console.log('[tg-bridge] бот "' + bridge.key + '" видит проекты: ' + bridge.visibleIds.join(', '))
+      // Сценарий привязки виден без чтения кода: одна строка на бота. У бота из
+      // default без явного списка видимость — весь реестр, поэтому называем все
+      // его проекты: иначе лог утверждал бы обратное тому, что показывает бот.
+      const logged = bot.isDefault && bot.explicitProjects.length === 0
+        ? projects.map((project) => project.id)
+        : bridge.visibleIds
+      console.log('[tg-bridge] бот "' + bridge.key + '" видит проекты: ' + logged.join(', '))
       console.log('[tg-bridge] бот "' + bridge.key + '" запущен')
     }
   },
@@ -729,20 +735,24 @@ function buildBridge(ctx, bot, projects) {
     // telegram.projects видимость сужена до своего проекта плюс перечисленных.
     const seesAll = bot.isDefault && (!bot.explicitProjects || bot.explicitProjects.length === 0)
 
-    // Области, которые бот показывает. Порядок: сначала области своего проекта,
-    // затем остальных в порядке visibleIds; внутри проекта — порядок
-    // workspaceRegistry.list(), чтобы список не скакал между перезапусками.
+    // Области, которые бот показывает. Принадлежность — по объединению корней
+    // видимых проектов (`visibleRoots`, считается один раз в `buildBots`), так
+    // что сужение `telegram.projects` сужает и показ. Порядок — отдельно:
+    // сначала области своего проекта, затем остальных в порядке `visibleIds`;
+    // внутри проекта — порядок `workspaceRegistry.list()`, чтобы список не
+    // скакал между перезапусками.
     function visibleWorkspaces() {
       const all = workspaceRegistry ? workspaceRegistry.list() : []
       if (!Array.isArray(all) || all.length === 0) return []
       if (seesAll) return all.slice()
+      const visible = all.filter((w) => w && pathUnder(w.path, bot.visibleRoots))
       const picked = []
       const used = new Set()
       for (const id of bot.visibleIds || []) {
         const project = projectsById.get(id)
         if (!project) continue
-        for (const w of all) {
-          if (!w || used.has(w.id)) continue
+        for (const w of visible) {
+          if (used.has(w.id)) continue
           if (!pathUnder(w.path, project.roots)) continue
           used.add(w.id)
           picked.push(w)
@@ -960,6 +970,14 @@ function buildBridge(ctx, bot, projects) {
     }
 
     async function switchTarget(sessionId) {
+      // Переключать диалог можно только в своей области: видимость даёт чтение
+      // (hist:), но не работу. Проверка стоит здесь, а не в вызывающих, потому
+      // что входов два — callback `use:` и команда `/use <номер>`; одна копия
+      // правила закрывает оба. Номер в `/use` берётся из того же видимого
+      // списка, где чужие диалоги показаны только для истории, поэтому без этой
+      // проверки «только чтение» обходилось бы двумя нажатиями и цифрой.
+      const owner = workspaceOfSession(sessionId)
+      if (owner && !isOwnWorkspace(owner)) return { ok: false, denied: true, error: otherBotDialogText() }
       const live = agents.get(sessionId)
       if (live) { target = live; unread.delete(sessionId); return { ok: true, note: 'live' } }
       try {
@@ -1148,6 +1166,8 @@ function buildBridge(ctx, bot, projects) {
       if (Number.isInteger(num) && num >= 1 && num <= lastSessions.length) sessionId = lastSessions[num - 1].sessionId
       if (!sessionId || sessionId.indexOf('session-') !== 0) return '❓ Укажите sessionId или номер из /sessions.\nПример: /use session-123 или /use 2'
       const r = await switchTarget(sessionId)
+      // Чужой диалог не открывается — ни кнопкой, ни номером из /sessions.
+      if (r.denied) return r.error
       if (!r.ok) return '❌ Не удалось открыть сессию ' + sessionId + ': ' + r.error
       const view = await buildActivation(sessionId)
       let out = view.text
@@ -1373,12 +1393,10 @@ function buildBridge(ctx, bot, projects) {
         }
         if (data.indexOf('use:') === 0) {
           const sid = data.slice(4)
-          // Переключать диалог можно только в своей области: чужой диалог
-          // открывается историей (hist:), а не становится активным.
-          const owner = workspaceOfSession(sid)
-          if (owner && !isOwnWorkspace(owner)) { await answerCallback(cb.id, otherBotDialogText()); return true }
+          // Отказ чужому диалогу живёт в switchTarget — одним правилом на
+          // callback и на команду /use, а не копией здесь.
           const r = await switchTarget(sid)
-          if (!r.ok) { await answerCallback(cb.id, 'Ошибка: ' + clip(r.error, 180)); return true }
+          if (!r.ok) { await answerCallback(cb.id, r.denied ? r.error : 'Ошибка: ' + clip(r.error, 180)); return true }
           const view = await buildActivation(sid)
           await answerCallback(cb.id, '✅ Переключено')
           await presentActivation(chatId, messageId, view)
