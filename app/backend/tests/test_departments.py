@@ -283,9 +283,24 @@ def test_patch_changes_only_sent_fields(
     assert datetime.fromisoformat(body["updated_at"]) > datetime.fromisoformat(body["created_at"])
 
 
-def test_patch_replaces_roles_entirely(client: TestClient) -> None:
-    """`PATCH` с `role_ids` заменяет набор целиком, а не дополняет его."""
+def test_patch_replaces_roles_entirely(
+    client: TestClient,
+    session_factory: sessionmaker[Session],
+) -> None:
+    """`PATCH` с `role_ids` заменяет набор целиком и двигает `updated_at`.
+
+    Строка `departments` при правке одних ролей не меняется, поэтому `updated_at`
+    выставляется в ручке явно: без этого «Обновлён» в списке остался бы прежним.
+    """
     created = _create(client)
+    # created_at отодвигается в прошлое, чтобы сравнение не зависело от точности часов.
+    with session_factory() as session:
+        session.execute(
+            update(Department)
+            .where(Department.id == created["id"])
+            .values(created_at=datetime(2000, 1, 1))
+        )
+        session.commit()
 
     response = client.patch(f"/api/departments/{created['id']}", json={"role_ids": [1, 5, 6]})
 
@@ -295,6 +310,7 @@ def test_patch_replaces_roles_entirely(client: TestClient) -> None:
     assert body["name"] == created["name"]
     assert body["start_time"] == created["start_time"]
     assert body["end_time"] == created["end_time"]
+    assert datetime.fromisoformat(body["updated_at"]) > datetime.fromisoformat(body["created_at"])
 
 
 def test_patch_one_time_checks_the_whole_pair(client: TestClient) -> None:

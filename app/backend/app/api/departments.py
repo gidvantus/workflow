@@ -236,6 +236,10 @@ def update_department(
         department.end_time = end_time
     if roles is not None:
         department.roles = roles
+        # Роли лежат в `department_roles`, а строка `departments` при такой правке не
+        # меняется: без явного `updated_at` `onupdate=func.now()` не сработает, и
+        # колонка «Обновлён» покажет дату до правки, хотя отдел уже изменили.
+        department.updated_at = datetime.now(UTC)
 
     _commit_or_conflict(db)
     db.refresh(department)
