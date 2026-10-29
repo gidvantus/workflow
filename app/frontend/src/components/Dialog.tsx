@@ -30,6 +30,11 @@ type DialogProps = {
   children: ReactNode;
   /** Кнопки окна: порядок «Отмена», затем основное действие. */
   actions: ReactNode;
+  /**
+   * Широкое окно: форма отдела показывает десять чекбоксов в две колонки, в обычную
+   * ширину диалога они не влезают. Узкое окно — поведение по умолчанию.
+   */
+  wide?: boolean;
 };
 
 export default function Dialog({
@@ -40,6 +45,7 @@ export default function Dialog({
   busy,
   children,
   actions,
+  wide = false,
 }: DialogProps): JSX.Element {
   const titleId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -123,7 +129,7 @@ export default function Dialog({
     <div className="overlay" onMouseDown={handleBackdropMouseDown}>
       <div
         ref={dialogRef}
-        className="dialog"
+        className={wide ? 'dialog dialog--wide' : 'dialog'}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}

@@ -8,13 +8,8 @@
 
 import { useId, useState, type FormEvent } from 'react';
 
-import {
-  ApiError,
-  UNREACHABLE_TEXT,
-  createProject,
-  updateProject,
-  type Project,
-} from '../api/projects';
+import { ApiError, UNREACHABLE_TEXT } from '../api/http';
+import { createProject, updateProject, type Project } from '../api/projects';
 import Dialog from './Dialog';
 
 type ProjectFormDialogProps = {
