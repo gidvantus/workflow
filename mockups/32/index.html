@@ -219,15 +219,33 @@
         font-weight: 500;
       }
 
-      .status {
+      /* ---------- состояние сервиса: полоса под списком ---------- */
+
+      .service {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem 1rem;
+        padding: 0.875rem 1.125rem;
+        background-color: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 0.875rem;
+      }
+
+      .service__label {
+        margin: 0;
+        font-size: 0.75rem;
+        color: var(--muted);
+      }
+
+      .service__line {
         display: flex;
         align-items: center;
-        gap: 0.5rem;
-        padding: 0.25rem 0.25rem 0.25rem 0.625rem;
+        gap: 0.4375rem;
+        margin: 0.1875rem 0 0;
         font-size: 0.8125rem;
-        color: var(--muted);
-        border: 1px solid var(--border);
-        border-radius: 999px;
+        color: var(--ink);
       }
 
       .status__dot {
@@ -238,7 +256,6 @@
       }
 
       .status__text {
-        padding-right: 0.125rem;
         white-space: nowrap;
       }
 
@@ -814,13 +831,15 @@
           gap: 0.5rem;
         }
 
-        .crumbs {
-          display: none;
+        .service {
+          flex-direction: column;
+          align-items: stretch;
+          gap: 0.625rem;
+          padding: 0.875rem 1rem;
         }
 
-        .status {
+        .service .btn {
           width: 100%;
-          justify-content: space-between;
         }
 
         .page-head {
@@ -865,7 +884,7 @@
       <!-- 01: экран целиком -->
       <section class="shot" aria-labelledby="shot-1">
         <p class="shot__caption" id="shot-1">
-          <span class="shot__num">01</span>Список: меню с единственным разделом, шапка с состоянием сервиса, таблица проектов, подвал
+          <span class="shot__num">01</span>Список: меню с единственным разделом, шапка с крошками, таблица проектов, состояние сервиса под списком, подвал с копирайтом
         </p>
         <div class="app">
           <aside class="sidebar">
@@ -901,11 +920,6 @@
                 <span class="crumbs__sep" aria-hidden="true">/</span>
                 <span class="crumbs__current">Проекты</span>
               </p>
-              <div class="status">
-                <span class="status__dot" aria-hidden="true"></span>
-                <span class="status__text" data-testid="app-status" aria-live="polite">API: ok · БД: ok</span>
-                <button class="btn btn--ghost" type="button" data-testid="app-check">Проверить</button>
-              </div>
             </header>
 
             <div class="content">
@@ -1042,11 +1056,21 @@
                   </li>
                 </ul>
               </section>
+
+              <section class="service" aria-labelledby="service-label">
+                <div>
+                  <p class="service__label" id="service-label">Состояние сервиса</p>
+                  <p class="service__line">
+                    <span class="status__dot" aria-hidden="true"></span>
+                    <span class="status__text" data-testid="app-status" aria-live="polite">API: ok · БД: ok</span>
+                  </p>
+                </div>
+                <button class="btn" type="button" data-testid="app-check">Проверить</button>
+              </section>
             </div>
 
             <footer class="footbar">
-              <p class="footbar__note">Отдел разработки</p>
-              <p class="footbar__note">Удалённые проекты остаются в базе и не показываются в списке</p>
+              <p class="footbar__note">© 2026 Workflow</p>
             </footer>
           </div>
         </div>
