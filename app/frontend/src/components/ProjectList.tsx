@@ -132,6 +132,10 @@ function ProjectRow({ project, onEdit, onDelete }: ProjectRowProps): JSX.Element
               data-testid="project-edit"
               onClick={() => {
                 setMenuOpen(false);
+                // Пункт меню размонтируется тем же действием, которое открывает окно,
+                // поэтому фокус сначала возвращается на «⋯»: её окно и запомнит как
+                // точку возврата — иначе после Esc он уйдёт на <body>.
+                kebabRef.current?.focus();
                 onEdit(project);
               }}
             >
@@ -144,6 +148,7 @@ function ProjectRow({ project, onEdit, onDelete }: ProjectRowProps): JSX.Element
               data-testid="project-delete"
               onClick={() => {
                 setMenuOpen(false);
+                kebabRef.current?.focus();
                 onDelete(project);
               }}
             >

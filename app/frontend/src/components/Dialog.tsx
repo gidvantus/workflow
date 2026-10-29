@@ -90,11 +90,14 @@ export default function Dialog({
         return;
       }
       const active = document.activeElement;
-      // Tab с последнего элемента уходит на первый и наоборот — фокус не покидает окно.
-      if (event.shiftKey && (active === first || active === dialog)) {
+      const activeInside = active !== null && dialog.contains(active);
+      // Tab с последнего элемента уходит на первый и наоборот. Если фокус уже выбило
+      // наружу (например, кликом по подложке во время запроса), он затягивается обратно:
+      // `aria-modal="true"` обещает, что остальная страница инертна.
+      if (event.shiftKey && (active === first || active === dialog || !activeInside)) {
         event.preventDefault();
         last.focus();
-      } else if (!event.shiftKey && active === last) {
+      } else if (!event.shiftKey && (active === last || !activeInside)) {
         event.preventDefault();
         first.focus();
       }
