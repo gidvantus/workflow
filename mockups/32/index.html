@@ -12,12 +12,15 @@
        */
       :root {
         --canvas: #e8e6e0;
+        --chrome: #fcfbf8;
+        --rail: #edebe4;
+        --band: #f2f0ea;
         --shell: #f7f6f3;
         --panel: #ffffff;
         --line: #ece9e2;
         --border: #e4e1d9;
         --ink: #17170f;
-        --muted: #77756c;
+        --muted: #6f6d64;
         --muted-2: #9c9a90;
         --dark: #1b1b16;
         --dark-hover: #2e2e26;
@@ -81,7 +84,7 @@
         display: grid;
         grid-template-columns: 15.5rem minmax(0, 1fr);
         min-height: 0;
-        background-color: var(--shell);
+        background-color: var(--chrome);
         border: 1px solid var(--border);
         border-radius: 1.125rem;
         box-shadow: 0 30px 60px -48px rgba(23, 23, 15, 0.55);
@@ -95,7 +98,7 @@
         flex-direction: column;
         gap: 1.75rem;
         padding: 1.25rem 1rem 1rem;
-        background-color: var(--panel);
+        background-color: var(--rail);
         border-right: 1px solid var(--border);
       }
 
@@ -142,7 +145,7 @@
         font-weight: 500;
         letter-spacing: 0.08em;
         text-transform: uppercase;
-        color: var(--muted-2);
+        color: var(--muted);
       }
 
       .nav__item {
@@ -161,12 +164,12 @@
 
       .nav__item:hover {
         color: var(--ink);
-        background-color: var(--shell);
+        background-color: rgba(255, 255, 255, 0.65);
       }
 
       .nav__item[aria-current='page'] {
         color: var(--ink);
-        background-color: var(--shell);
+        background-color: var(--panel);
         border-color: var(--border);
       }
 
@@ -180,7 +183,7 @@
         font-size: 0.6875rem;
         font-weight: 500;
         color: var(--muted);
-        background-color: var(--panel);
+        background-color: var(--band);
         border: 1px solid var(--border);
         border-radius: 999px;
       }
@@ -194,7 +197,7 @@
         justify-content: space-between;
         gap: 0.75rem 1rem;
         padding: 0.875rem 1.5rem;
-        background-color: var(--panel);
+        background-color: var(--chrome);
         border-bottom: 1px solid var(--border);
       }
 
@@ -392,7 +395,8 @@
         font-weight: 500;
         letter-spacing: 0.08em;
         text-transform: uppercase;
-        color: var(--muted-2);
+        color: #6b6a61;
+        background-color: var(--band);
         border-bottom: 1px solid var(--line);
       }
 
