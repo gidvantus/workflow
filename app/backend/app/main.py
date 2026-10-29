@@ -1,9 +1,10 @@
-"""Точка входа FastAPI: приложение и ручка здоровья `/api/health`."""
+"""Точка входа FastAPI: приложение, ручка здоровья `/api/health` и ручки проектов."""
 
 from fastapi import FastAPI, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from app.api import projects
 from app.config import get_settings
 from app.db import check_db
 
@@ -36,8 +37,13 @@ def create_app() -> FastAPI:
     application = FastAPI(
         title="APP API",
         version=settings.version,
-        description="Каркас приложения: пока только проверка живости сервиса и базы.",
+        description=(
+            "API приложения: живость сервиса и базы, а также экран «Проекты» — "
+            "список живых проектов, создание, правка и мягкое удаление (soft delete)."
+        ),
     )
+
+    application.include_router(projects.router)
 
     @application.get(
         f"{API_PREFIX}/health",

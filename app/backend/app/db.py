@@ -1,7 +1,10 @@
-"""Подключение к базе данных и проверка её доступности."""
+"""Подключение к базе данных, фабрика сессий и проверка её доступности."""
+
+from collections.abc import Iterator
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.config import get_settings
 
@@ -15,6 +18,24 @@ engine = create_engine(
     pool_pre_ping=True,
     connect_args={"connect_timeout": CONNECT_TIMEOUT_SECONDS},
 )
+
+
+class Base(DeclarativeBase):
+    """Базовый класс моделей: по нему alembic собирает метаданные таблиц."""
+
+
+# `expire_on_commit=False`: после `commit()` ручка отдаёт объект без лишнего запроса,
+# а `autoflush=False` — чтобы ручка управляла сбросом изменений сама, а не на каждом select.
+SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+
+
+def get_db() -> Iterator[Session]:
+    """Сессия на один запрос: закрывается в `finally`, даже если ручка упала."""
+    session = SessionLocal()
+    try:
+        yield session
+    finally:
+        session.close()
 
 
 def check_db() -> bool:
