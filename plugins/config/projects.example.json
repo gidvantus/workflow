@@ -61,7 +61,8 @@
       },
       "telegram": {
         "token": "<токен бота>",
-        "chatId": 0
+        "chatId": 0,
+        "projects": ["brain"]
       }
     },
     "workflow": {
