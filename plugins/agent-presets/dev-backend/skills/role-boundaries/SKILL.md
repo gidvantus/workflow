@@ -10,7 +10,7 @@ description: Use before editing any file in this project — which paths belong 
 
 ## Твоя половина
 
-Твой каталог — `project_info.areas.backend`. Это единственный источник истины:
+Твой каталог — `areas.backend` проекта из реестра. Это единственный источник истины:
 у одного проекта половина лежит в `backend/` и `operator/backend/`, у другого — в
 `crates/` и `web/server/`, у третьего — в `app/api/`.
 
@@ -18,11 +18,11 @@ description: Use before editing any file in this project — which paths belong 
   твой, как `backend/app/main.py`. Вложенное приложение — не чужое дерево.
 - Контракт: OpenAPI-схема и общие DTO/типы. Ты их пишешь, фронтенд читает.
 - Если проект не задал `areas`, работает запасной список `backend/`, `api/`,
-  `app/backend/`, `app/api/` — но сначала посмотри, что вернул `project_info`.
+  `app/backend/`, `app/api/` — но сначала посмотри, что записано в `areas` у проекта.
 
 ## Не твоя половина
 
-Всё, что `project_info.areas.frontend` объявляет, — чужое: компоненты, стили,
+Всё, что `areas.frontend` проекта из реестра объявляет, — чужое: компоненты, стили,
 клиентское состояние, клиентские тесты. Не править даже ради «чтобы работало
 end-to-end».
 

@@ -49,8 +49,8 @@
 | `department` | включённость, окна смен, `maxRework` |
 | `labels` | переопределение имён меток конвейера, если проект их переименовал |
 
-Инструмент `project_info` определяет проект по рабочей области сессии и отдаёт
-эти значения агенту. Поэтому в персонах и скиллах вместо адресов стоят
+Значения берутся из записи проекта в реестре по полю `workspace`: роль открывает
+`projects.json` и находит свою запись, поэтому в персонах и скиллах вместо адресов стоят
 заполнители `<repo>`, `<base>`, `<workspace>`, `<humanClone>`, `<composeProject>`,
 `<frontendPort>`, `<apiPort>`, `<artifacts>`, `<id>` — один и тот же пресет
 работает в любом проекте реестра.
@@ -184,8 +184,9 @@
 
 Метки должны **существовать в репозитории**: поставить метку, которой там нет,
 GitHub не даст (422), и шаг конвейера упадёт. Набор меток один для всех ролей, его
-отдаёт `project_info.labels`, а проверяют и создают
-`plugins/tools/pipeline-labels-probe.mjs` и `plugins/tools/pipeline-labels-create.mjs`.
+отдаёт `labels` записи проекта в реестре, а `projectRow` подставляет набор по
+умолчанию. Проверяют и создают `plugins/tools/pipeline-labels-probe.mjs` и
+`plugins/tools/pipeline-labels-create.mjs`.
 
 Приоритет выбора задачи: сначала ступень макета (`needs-mockup` без
 `mockups-ready`), затем активные (`for-code-review` → `ready-for-test` →

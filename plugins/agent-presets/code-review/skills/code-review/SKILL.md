@@ -1,17 +1,29 @@
 ---
 name: code-review
-description: Use when reviewing a change, a branch or a pull request in this project — the order of work, what to check, the evidence rules, the exact comments this role writes back into the pull request, and the verdict line. It binds the `ponytail-review` method to the project's `project_info` placeholders.
+description: Use when reviewing a change, a branch or a pull request in this project — the order of work, what to check, the evidence rules, the exact comments this role writes back into the pull request, and the verdict line. It binds the `ponytail-review` method to the project's placeholders (the project is resolved from the registry by the working directory).
 ---
 
-> **Проект.** Репозиторий, базовая ветка, рабочая копия проекта, защищённый клон человека,
-> имя compose-проекта, порты стенда и каталог артефактов принадлежат проекту: они лежат в реестре проектов отдела
-> `~/.dsh/profiles/desktop/dsh-dev-department/projects.json`, а проект определяется по рабочей области сессии. Перед первым действием
-> вызови инструмент `project_info` и подставь его значения вместо заполнителей, встречающихся ниже:
-> `<repo>`, `<base>`, `<workspace>`, `<humanClone>`, `<composeProject>`, `<frontendPort>`, `<apiPort>`,
-> `<artifacts>`, `<id>`.
-> Пустое `<humanClone>` значит, что защищённого клона нет и рабочая область и есть каталог человека.
-> Пустой `<repo>` значит, что проект не связан с GitHub — инструменты `mcp__github__*` на нём откажут.
-> Ничего не выводи из памяти и не подставляй значения по умолчанию.
+> **Проект.** Репозиторий, базовая ветка, рабочая копия проекта, защищённый клон человека, имя
+> compose-проекта, порты стенда, каталог артефактов и имена меток принадлежат проекту, а не этому
+> скиллу: они лежат в реестре проектов отдела — файле
+> `<DSH_HOME>/profiles/desktop/dsh-dev-department/projects.json` (`DSH_HOME` — каталог установки
+> DSH: `$env:DSH_HOME`, а если переменная не задана — `~/.dsh`; каталог для этого пути считает
+> `plugins/state-paths.mjs`). Перед первым действием открой этот файл, найди запись, у которой
+> `workspace` совпадает с твоей рабочей областью (пути — без учёта регистра и лишних слэшей), и
+> подставь значения её полей вместо заполнителей ниже: `<repo>`, `<base>`, `<workspace>`,
+> `<humanClone>`, `<composeProject>`, `<frontendPort>`, `<apiPort>`, `<artifacts>`, `<id>`,
+> `labels`, `areas`.
+> В отчёт, комментарий и артефакты идут только перечисленные поля; блок `telegram` и файл
+> целиком не копируй.
+> Чего проект не задал, у того есть умолчания диспетчера (`projectRow` в
+> `plugins/dev-department.mjs`): `base` — `main`, `composeProject` — `id`, `frontendPort` —
+> `8080`, `apiPort` — `8001`, `artifacts` — `<workspace>-artifacts`, `labels` — набор по умолчанию
+> плюс переопределения проекта.
+> Пустое `<humanClone>` значит, что защищённого клона нет и рабочая область и есть каталог
+> человека. Пустой `<repo>` значит, что проект не связан с GitHub — инструменты `mcp__github__*`
+> на нём откажут.
+> Ничего не выводи из памяти и не подставляй значения по умолчанию. Если твоей рабочей области в
+> реестре нет — не подставляй чужой проект: скажи об этом человеку и остановись.
 
 # Code review
 
