@@ -10,7 +10,7 @@ description: Use before editing any file in this project — which paths belong 
 
 ## Твоя половина
 
-Твой каталог — `project_info.areas.frontend`. Это единственный источник истины:
+Твой каталог — `areas.frontend` проекта из реестра. Это единственный источник истины:
 у одного проекта половина лежит в `frontend/` и `operator/frontend/`, у другого — в
 `web/web/` и `desktop/`, у третьего — в `app/web/`.
 
@@ -18,11 +18,11 @@ description: Use before editing any file in this project — which paths belong 
   твой, как `frontend/src/App.tsx`. Вложенное приложение — не чужое дерево.
 - `data-testid` на всё, что будет выбирать тестировщик. Никаких позиционных CSS-цепочек.
 - Если проект не задал `areas`, работает запасной список `frontend/`, `web/`,
-  `app/frontend/`, `app/web/` — но сначала посмотри, что вернул `project_info`.
+  `app/frontend/`, `app/web/` — но сначала посмотри, что записано в `areas` у проекта.
 
 ## Не твоя половина
 
-Всё, что `project_info.areas.backend` объявляет, — чужое: обработчики, сервисы, модели,
+Всё, что `areas.backend` проекта из реестра объявляет, — чужое: обработчики, сервисы, модели,
 миграции, сиды. Контракт (OpenAPI-схема, общие DTO/типы) только читаешь: владелец —
 бэкенд-разработчик.
 

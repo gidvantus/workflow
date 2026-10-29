@@ -3,15 +3,25 @@ name: security-review
 description: Use when reviewing a change, a pull request or the running configuration for security — threat surface, authorization, injection, secrets, dependencies and containers, plus the severity scheme, the evidence rules and the exact report format this role hands back to the issue.
 ---
 
-> **Проект.** Репозиторий, базовая ветка, рабочая копия отдела, защищённый клон человека,
-> имя compose-проекта, порты стенда и метки конвейера принадлежат проекту: они лежат в реестре проектов отдела
-> `~/.dsh/profiles/desktop/dsh-dev-department/projects.json`, а проект определяется по рабочей области сессии. Перед первым действием
-> вызови инструмент `project_info` и подставь его значения вместо заполнителей, встречающихся ниже:
-> `<repo>`, `<base>`, `<workspace>`, `<humanClone>`, `<composeProject>`, `<frontendPort>`, `<apiPort>`,
-> `<artifacts>`, `<id>`. Метки конвейера берутся из `project_info.labels`, если проект их переопределяет.
-> Пустое `<humanClone>` значит, что защищённого клона нет и рабочая область и есть каталог человека.
-> Пустой `<repo>` значит, что проект не связан с GitHub — инструменты `mcp__github__*` на нём откажут.
-> Ничего не выводи из памяти и не подставляй значения по умолчанию.
+> **Проект.** Репозиторий, базовая ветка, рабочая копия отдела, защищённый клон человека, имя
+> compose-проекта, порты стенда, каталог артефактов и метки конвейера принадлежат проекту, а не
+> этому скиллу: они лежат в реестре проектов отдела — файле
+> `<DSH_HOME>/profiles/desktop/dsh-dev-department/projects.json` (`DSH_HOME` — каталог установки
+> DSH: `$env:DSH_HOME`, а если переменная не задана — `~/.dsh`; каталог для этого пути считает
+> `plugins/state-paths.mjs`). Перед первым действием открой этот файл, найди запись, у которой
+> `workspace` совпадает с твоей рабочей областью (пути — без учёта регистра и лишних слэшей), и
+> подставь значения её полей вместо заполнителей ниже: `<repo>`, `<base>`, `<workspace>`,
+> `<humanClone>`, `<composeProject>`, `<frontendPort>`, `<apiPort>`, `<artifacts>`, `<id>`,
+> `labels`, `areas`.
+> Чего проект не задал, у того есть умолчания диспетчера (`projectRow` в
+> `plugins/dev-department.mjs`): `base` — `main`, `composeProject` — `id`, `frontendPort` —
+> `8080`, `apiPort` — `8001`, `artifacts` — `<workspace>-artifacts`, `labels` — набор по умолчанию
+> плюс переопределения проекта.
+> Пустое `<humanClone>` значит, что защищённого клона нет и рабочая область и есть каталог
+> человека. Пустой `<repo>` значит, что проект не связан с GitHub — инструменты `mcp__github__*`
+> на нём откажут.
+> Ничего не выводи из памяти и не подставляй значения по умолчанию. Если твоей рабочей области в
+> реестре нет — не подставляй чужой проект: скажи об этом человеку и остановись.
 
 # Security review
 
