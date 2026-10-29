@@ -11,6 +11,8 @@ description: Use when the department asks the design role for a MOCKUP during ta
 > которой `workspace` совпадает с твоей рабочей областью (пути — без учёта регистра и лишних
 > слэшей), и подставь значения её полей вместо заполнителей `<repo>`, `<base>`, `<workspace>`,
 > `<humanClone>`, `<artifacts>`.
+> В отчёт, комментарий и артефакты идут только перечисленные поля; блок `telegram` и файл
+> целиком не копируй.
 > Чего проект не задал, у того есть умолчания диспетчера (`projectRow` в
 > `plugins/dev-department.mjs`): `base` — `main`, `composeProject` — `id`, `frontendPort` —
 > `8080`, `apiPort` — `8001`, `artifacts` — `<workspace>-artifacts`, `labels` — набор по
