@@ -9,7 +9,9 @@
 //  - голосовые/аудио/кружки: getFile → ffmpeg → whisper, распознавание идёт
 //    в фоне и НЕ блокирует процесс DSH; текст уходит в активный диалог;
 //  - запросы разрешений (approval/request) приходят в бот с кнопками;
-//  - создание новой сессии в проекте (agents.create + attach).
+//  - создание новой сессии в проекте (agents.create + attach);
+//  - видимость проектов: что бот ПОКАЗЫВАЕТ, задаёт реестр (`telegram.projects`
+//    и проект `default`), а где он РАБОТАЕТ — по-прежнему roots проекта.
 
 import https from 'node:https'
 import fs from 'node:fs'
@@ -47,11 +49,17 @@ function normalizePath(value) {
 // Проекты: id, название, рабочая область и, если задан, свой бот. Путь реестра
 // называет модуль состояния: он же читает легаси-место в корне каталога установки,
 // пока файл не перенесён на запись.
+//
+// Здесь же читается видимость: `default` реестра — проект, чей бот смотрит за
+// всеми, и `telegram.projects` — необязательный массив id проектов, которые видит
+// конкретный бот. Это свойства записи реестра, а не кода: привязку «проект → бот»
+// человек расширяет правкой projects.json.
 function readProjectsRegistry() {
   const raw = readJsonConfig(readStateFile(STATE_FILES.projects))
-  const projects = (raw && raw.projects) || {}
-  return Object.keys(projects).map((id) => {
-    const row = projects[id] || {}
+  const source = (raw && raw.projects) || {}
+  const defaultId = raw && typeof raw.default === 'string' && raw.default ? raw.default : undefined
+  const projects = Object.keys(source).map((id) => {
+    const row = source[id] || {}
     const tg = row.telegram && typeof row.telegram === 'object' ? row.telegram : undefined
     const bot = tg && tg.token && tg.chatId
       ? { token: String(tg.token), chatId: tg.chatId, voiceLang: tg.voiceLang ? String(tg.voiceLang) : undefined }
@@ -64,22 +72,71 @@ function readProjectsRegistry() {
       // Корни проекта: рабочая копия отдела и каталог человека. Сессия может
       // стоять в любом из них — оба принадлежат проекту.
       roots: [String(row.workspace || ''), String(row.humanClone || '')].filter(Boolean),
+      // Явный список видимых проектов. Нет поля — пустой массив, а не «видит
+      // всё»: правило «видит всё» принадлежит только проекту default.
+      telegramProjects: tg ? distinctProjects(tg.projects) : [],
       bot,
     }
   })
+  return { projects, defaultId }
+}
+
+// id проектов из telegram.projects: только непустые строки, без повторов.
+function distinctProjects(values) {
+  const ids = []
+  if (!Array.isArray(values)) return ids
+  for (const value of values) {
+    if (typeof value !== 'string') continue
+    const id = value.trim()
+    if (!id || ids.indexOf(id) !== -1) continue
+    ids.push(id)
+  }
+  return ids
 }
 
 // Список ботов для опроса: по одному на проект со своим ботом. Токен,
 // указанный у двух проектов, опрашивается один раз: владельцем становится
 // первый по порядку реестра.
-function buildBots(projects) {
+//
+// Видимость считается здесь, один раз на старте: свой проект всегда первый,
+// дальше перечисленные в telegram.projects. Неизвестный id отбрасывается (у него
+// нет корней) и называется в логе — иначе бот молча показывал бы меньше, чем
+// человек написал в реестре.
+function buildBots({ projects, defaultId }) {
+  const byId = new Map(projects.map((project) => [project.id, project]))
   const bots = []
   const seen = new Set()
   for (const project of projects) {
     if (!project.bot) continue
     if (seen.has(project.bot.token)) continue
     seen.add(project.bot.token)
-    bots.push({ key: project.id, projectId: project.id, roots: project.roots, defaultCwd: project.workspace, ...project.bot })
+    const unknown = project.telegramProjects.filter((id) => !byId.has(id))
+    if (unknown.length > 0) {
+      console.warn('[tg-bridge] бот "' + project.id + '": в telegram.projects неизвестные проекты: ' + unknown.join(', '))
+    }
+    const visibleIds = [project.id]
+    for (const id of project.telegramProjects) {
+      if (id === project.id || visibleIds.indexOf(id) !== -1) continue
+      if (!byId.has(id)) continue
+      visibleIds.push(id)
+    }
+    const visibleRoots = []
+    for (const id of visibleIds) {
+      for (const root of (byId.get(id).roots || [])) if (root) visibleRoots.push(root)
+    }
+    bots.push({
+      key: project.id,
+      projectId: project.id,
+      roots: project.roots,
+      defaultCwd: project.workspace,
+      // Явный список сильнее правила default: у проекта из default с непустым
+      // telegram.projects видимость сужена до своего проекта плюс перечисленных.
+      isDefault: project.id === defaultId,
+      explicitProjects: project.telegramProjects,
+      visibleIds,
+      visibleRoots,
+      ...project.bot,
+    })
   }
   return bots
 }
@@ -234,14 +291,15 @@ export default {
       return
     }
 
-    const projects = readProjectsRegistry()
-    const bots = buildBots(projects)
+    const registry = readProjectsRegistry()
+    const projects = registry.projects
+    const bots = buildBots(registry)
     if (bots.length === 0) {
       console.error('[tg-bridge] нет ни одного бота: в проектах реестра не задан telegram (token и chatId)')
       return
     }
 
-    const bridges = bots.map((bot) => buildBridge(ctx, bot))
+    const bridges = bots.map((bot) => buildBridge(ctx, bot, projects))
     const byToken = new Map(bridges.map((bridge) => [bridge.token, bridge]))
 
     const withoutBot = projects.filter((project) => !project.bot)
@@ -304,7 +362,8 @@ export default {
     }, { prepend: true })
 
     // У каждого бота свой опрос: свои offset, активный диалог и счётчики.
-    for (const bridge of bridges) {
+    for (const bot of bots) {
+      const bridge = byToken.get(bot.token)
       bridge.cleanTmp()
       ctx.effect(() => ctx.interval(async () => {
         if (bridge.polling) return
@@ -317,6 +376,13 @@ export default {
           bridge.polling = false
         }
       }, 1000), 'tg-bridge:poll:' + bridge.key)
+      // Сценарий привязки виден без чтения кода: одна строка на бота. У бота из
+      // default без явного списка видимость — весь реестр, поэтому называем все
+      // его проекты: иначе лог утверждал бы обратное тому, что показывает бот.
+      const logged = bot.isDefault && bot.explicitProjects.length === 0
+        ? projects.map((project) => project.id)
+        : bridge.visibleIds
+      console.log('[tg-bridge] бот "' + bridge.key + '" видит проекты: ' + logged.join(', '))
       console.log('[tg-bridge] бот "' + bridge.key + '" запущен')
     }
   },
@@ -325,8 +391,9 @@ export default {
 // Один мост = один бот. Всё состояние (offset, активный диалог, очередь медиа,
 // ожидающие разрешения и вопросы) принадлежит этому вызову и не делится с
 // другими ботами.
-function buildBridge(ctx, bot) {
+function buildBridge(ctx, bot, projects) {
     const agents = ctx.get('agents')
+    const projectsById = new Map((projects || []).map((project) => [project.id, project]))
     const workspaceRegistry = ctx.get('workspaceRegistry')
     const sessionQuery = ctx.get('sessionQuery')
     const agentDefaultModel = ctx.get('agentDefaultModel')
@@ -649,6 +716,69 @@ function buildBridge(ctx, bot) {
       })
     }
 
+    // ----- видимость проектов -----
+    // Одно правило на весь мост. Видимость отвечает на вопрос «что бот
+    // ПОКАЗЫВАЕТ»: список проектов, /sessions, фолбэк «диалоги проекта»,
+    // проект для /new. Где бот РАБОТАЕТ — по-прежнему roots проекта
+    // (belongsToBot): расширять маршрут видимостью нельзя, иначе ответ одной
+    // сессии пришёл бы в два чата.
+    function pathUnder(pathValue, roots) {
+      const wanted = normalizePath(pathValue)
+      if (!wanted) return false
+      return (roots || []).some((candidate) => {
+        const root = normalizePath(candidate)
+        return root !== '' && (wanted === root || wanted.indexOf(root + '\\') === 0)
+      })
+    }
+
+    // Явный список сильнее правила default: у проекта из default с непустым
+    // telegram.projects видимость сужена до своего проекта плюс перечисленных.
+    const seesAll = bot.isDefault && (!bot.explicitProjects || bot.explicitProjects.length === 0)
+
+    // Области, которые бот показывает. Принадлежность — по объединению корней
+    // видимых проектов (`visibleRoots`, считается один раз в `buildBots`), так
+    // что сужение `telegram.projects` сужает и показ. Порядок — отдельно:
+    // сначала области своего проекта, затем остальных в порядке `visibleIds`;
+    // внутри проекта — порядок `workspaceRegistry.list()`, чтобы список не
+    // скакал между перезапусками.
+    function visibleWorkspaces() {
+      const all = workspaceRegistry ? workspaceRegistry.list() : []
+      if (!Array.isArray(all) || all.length === 0) return []
+      if (seesAll) return all.slice()
+      const visible = all.filter((w) => w && pathUnder(w.path, bot.visibleRoots))
+      const picked = []
+      const used = new Set()
+      for (const id of bot.visibleIds || []) {
+        const project = projectsById.get(id)
+        if (!project) continue
+        for (const w of visible) {
+          if (used.has(w.id)) continue
+          if (!pathUnder(w.path, project.roots)) continue
+          used.add(w.id)
+          picked.push(w)
+        }
+      }
+      return picked
+    }
+
+    // Видна ли область этому боту: этим проверяют кнопки и callback'и, чтобы
+    // протухшая клавиатура не открывала проект, которого бот уже не показывает.
+    function inVisibleScope(workspaceId) {
+      const id = String(workspaceId || '')
+      if (!id) return false
+      return visibleWorkspaces().some((w) => w && w.id === id)
+    }
+
+    // Своя область: только в ней создаются сессии и переключаются диалоги.
+    // Видимость этого права не даёт — чужой проект открывается на чтение.
+    function isOwnWorkspace(w) {
+      return !!w && pathUnder(w.path, bot.roots)
+    }
+
+    // Тексты отказов дословные: их читает человек в ответ на нажатие.
+    function otherBotProjectText() { return 'Проект другого бота — откройте его в боте этого проекта' }
+    function otherBotDialogText() { return 'Диалог другого бота — откройте его в боте этого проекта' }
+
     async function resolveTarget() {
       if (target && belongsToBot(target)) return target
       target = undefined
@@ -773,7 +903,8 @@ function buildBridge(ctx, bot) {
     function projectUnread(ids) { let t = 0; for (const id of ids) t += unreadOf(id); return t }
 
     async function projectsPayload() {
-      const ws = workspaceRegistry ? workspaceRegistry.list() : []
+      // Только видимые области: счётчик в заголовке считает ровно их.
+      const ws = visibleWorkspaces()
       if (!ws || ws.length === 0) return { text: '📂 Проектов пока нет.', rows: [] }
       const rows = []
       let anyUnread = false
@@ -792,18 +923,23 @@ function buildBridge(ctx, bot) {
     async function sessionsPayload(workspaceId) {
       const w = workspaceRegistry ? workspaceRegistry.get(workspaceId) : undefined
       if (!w) return { text: '❌ Проект не найден.', rows: [] }
+      // Видимость даёт чтение, но не работу: в чужом проекте нет ни создания
+      // сессии, ни переключения диалога — остаются история и возврат к списку.
+      const workable = isOwnWorkspace(w)
       const allIds = (w.sessionIds || []).slice(0, 30)
       // Показываем ТОЛЬКО открытые диалоги: закрытые скрыты, чтобы список
       // оставался рабочим списком, а не архивом.
       const ids = allIds.filter((id) => agents.get(id) !== undefined)
       const head = '📂 ' + clip(w.title || w.path, 60) + '\n' + clip(w.path, 60)
+      const backRow = [{ text: '⬅️ Проекты', callback_data: 'back:projects' }]
+      const newRow = [{ text: '➕ Новая сессия', callback_data: 'new:' + w.id }]
       if (ids.length === 0) {
+        const rows = []
+        if (workable) rows.push(newRow)
+        rows.push(backRow)
         return {
-          text: head + '\n\n(открытых диалогов нет)',
-          rows: [
-            [{ text: '➕ Новая сессия', callback_data: 'new:' + w.id }],
-            [{ text: '⬅️ Проекты', callback_data: 'back:projects' }],
-          ],
+          text: head + '\n\n(открытых диалогов нет)' + (workable ? '' : '\n📖 Проект другого бота — только чтение.'),
+          rows,
         }
       }
       const obs = await sessionQuery.readTitleSnapshots(ids)
@@ -817,19 +953,31 @@ function buildBridge(ctx, bot) {
         lastSessions.push({ sessionId: sid })
         const u = unreadOf(sid)
         if (u > 0) anyUnread = true
-        // ▶️ — диалог, в который сейчас уходят сообщения бота.
-        const icon = target !== undefined && sid === target.id ? '▶️' : '🟢'
-        rows.push([{ text: icon + ' ' + clip(byId[sid] || '(без названия)', 40) + (u > 0 ? ' 🔔' + u : ''), callback_data: 'use:' + sid }])
+        // ▶️ — диалог, в который сейчас уходят сообщения бота. У чужого проекта
+        // активного диалога нет, поэтому там 📜: кнопка открывает только историю.
+        const icon = workable ? (target !== undefined && sid === target.id ? '▶️' : '🟢') : '📜'
+        const label = clip(byId[sid] || '(без названия)', 40) + (u > 0 ? ' 🔔' + u : '')
+        rows.push([{ text: icon + ' ' + label, callback_data: workable ? 'use:' + sid : 'hist:' + sid + ':10' }])
       }
-      rows.push([{ text: '➕ Новая сессия', callback_data: 'new:' + w.id }])
-      rows.push([{ text: '⬅️ Проекты', callback_data: 'back:projects' }])
+      if (workable) rows.push(newRow)
+      rows.push(backRow)
       const summary = '\n\n🟢 открытых диалогов: ' + ids.length +
         (anyUnread ? '\n🔔 новые ответы в ' + ids.filter((s) => unreadOf(s) > 0).length + ' диалогах' : '') +
-        '\n\n▶️ — активный диалог. Нажмите, чтобы переключиться:'
+        (workable
+          ? '\n\n▶️ — активный диалог. Нажмите, чтобы переключиться:'
+          : '\n\n📖 Проект другого бота — открыть можно только историю:')
       return { text: head + summary, rows }
     }
 
     async function switchTarget(sessionId) {
+      // Переключать диалог можно только в своей области: видимость даёт чтение
+      // (hist:), но не работу. Проверка стоит здесь, а не в вызывающих, потому
+      // что входов два — callback `use:` и команда `/use <номер>`; одна копия
+      // правила закрывает оба. Номер в `/use` берётся из того же видимого
+      // списка, где чужие диалоги показаны только для истории, поэтому без этой
+      // проверки «только чтение» обходилось бы двумя нажатиями и цифрой.
+      const owner = workspaceOfSession(sessionId)
+      if (owner && !isOwnWorkspace(owner)) return { ok: false, denied: true, error: otherBotDialogText() }
       const live = agents.get(sessionId)
       if (live) { target = live; unread.delete(sessionId); return { ok: true, note: 'live' } }
       try {
@@ -878,10 +1026,18 @@ function buildBridge(ctx, bot) {
 
     function workspaceForNewSession() {
       if (!workspaceRegistry) return undefined
-      const ws = workspaceRegistry.list()
-      return (target ? workspaceOfSession(target.id) : undefined) ||
-        ws.filter((w) => w.path === cwd)[0] ||
-        ws[0]
+      // Ищем только среди видимых и только среди СВОИХ: видимость не даёт права
+      // завести сессию в чужом проекте. Видимых своих нет — undefined, и /new
+      // честно отвечает отказом, а не создаёт сессию в первом попавшемся каталоге
+      // (раньше последним вариантом был ws[0] всего реестра).
+      const ws = visibleWorkspaces()
+      const own = ws.filter(isOwnWorkspace)
+      if (own.length === 0) return undefined
+      const current = target ? workspaceOfSession(target.id) : undefined
+      if (current && isOwnWorkspace(current)) return current
+      const byPath = ws.filter((w) => w.path === cwd && isOwnWorkspace(w))[0]
+      if (byPath) return byPath
+      return own[0]
     }
 
     function presetsListText(presets) {
@@ -975,7 +1131,9 @@ function buildBridge(ctx, bot) {
 
     async function sessionsText(arg) {
       if (!workspaceRegistry || !sessionQuery) return 'Сервис проектов/сессий недоступен.'
-      const ws = workspaceRegistry.list()
+      // Номер N в /sessions N — номер в ВИДИМОМ списке, иначе бот чужого проекта
+      // открывал бы по счёту диалоги проекта, которого не показывает.
+      const ws = visibleWorkspaces()
       if (!ws || ws.length === 0) return '📂 Проектов пока нет.'
       lastSessions = []
       const n = parseInt(arg, 10)
@@ -1008,6 +1166,8 @@ function buildBridge(ctx, bot) {
       if (Number.isInteger(num) && num >= 1 && num <= lastSessions.length) sessionId = lastSessions[num - 1].sessionId
       if (!sessionId || sessionId.indexOf('session-') !== 0) return '❓ Укажите sessionId или номер из /sessions.\nПример: /use session-123 или /use 2'
       const r = await switchTarget(sessionId)
+      // Чужой диалог не открывается — ни кнопкой, ни номером из /sessions.
+      if (r.denied) return r.error
       if (!r.ok) return '❌ Не удалось открыть сессию ' + sessionId + ': ' + r.error
       const view = await buildActivation(sessionId)
       let out = view.text
@@ -1135,6 +1295,9 @@ function buildBridge(ctx, bot) {
           const wid = data.slice(4)
           const w = workspaceRegistry ? workspaceRegistry.get(wid) : undefined
           if (!w) { await answerCallback(cb.id, 'Проект не найден'); return true }
+          // Завести сессию можно только в своей области: чужая видна, но не
+          // работает. Протухшая клавиатура получает отказ без перехода.
+          if (!isOwnWorkspace(w)) { await answerCallback(cb.id, otherBotProjectText()); return true }
           // Пресеты пользователя — первыми: именно они нужны для ролей.
           const presets = (agentPresets ? await agentPresets.list().catch(() => []) : []).slice().sort((a, b) => {
             const ua = a.trust === 'user' ? 0 : 1
@@ -1164,6 +1327,7 @@ function buildBridge(ctx, bot) {
           const w = workspaceRegistry ? workspaceRegistry.get(rest.slice(0, colon)) : undefined
           const presetId = rest.slice(colon + 1)
           if (!w) { await answerCallback(cb.id, 'Проект не найден'); return true }
+          if (!isOwnWorkspace(w)) { await answerCallback(cb.id, otherBotProjectText()); return true }
           // Пресет могли удалить между показом кнопок и нажатием — тогда честно
           // отказываем, а не создаём молча сессию на пресете по умолчанию.
           if (agentPresets) {
@@ -1183,6 +1347,7 @@ function buildBridge(ctx, bot) {
         if (data.indexOf('newd:') === 0) {
           const w = workspaceRegistry ? workspaceRegistry.get(data.slice(5)) : undefined
           if (!w) { await answerCallback(cb.id, 'Проект не найден'); return true }
+          if (!isOwnWorkspace(w)) { await answerCallback(cb.id, otherBotProjectText()); return true }
           await answerCallback(cb.id, 'Создаю…')
           try {
             const agent = await createSessionIn(w, undefined)
@@ -1216,7 +1381,11 @@ function buildBridge(ctx, bot) {
           return true
         }
         if (data.indexOf('proj:') === 0) {
-          const payload = await sessionsPayload(data.slice(5))
+          const wid = data.slice(5)
+          // Проект, которого бот не показывает (клавиатура из прежней привязки
+          // реестра), не открывается: отказ без перехода.
+          if (!inVisibleScope(wid)) { await answerCallback(cb.id, otherBotProjectText()); return true }
+          const payload = await sessionsPayload(wid)
           await answerCallback(cb.id, payload.rows.length ? 'Открываю…' : 'Нет сессий')
           if (messageId !== undefined) await editMessage(chatId, messageId, payload.text, payload.rows)
           else await sendKeyboard(chatId, payload.text, payload.rows)
@@ -1224,8 +1393,10 @@ function buildBridge(ctx, bot) {
         }
         if (data.indexOf('use:') === 0) {
           const sid = data.slice(4)
+          // Отказ чужому диалогу живёт в switchTarget — одним правилом на
+          // callback и на команду /use, а не копией здесь.
           const r = await switchTarget(sid)
-          if (!r.ok) { await answerCallback(cb.id, 'Ошибка: ' + clip(r.error, 180)); return true }
+          if (!r.ok) { await answerCallback(cb.id, r.denied ? r.error : 'Ошибка: ' + clip(r.error, 180)); return true }
           const view = await buildActivation(sid)
           await answerCallback(cb.id, '✅ Переключено')
           await presentActivation(chatId, messageId, view)
@@ -1238,7 +1409,9 @@ function buildBridge(ctx, bot) {
           if (agent && agent.session && agent.session.header && agent.session.header.cwd) {
             const norm = (p) => String(p || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
             const cur = norm(agent.session.header.cwd)
-            const ws = workspaceRegistry ? workspaceRegistry.list() : []
+            // Фолбэк ищет проект в видимом списке: у чужого проекта тот же
+            // список «📂 Проекты», что и в кнопке.
+            const ws = visibleWorkspaces()
             const found = ws.find((x) => norm(x.path) === cur)
             if (found) wid = found.id
           }
@@ -1427,6 +1600,7 @@ function buildBridge(ctx, bot) {
       key: bot.key,
       token: bot.token,
       projectId: bot.projectId,
+      visibleIds: bot.visibleIds || [],
       polling: false,
       cleanTmp: cleanTmpDir,
       tick: async () => {
