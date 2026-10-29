@@ -1,14 +1,21 @@
 /**
  * Клиент API проектов.
  *
- * Путь относительный: страницу отдаёт nginx, он же проксирует `/api/` в сервис `api`.
- * Хост и порт стенда в коде не зашиты — их задаёт окружение compose-проекта, поэтому
- * CORS фронту не нужен.
+ * Общая часть запроса — таймаут, разбор `detail` и собственный текст недоступного api —
+ * живёт в `http.ts`: раздела два, и расходиться в мелочах они не должны.
  *
  * Тексты отказов — часть контракта: сервер присылает их в `detail`, и они показываются
- * пользователю дословно. Собственный текст фронта здесь один — «Сервер не отвечает»:
- * он нужен, когда ответа нет вовсе или в теле нет строкового `detail`.
+ * пользователю дословно.
  */
+
+import {
+  ApiError,
+  UNREACHABLE_TEXT,
+  isRecord,
+  readDetail,
+  readJson,
+  send,
+} from './http';
 
 /** Проект в том виде, в каком его отдаёт `GET /api/projects`. */
 export type Project = {
@@ -29,22 +36,6 @@ export type ProjectInput = {
 
 const PROJECTS_URL = '/api/projects';
 
-/**
- * Предел ожидания ответа — как у проверки состояния в `App.tsx`: сервер укладывается
- * в 2 с, поэтому 5 с означает «не ответил», а не «медленно работает».
- */
-const REQUEST_TIMEOUT_MS = 5000;
-
-/** Собственный текст фронта для недоступного api. Контрактом бэкенда не является. */
-export const UNREACHABLE_TEXT = 'Сервер не отвечает';
-
-/** Отказ запроса с текстом, который можно показать пользователю как есть. */
-export class ApiError extends Error {}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
-
 /** Разбор одного проекта: форма ответа проверяется, чтобы экран не падал на мусоре. */
 function readProject(payload: unknown): Project | null {
   if (!isRecord(payload)) {
@@ -64,39 +55,9 @@ function readProject(payload: unknown): Project | null {
   return { id, name, description, repo_url, created_at, updated_at };
 }
 
-/** Текст отказа из тела ответа; всё, что не строка, — «Сервер не отвечает». */
-async function readDetail(response: Response): Promise<string> {
-  const payload: unknown = await response.json().catch(() => null);
-  if (isRecord(payload)) {
-    const { detail } = payload;
-    if (typeof detail === 'string' && detail !== '') {
-      return detail;
-    }
-  }
-  return UNREACHABLE_TEXT;
-}
-
-/** Запрос с общим таймаутом; сетевой сбой и таймаут — это «Сервер не отвечает». */
-async function send(path: string, init: RequestInit): Promise<Response> {
-  const headers: Record<string, string> = { Accept: 'application/json' };
-  if (init.body !== undefined) {
-    headers['Content-Type'] = 'application/json';
-  }
-  try {
-    return await fetch(path, {
-      ...init,
-      headers,
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
-  } catch {
-    throw new ApiError(UNREACHABLE_TEXT);
-  }
-}
-
 /** Тело успешного ответа с проектом; неразборчивое тело — не контракт, значит «не отвечает». */
 async function readProjectBody(response: Response): Promise<Project> {
-  const payload: unknown = await response.json().catch(() => null);
-  const project = readProject(payload);
+  const project = readProject(await readJson(response));
   if (project === null) {
     throw new ApiError(UNREACHABLE_TEXT);
   }
@@ -109,7 +70,7 @@ export async function listProjects(): Promise<Project[]> {
   if (!response.ok) {
     throw new ApiError(await readDetail(response));
   }
-  const payload: unknown = await response.json().catch(() => null);
+  const payload = await readJson(response);
   if (!Array.isArray(payload)) {
     throw new ApiError(UNREACHABLE_TEXT);
   }

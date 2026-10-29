@@ -1,27 +1,43 @@
 /**
- * Подтверждение мягкого удаления проекта.
+ * Подтверждение мягкого удаления — общее окно для «Проектов» и «Отделов».
+ *
+ * Сам текст подтверждения и вызов API остаются у вызывающей стороны: экран знает, что
+ * именно исчезает и какой ручкой это удаляется, а окно отвечает только за поведение —
+ * занятость кнопок, отказ сервера дословно из `detail` и закрытие после успеха.
  *
  * Удаление необратимо через интерфейс: строка исчезает из списка и остаётся в базе
  * с отметкой, восстановить её экранами приложения нельзя — об этом прямо говорит текст
- * окна. Отказ сервера показывается здесь же дословно из `detail`.
+ * окна, который передаёт вызывающая сторона.
  */
 
-import { useId, useState } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 
-import { ApiError, UNREACHABLE_TEXT, deleteProject, type Project } from '../api/projects';
+import { ApiError, UNREACHABLE_TEXT } from '../api/http';
 import Dialog from './Dialog';
 
 type ConfirmDialogProps = {
-  project: Project;
+  /** `data-testid` окна по контракту; ошибка получает `-error` к этому же имени. */
+  testId: string;
+  title: string;
+  /** Текст подтверждения: что исчезнет и что восстановить нельзя. */
+  text: ReactNode;
+  /** Подпись основной кнопки в покое, например «Удалить». */
+  submitLabel: string;
+  /** Подпись основной кнопки, пока запрос в полёте, например «Удаляю…». */
+  busyLabel: string;
+  /** Запрос удаления; успех закрывает окно силами вызывающей стороны. */
+  onConfirm: () => Promise<void>;
   onClose: () => void;
-  /** Успешное удаление: окно закрывается, список перечитывается с сервера. */
-  onDeleted: () => void;
 };
 
 export default function ConfirmDialog({
-  project,
+  testId,
+  title,
+  text,
+  submitLabel,
+  busyLabel,
+  onConfirm,
   onClose,
-  onDeleted,
 }: ConfirmDialogProps): JSX.Element {
   const textId = useId();
   const [busy, setBusy] = useState(false);
@@ -34,8 +50,7 @@ export default function ConfirmDialog({
     setBusy(true);
     setErrorText(null);
     try {
-      await deleteProject(project.id);
-      onDeleted();
+      await onConfirm();
     } catch (error) {
       setErrorText(error instanceof ApiError ? error.message : UNREACHABLE_TEXT);
     } finally {
@@ -45,8 +60,8 @@ export default function ConfirmDialog({
 
   return (
     <Dialog
-      testId="project-delete-confirm"
-      title="Удалить проект?"
+      testId={testId}
+      title={title}
       describedBy={textId}
       onClose={onClose}
       busy={busy}
@@ -55,7 +70,7 @@ export default function ConfirmDialog({
           <button
             className="btn"
             type="button"
-            data-testid="project-delete-confirm-cancel"
+            data-testid={`${testId}-cancel`}
             onClick={onClose}
             disabled={busy}
           >
@@ -64,21 +79,21 @@ export default function ConfirmDialog({
           <button
             className="btn btn--danger"
             type="button"
-            data-testid="project-delete-confirm-submit"
+            data-testid={`${testId}-submit`}
             onClick={() => void handleConfirm()}
             disabled={busy}
           >
-            {busy ? 'Удаляю…' : 'Удалить'}
+            {busy ? busyLabel : submitLabel}
           </button>
         </>
       }
     >
       <p className="dialog__text" id={textId}>
-        Проект «{project.name}» исчезнет из списка. Восстановить его через интерфейс нельзя.
+        {text}
       </p>
 
       {errorText !== null && (
-        <p className="error" data-testid="project-delete-confirm-error" role="alert">
+        <p className="error" data-testid={`${testId}-error`} role="alert">
           {errorText}
         </p>
       )}
