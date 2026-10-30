@@ -3,5 +3,6 @@
 from app.models.department import Department, department_roles
 from app.models.project import Project
 from app.models.role import DEFAULT_ROLES, Role
+from app.models.task import Task
 
-__all__ = ["DEFAULT_ROLES", "Department", "Project", "Role", "department_roles"]
+__all__ = ["DEFAULT_ROLES", "Department", "Project", "Role", "Task", "department_roles"]

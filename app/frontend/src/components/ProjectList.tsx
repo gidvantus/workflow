@@ -2,6 +2,10 @@
  * Карточка «Список проектов»: состояния загрузки, пустого списка и ошибки загрузки,
  * строки с названием, описанием, адресом репозитория и действиями под «⋯».
  *
+ * Клик по строке открывает страницу проекта; для клавиатуры то же делает кнопка-название
+ * (`.row__name--button`). Действия строки живут отдельно: клик по «⋯» и по пунктам меню
+ * страницу не открывает.
+ *
  * Описание выводится как есть: пустое остаётся пустой строкой, заглушку не подставляем.
  */
 
@@ -51,9 +55,10 @@ type ProjectRowProps = {
   project: Project;
   onEdit: (project: Project) => void;
   onDelete: (project: Project) => void;
+  onOpen: (project: Project) => void;
 };
 
-function ProjectRow({ project, onEdit, onDelete }: ProjectRowProps): JSX.Element {
+function ProjectRow({ project, onEdit, onDelete, onOpen }: ProjectRowProps): JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false);
   const actionsRef = useRef<HTMLDivElement>(null);
   const kebabRef = useRef<HTMLButtonElement>(null);
@@ -93,10 +98,23 @@ function ProjectRow({ project, onEdit, onDelete }: ProjectRowProps): JSX.Element
   const menuLabel = `Действия с проектом ${project.name}`;
 
   return (
-    <li className="row" data-testid="project-item">
+    <li
+      className="row row--clickable"
+      data-testid="project-item"
+      onClick={() => onOpen(project)}
+    >
       <div className="row__main">
+        {/* Название — кнопка: строка открывается кликом, но дойти до неё с клавиатуры
+            иначе было бы нечем. Enter и Space на кнопке дают тот же переход, что и
+            клик по строке. */}
         <p className="row__name" data-testid="project-item-name">
-          {project.name}
+          <button
+            className="row__name--button"
+            type="button"
+            data-testid="project-item-open"
+          >
+            {project.name}
+          </button>
         </p>
         <p className="row__desc" data-testid="project-item-description">
           {project.description}
@@ -106,7 +124,9 @@ function ProjectRow({ project, onEdit, onDelete }: ProjectRowProps): JSX.Element
         {project.repo_url}
       </p>
       <p className="row__date">{formatDate(project.updated_at)}</p>
-      <div className="row__actions" ref={actionsRef}>
+      {/* Клик по «⋯» и по пунктам меню страницу проекта не открывает: действия строки
+          живут отдельно, поэтому всплывание останавливается на их контейнере. */}
+      <div className="row__actions" ref={actionsRef} onClick={(event) => event.stopPropagation()}>
         <button
           ref={kebabRef}
           className="kebab"
@@ -169,6 +189,8 @@ type ProjectListProps = {
   onRetry: () => void;
   onEdit: (project: Project) => void;
   onDelete: (project: Project) => void;
+  /** Клик по строке или Enter/Space на названии открывает страницу проекта. */
+  onOpen: (project: Project) => void;
 };
 
 export default function ProjectList({
@@ -178,6 +200,7 @@ export default function ProjectList({
   onRetry,
   onEdit,
   onDelete,
+  onOpen,
 }: ProjectListProps): JSX.Element {
   const titleId = useId();
   const showCount = !loading && errorText === null;
@@ -236,6 +259,7 @@ export default function ProjectList({
                 project={project}
                 onEdit={onEdit}
                 onDelete={onDelete}
+                onOpen={onOpen}
               />
             ))}
           </ul>

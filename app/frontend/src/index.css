@@ -192,6 +192,77 @@ body {
   font-weight: 500;
 }
 
+/* ---------- страница проекта: паспорт и подразделы ---------- */
+
+/* Сводка проекта — не карточка и не сетка метрик: название, описание как есть и одна
+   служебная строка репозитория и даты. Странице проекта не нужен дашборд — ей нужен
+   паспорт: счётчиков задач, сумм и карточек статистики здесь нет. */
+.project-head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  min-width: 0;
+}
+
+.project-head__desc {
+  margin: 0;
+  max-width: 68ch;
+  font-size: 0.9375rem;
+  line-height: 1.55;
+  color: var(--ink);
+}
+
+.project-head__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.5rem;
+  margin: 0.125rem 0 0;
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+
+.project-repo {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+/* Полоса подразделов — тихая линия, а не пилюли: подраздел один, и «таблетки» на одном
+   элементе обещали бы переключатель, которого нет. У активной вкладки линия `--ink`
+   толщиной 2 px сливается с линией полосы. */
+.tabs {
+  display: flex;
+  gap: 0.25rem;
+  min-width: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.tab {
+  position: relative;
+  margin-bottom: -1px;
+  padding: 0.4375rem 0.75rem 0.5rem;
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.3;
+  /* Подпись неактивной вкладки — текст 13 px на панели: `--muted` даёт 5.19:1. */
+  color: var(--muted);
+  background-color: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+
+.tab:hover {
+  color: var(--ink);
+}
+
+.tab[aria-selected='true'] {
+  color: var(--ink);
+  border-bottom-color: var(--ink);
+}
+
 /* ---------- кнопки ---------- */
 
 .btn {
@@ -249,7 +320,9 @@ body {
 .field__textarea:focus-visible,
 .kebab:focus-visible,
 .menu__item:focus-visible,
-.dialog__close:focus-visible {
+.dialog__close:focus-visible,
+.tab:focus-visible,
+.row__name--button:focus-visible {
   outline: 2px solid var(--ink);
   outline-offset: 2px;
 }
@@ -334,6 +407,14 @@ body {
   color: var(--muted);
 }
 
+/* Правая часть шапки карточки: счётчик и действие, которое пополняет этот список.
+   Действие стоит здесь, а не в шапке страницы: оно относится к карточке. */
+.card__tools {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
 .card__body {
   padding: 1.5rem 1.125rem;
 }
@@ -392,6 +473,45 @@ body {
   line-height: 1.4;
 }
 
+/* ---------- строка проекта — ссылка на страницу ---------- */
+
+/* Наведение подсвечивает строку и подчёркивает название: подчёркивание говорит «это
+   текст, по которому ходят», без новой иконки-стрелки. «⋯» лежит в отдельной ячейке
+   и в эту подсветку не вовлечён. */
+.row--clickable {
+  cursor: pointer;
+}
+
+.row--clickable:hover {
+  background-color: var(--shell);
+}
+
+.row--clickable:hover .row__name,
+.row--clickable:hover .row__name--button {
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.15em;
+}
+
+/* Кнопка-название выглядит как текст: шрифт, цвет и вес наследуются, выравнивание
+   по левому краю, рамки нет, ширина — по содержимому. `display: inline` нужен ещё и
+   для того, чтобы подчёркивание при наведении доходило от строки до кнопки. */
+.row__name--button {
+  display: inline;
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--ink);
+  text-align: left;
+  background-color: transparent;
+  border: 0;
+  border-radius: 0.25rem;
+  cursor: pointer;
+}
+
 .row__desc {
   margin: 0.125rem 0 0;
   font-size: 0.8125rem;
@@ -416,6 +536,60 @@ body {
 .row__repo {
   font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
   font-size: 0.75rem;
+}
+
+/* ---------- строка задачи ---------- */
+
+/* Три колонки: номер, название, стоимость. Шапки колонок нет — подписи «Задача» и
+   «Стоимость» к трём строкам ничего не добавляют, а знак ₽ сам называет колонку.
+   Строка одна: описания в ней нет, поэтому список читается как ведомость. */
+.task-row {
+  display: grid;
+  grid-template-columns: 2.75rem minmax(0, 1fr) 9rem;
+  gap: 1.25rem;
+  align-items: baseline;
+  padding: 0.5625rem 1.125rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.task-row:last-child {
+  border-bottom: 0;
+}
+
+.task-row:hover {
+  background-color: #fbfaf7;
+}
+
+/* Номер задачи — служебная подпись, а не данные: приглушённый цвет и табличные цифры,
+   чтобы номера стояли друг под другом разрядами. На белой панели `--muted` даёт 5.19:1. */
+.row__id {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.task-row__name {
+  margin: 0;
+  min-width: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+/* Деньги — данные, а не подпись: цвет основной, вес 500, табличные цифры, чтобы суммы
+   стояли друг под другом разрядами. */
+.row__cost {
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.4;
+  text-align: right;
+  white-space: nowrap;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
 }
 
 .row__actions {
@@ -844,6 +1018,13 @@ body {
   color: var(--muted);
 }
 
+/* Стоимость — короткое поле: сумма на всю ширину окна выглядела бы пустой формой.
+   Табличные цифры, чтобы введённое число было легко сверить с ним же на экране. */
+.field--cost .field__input {
+  max-width: 12rem;
+  font-variant-numeric: tabular-nums;
+}
+
 .dialog__actions {
   display: flex;
   justify-content: flex-end;
@@ -985,11 +1166,33 @@ body {
   }
 
   .card__head {
+    flex-wrap: wrap;
+    gap: 0.625rem 0.75rem;
     padding: 0.75rem 1rem;
   }
 
   .card__body {
     padding: 1.25rem 1rem;
+  }
+
+  /* На телефоне счётчик и «Добавить задачу» делят одну строку: кнопка остаётся у
+     правого края, чтобы под ней был список, который она пополняет. */
+  .card__tools {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  /* Строка задачи и на телефоне остаётся одной линией: номер и название слева,
+     стоимость справа. Стоимость не переносится под название — иначе список из десяти
+     задач превращается в двадцать строк. */
+  .task-row {
+    grid-template-columns: 2.25rem minmax(0, 1fr) auto;
+    gap: 0.75rem;
+    padding: 0.5625rem 1rem;
+  }
+
+  .field--cost .field__input {
+    max-width: none;
   }
 
   .overlay {
@@ -1009,6 +1212,16 @@ body {
     flex-direction: column;
     align-items: flex-start;
     padding: 0.75rem 1rem;
+  }
+}
+
+/* ---------- ≤ 480 px: возврат со страницы проекта во всю ширину ---------- */
+
+@media (max-width: 480px) {
+  /* «← К проектам» на узком экране переносится под крошки и занимает всю ширину:
+     маленькая цель в углу шапки там неудобна. */
+  .topbar .btn {
+    width: 100%;
   }
 }
 
