@@ -2,6 +2,9 @@
  * Раздел «Проекты»: шапка с крошками, заголовок «Проекты» с кнопкой «Добавить проект»,
  * карточка списка, панель состояния сервиса и диалоги создания, правки и удаления.
  *
+ * Когда открыт проект, раздел показывает страницу проекта вместо всего перечисленного:
+ * адреса у неё нет, поэтому и «навигация» здесь — это состояние `openProject`.
+ *
  * Экран вынесен из `App.tsx` без изменения поведения и текстов: оболочкой (меню, подвал)
  * теперь владеет `App`, а раздел отвечает за своё содержимое и своё состояние — список,
  * открытое окно и ответ `/api/health`.
@@ -14,6 +17,7 @@ import { deleteProject, listProjects, type Project } from '../api/projects';
 import ConfirmDialog from './ConfirmDialog';
 import ProjectFormDialog from './ProjectFormDialog';
 import ProjectList from './ProjectList';
+import ProjectPage from './ProjectPage';
 
 /**
  * Ручка живости сервиса и базы.
@@ -94,6 +98,12 @@ export default function ProjectsPage({ onCountChange }: ProjectsPageProps): JSX.
   const [errorText, setErrorText] = useState<string | null>(null);
   const [list, setList] = useState<ListState>({ status: 'loading' });
   const [dialog, setDialog] = useState<DialogState>(null);
+  /**
+   * Открытая страница проекта. Адреса у неё нет: F5 возвращает к списку — это решение
+   * постановки. Объект проекта приходит из загруженного списка, отдельной ручки чтения
+   * одного проекта нет.
+   */
+  const [openProject, setOpenProject] = useState<Project | null>(null);
 
   /**
    * Список всегда читается с сервера: после создания, правки и удаления экран
@@ -163,6 +173,13 @@ export default function ProjectsPage({ onCountChange }: ProjectsPageProps): JSX.
 
   const isLoading = phase === 'loading';
 
+  // Страница проекта заменяет содержимое раздела целиком: ни шапки со списком, ни
+  // панели состояния сервиса под ним на ней нет. Список при этом остаётся в состоянии
+  // раздела, поэтому возврат показывает его без повторного запроса.
+  if (openProject !== null) {
+    return <ProjectPage project={openProject} onBack={() => setOpenProject(null)} />;
+  }
+
   return (
     <>
       <header className="topbar">
@@ -198,6 +215,7 @@ export default function ProjectsPage({ onCountChange }: ProjectsPageProps): JSX.
           onRetry={() => void loadProjects()}
           onEdit={(project) => setDialog({ kind: 'edit', project })}
           onDelete={(project) => setDialog({ kind: 'delete', project })}
+          onOpen={(project) => setOpenProject(project)}
         />
 
         <section className="service" aria-labelledby="service-label">
