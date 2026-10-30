@@ -7,6 +7,7 @@ from app.schemas.department import (
     RoleResponse,
 )
 from app.schemas.project import ProjectCreate, ProjectResponse, ProjectUpdate
+from app.schemas.task import TaskCreate, TaskResponse
 
 __all__ = [
     "DepartmentCreate",
@@ -16,4 +17,6 @@ __all__ = [
     "ProjectResponse",
     "ProjectUpdate",
     "RoleResponse",
+    "TaskCreate",
+    "TaskResponse",
 ]
