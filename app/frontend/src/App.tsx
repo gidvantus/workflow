@@ -6,6 +6,11 @@
  * бейдж количества стоял у обоих пунктов меню, а не появлялся после переключения;
  * невыбранный раздел скрыт атрибутом `hidden` и потому недоступен ни глазу, ни
  * вспомогательным технологиям.
+ *
+ * Смонтированный раздел живёт между переключениями, поэтому «Проекты» получают признак
+ * активности: страница проекта — состояние раздела, и уход в «Отделы» её закрывает
+ * (`ProjectsPage` сбрасывает `openProject`), иначе при возврате человек увидел бы не
+ * список, а оставленную открытой страницу.
  */
 
 import { useCallback, useState } from 'react';
@@ -107,7 +112,10 @@ export default function App(): JSX.Element {
 
       <div className="main">
         <div className="page" hidden={section !== 'projects'}>
-          <ProjectsPage onCountChange={handleProjectsCount} />
+          <ProjectsPage
+            onCountChange={handleProjectsCount}
+            active={section === 'projects'}
+          />
         </div>
 
         <div className="page" hidden={section !== 'departments'}>
