@@ -11,5 +11,11 @@
   ],
   "maxRework": 3,
   "maxAttempts": 4,
-  "stuckAfterMinutes": 30
+  "stuckAfterMinutes": 30,
+  "usageRates": {
+    "inputUsdPerM": 0.15,
+    "cacheReadUsdPerM": 0.003,
+    "cacheWriteUsdPerM": 0,
+    "outputUsdPerM": 0.6
+  }
 }
