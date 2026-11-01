@@ -200,6 +200,9 @@
   config:
     - id: compaction-basic
       name: '@deepseek-ai/dsh-compaction-basic'
+      config:
+        thresholdRatio: 0.12
+        retainRatio: 0.04
 
     - id: command-compact
       name: '@deepseek-ai/dsh-command-compact'
