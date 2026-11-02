@@ -38,15 +38,18 @@ def create_app() -> FastAPI:
         title="APP API",
         version=settings.version,
         description=(
-            "API приложения: живость сервиса и базы, справочник ролей, два раздела — "
-            "«Проекты» и «Отделы» (список живых строк, создание, правка и мягкое "
-            "удаление), — и задачи проектов: список задач проекта и создание задачи. "
-            "Правки и удаления задач в приложении нет."
+            "API приложения: живость сервиса и базы, справочник ролей, проекты (список "
+            "живых строк, создание, правка и мягкое удаление), отделы проекта (список "
+            "отделов проекта и создание отдела по вложенному пути "
+            "`/api/projects/{project_id}/departments`; правка и мягкое удаление отдела — "
+            "по пути `/api/departments/{department_id}`) и задачи проекта: список задач "
+            "проекта и создание задачи. Правки и удаления задач в приложении нет."
         ),
     )
 
     application.include_router(projects.router)
     application.include_router(departments.router)
+    application.include_router(departments.items_router)
     application.include_router(roles.router)
     application.include_router(tasks.router)
 

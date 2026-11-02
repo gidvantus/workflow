@@ -1,24 +1,32 @@
 /**
  * Страница проекта: крошки, кнопка «← К проектам», паспорт проекта, полоса подразделов
- * с одной вкладкой «Задачи» и карточка задач под ней.
+ * с двумя вкладками — «Задачи» и «Отделы» — и карточка выбранного подраздела под ней.
  *
  * Адреса у страницы нет: это состояние раздела «Проекты», а не маршрут. Поэтому объект
  * проекта приходит со списка, а ручки чтения одного проекта (`GET /api/projects/{id}`)
- * в приложении нет. Если проект успели удалить в другой вкладке, это вылезет только при
- * создании задачи текстом `404` — так и задумано.
+ * в приложении нет. Если проект успели удалить в другой вкладке, отделам это покажет
+ * вложенный `GET` текстом `404 «Проект не найден»` в карточке отделов, а задачам —
+ * создание задачи тем же текстом.
  *
  * Панели «Состояние сервиса» здесь нет: она живёт на экране «Проектов». Формы правки и
  * удаления проекта на странице тоже нет — это действия списка.
  *
- * Задачи читаются с сервера: загрузка, готовый список и ошибка загрузки. После создания
- * список перечитывается, оптимистичных обновлений нет.
+ * Вкладка «Отделы» — единственный вход в отделы: отдельного пункта меню и отдельного
+ * экрана больше нет. Оба списка читаются при открытии страницы, показывается только
+ * выбранный; переключение вкладки запросов не повторяет. Создание, правка и удаление
+ * отдела — диалоги этой страницы: после сохранения список отделов перечитывается,
+ * оптимистичных обновлений нет.
  */
 
 import { useCallback, useEffect, useId, useState } from 'react';
 
+import { deleteDepartment, listDepartments, type Department } from '../api/departments';
 import { ApiError, UNREACHABLE_TEXT } from '../api/http';
 import type { Project } from '../api/projects';
 import { listTasks, type Task } from '../api/tasks';
+import ConfirmDialog from './ConfirmDialog';
+import DepartmentFormDialog from './DepartmentFormDialog';
+import DepartmentList from './DepartmentList';
 import TaskFormDialog from './TaskFormDialog';
 import TaskList from './TaskList';
 
@@ -51,11 +59,27 @@ function formatDate(iso: string): string {
   return `${date.getDate()} ${month} ${date.getFullYear()}`;
 }
 
+/** Открытая вкладка подразделов. */
+type Tab = 'tasks' | 'departments';
+
 /** Состояние списка задач: загрузка, готовые данные или ошибка загрузки. */
 type TasksState =
   | { status: 'loading' }
   | { status: 'ready'; tasks: Task[] }
   | { status: 'error'; errorText: string };
+
+/** Состояние списка отделов: загрузка, готовые данные или ошибка загрузки. */
+type DepartmentsState =
+  | { status: 'loading' }
+  | { status: 'ready'; departments: Department[] }
+  | { status: 'error'; errorText: string };
+
+/** Открытое окно отдела: форма создания, форма правки или подтверждение удаления. */
+type DepartmentDialogState =
+  | { kind: 'create' }
+  | { kind: 'edit'; department: Department }
+  | { kind: 'delete'; department: Department }
+  | null;
 
 type ProjectPageProps = {
   project: Project;
@@ -65,8 +89,11 @@ type ProjectPageProps = {
 
 export default function ProjectPage({ project, onBack }: ProjectPageProps): JSX.Element {
   const tabsId = useId();
+  const [activeTab, setActiveTab] = useState<Tab>('tasks');
   const [tasks, setTasks] = useState<TasksState>({ status: 'loading' });
-  const [formOpen, setFormOpen] = useState(false);
+  const [departments, setDepartments] = useState<DepartmentsState>({ status: 'loading' });
+  const [taskFormOpen, setTaskFormOpen] = useState(false);
+  const [departmentDialog, setDepartmentDialog] = useState<DepartmentDialogState>(null);
 
   /** Список задач всегда читается с сервера: после создания экран его перечитывает. */
   const loadTasks = useCallback(async (): Promise<void> => {
@@ -82,15 +109,44 @@ export default function ProjectPage({ project, onBack }: ProjectPageProps): JSX.
     }
   }, [project.id]);
 
+  /** Список отделов тоже всегда с сервера: после правки и удаления он перечитывается. */
+  const loadDepartments = useCallback(async (): Promise<void> => {
+    setDepartments({ status: 'loading' });
+    try {
+      const loaded = await listDepartments(project.id);
+      setDepartments({ status: 'ready', departments: loaded });
+    } catch (error) {
+      setDepartments({
+        status: 'error',
+        errorText: error instanceof ApiError ? error.message : UNREACHABLE_TEXT,
+      });
+    }
+  }, [project.id]);
+
+  // Оба списка читаются при открытии страницы, а не при первом заходе на вкладку:
+  // иначе «Отделы» показывали бы «Загрузка…» после каждого переключения.
   useEffect(() => {
     void loadTasks();
   }, [loadTasks]);
 
-  /** Сохранение в форме прошло — окно закрыто, список перечитан с сервера. */
-  function handleSaved(): void {
-    setFormOpen(false);
+  useEffect(() => {
+    void loadDepartments();
+  }, [loadDepartments]);
+
+  /** Сохранение в форме задачи прошло — окно закрыто, список задач перечитан. */
+  function handleTaskSaved(): void {
+    setTaskFormOpen(false);
     void loadTasks();
   }
+
+  /** Сохранение или удаление отдела прошло — окно закрыто, список отделов перечитан. */
+  function handleDepartmentSaved(): void {
+    setDepartmentDialog(null);
+    void loadDepartments();
+  }
+
+  const tasksPanelId = `${tabsId}-panel-tasks`;
+  const departmentsPanelId = `${tabsId}-panel-departments`;
 
   return (
     <>
@@ -130,35 +186,111 @@ export default function ProjectPage({ project, onBack }: ProjectPageProps): JSX.
           </div>
         </div>
 
-        {/* Подраздел открыт один и всегда активен: переключателя подразделов в задаче
-            нет, полоса говорит «здесь начинается содержимое проекта». */}
+        {/* Полоса подразделов: две вкладки одного уровня, у выбранной `aria-selected`.
+            Подписи без счётчиков и пилюль — это переключатель содержимого, а не
+            украшение шапки. */}
         <div className="tabs" role="tablist" aria-label="Подразделы проекта">
           <button
             className="tab"
             type="button"
             role="tab"
             id={`${tabsId}-tasks`}
-            aria-selected="true"
+            aria-selected={activeTab === 'tasks'}
+            aria-controls={tasksPanelId}
             data-testid="project-tab-tasks"
+            onClick={() => setActiveTab('tasks')}
           >
             Задачи
           </button>
+          <button
+            className="tab"
+            type="button"
+            role="tab"
+            id={`${tabsId}-departments`}
+            aria-selected={activeTab === 'departments'}
+            aria-controls={departmentsPanelId}
+            data-testid="project-tab-departments"
+            onClick={() => setActiveTab('departments')}
+          >
+            Отделы
+          </button>
         </div>
 
-        <TaskList
-          tasks={tasks.status === 'ready' ? tasks.tasks : []}
-          loading={tasks.status === 'loading'}
-          errorText={tasks.status === 'error' ? tasks.errorText : null}
-          onRetry={() => void loadTasks()}
-          onCreate={() => setFormOpen(true)}
-        />
+        {/* Обе панели есть в разметке всегда, невыбранная скрыта атрибутом `hidden`:
+            так `aria-controls` у каждой вкладки ссылается на существующую область, а не
+            в пустоту (`aria-valid-attr-value`), и скрытая панель недоступна ни глазу, ни
+            скринридеру. Своего `display` у панели нет, поэтому пользовательское
+            `[hidden] { display: none }` работает без отдельного правила. */}
+        <div
+          role="tabpanel"
+          id={tasksPanelId}
+          aria-labelledby={`${tabsId}-tasks`}
+          hidden={activeTab !== 'tasks'}
+        >
+          <TaskList
+            tasks={tasks.status === 'ready' ? tasks.tasks : []}
+            loading={tasks.status === 'loading'}
+            errorText={tasks.status === 'error' ? tasks.errorText : null}
+            onRetry={() => void loadTasks()}
+            onCreate={() => setTaskFormOpen(true)}
+          />
+        </div>
+
+        <div
+          role="tabpanel"
+          id={departmentsPanelId}
+          aria-labelledby={`${tabsId}-departments`}
+          hidden={activeTab !== 'departments'}
+        >
+          <DepartmentList
+            departments={departments.status === 'ready' ? departments.departments : []}
+            loading={departments.status === 'loading'}
+            errorText={departments.status === 'error' ? departments.errorText : null}
+            onRetry={() => void loadDepartments()}
+            onCreate={() => setDepartmentDialog({ kind: 'create' })}
+            onEdit={(department) => setDepartmentDialog({ kind: 'edit', department })}
+            onDelete={(department) => setDepartmentDialog({ kind: 'delete', department })}
+          />
+        </div>
       </main>
 
-      {formOpen && (
+      {taskFormOpen && (
         <TaskFormDialog
           projectId={project.id}
-          onClose={() => setFormOpen(false)}
-          onSaved={handleSaved}
+          onClose={() => setTaskFormOpen(false)}
+          onSaved={handleTaskSaved}
+        />
+      )}
+
+      {departmentDialog !== null && departmentDialog.kind === 'create' && (
+        <DepartmentFormDialog
+          mode="create"
+          projectId={project.id}
+          onClose={() => setDepartmentDialog(null)}
+          onSaved={handleDepartmentSaved}
+        />
+      )}
+      {departmentDialog !== null && departmentDialog.kind === 'edit' && (
+        <DepartmentFormDialog
+          mode="edit"
+          projectId={project.id}
+          department={departmentDialog.department}
+          onClose={() => setDepartmentDialog(null)}
+          onSaved={handleDepartmentSaved}
+        />
+      )}
+      {departmentDialog !== null && departmentDialog.kind === 'delete' && (
+        <ConfirmDialog
+          testId="department-delete-confirm"
+          title="Удалить отдел?"
+          text={`Отдел «${departmentDialog.department.name}» исчезнет из списка. Восстановить его через интерфейс нельзя.`}
+          submitLabel="Удалить"
+          busyLabel="Удаляю…"
+          onConfirm={async () => {
+            await deleteDepartment(departmentDialog.department.id);
+            handleDepartmentSaved();
+          }}
+          onClose={() => setDepartmentDialog(null)}
         />
       )}
     </>

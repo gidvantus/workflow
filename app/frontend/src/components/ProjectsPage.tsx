@@ -5,6 +5,10 @@
  * Когда открыт проект, раздел показывает страницу проекта вместо всего перечисленного:
  * адреса у неё нет, поэтому и «навигация» здесь — это состояние `openProject`.
  *
+ * «Проекты» — единственный раздел приложения: отделы живут вкладкой на странице
+ * проекта, а не отдельным пунктом меню. Поэтому сбрасывать открытую страницу при
+ * уходе в другой раздел больше не по чему.
+ *
  * Экран вынесен из `App.tsx` без изменения поведения и текстов: оболочкой (меню, подвал)
  * теперь владеет `App`, а раздел отвечает за своё содержимое и своё состояние — список,
  * открытое окно и ответ `/api/health`.
@@ -90,15 +94,9 @@ type ProjectsPageProps = {
    * экран. `null` — список ещё не прочитан или не прочитался.
    */
   onCountChange: (count: number | null) => void;
-  /**
-   * Показан ли раздел сейчас. Оболочка держит оба раздела смонтированными, поэтому
-   * сам по себе размонтаж страницу проекта не закрывает: уход в другой раздел
-   * сбрасывает `openProject` явно, и возврат показывает список.
-   */
-  active: boolean;
 };
 
-export default function ProjectsPage({ onCountChange, active }: ProjectsPageProps): JSX.Element {
+export default function ProjectsPage({ onCountChange }: ProjectsPageProps): JSX.Element {
   const [phase, setPhase] = useState<Phase>('idle');
   const [statusText, setStatusText] = useState<string>(STATUS_UNCHECKED);
   const [errorText, setErrorText] = useState<string | null>(null);
@@ -137,15 +135,6 @@ export default function ProjectsPage({ onCountChange, active }: ProjectsPageProp
   useEffect(() => {
     onCountChange(list.status === 'ready' ? list.projects.length : null);
   }, [list, onCountChange]);
-
-  // Уход в другой раздел закрывает страницу проекта: раздел остаётся смонтированным
-  // (оба раздела живут под `hidden`), и без сброса возврат в «Проекты» показал бы
-  // оставленную открытой страницу вместо списка. Список при этом не перечитывается.
-  useEffect(() => {
-    if (!active) {
-      setOpenProject(null);
-    }
-  }, [active]);
 
   async function handleCheck(): Promise<void> {
     setPhase('loading');

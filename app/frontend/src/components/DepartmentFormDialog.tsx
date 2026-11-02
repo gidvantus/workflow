@@ -1,6 +1,10 @@
 /**
  * Одно окно на создание и правку отдела (`mode`).
  *
+ * Проект в окне не выбирается: отдел создаётся внутри проекта, на странице которого
+ * открыта вкладка «Отделы», поэтому `projectId` приходит пропом и уходит в путь
+ * `POST /api/projects/{project_id}/departments`. В теле запроса `project_id` нет.
+ *
  * Поля: «Название», время работы «с»/«по» двумя `<input type="time">` и набор ролей
  * чекбоксами из справочника `GET /api/roles`. Названия и коды ролей фронт не зашивает —
  * их отдаёт сервер; `code` нужен только для `data-testid`.
@@ -10,8 +14,9 @@
  * случай, и «поправлять» его фронт не должен.
  *
  * Пока роли грузятся или не загрузились, «Сохранить» неактивна: отдел без ролей сервер
- * не примет, а выбор из пустого списка — это не выбор. Текст отказа рисуется здесь же
- * дословно из `detail`, своих формулировок нет.
+ * не примет, а выбор из пустого списка — это не выбор. «Отмена» при этом остаётся
+ * рабочей: окно должно закрываться, даже если справочник не ответил. Текст отказа
+ * рисуется здесь же дословно из `detail`, своих формулировок нет.
  */
 
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
@@ -28,6 +33,8 @@ import Dialog from './Dialog';
 
 type DepartmentFormDialogProps = {
   mode: 'create' | 'edit';
+  /** Проект, внутри которого живёт отдел: уходит в путь создания, в теле его нет. */
+  projectId: number;
   /** Текущее значение полей при правке. */
   department?: Department;
   onClose: () => void;
@@ -60,6 +67,7 @@ function invalidFieldFor(text: string): InvalidField {
 
 export default function DepartmentFormDialog({
   mode,
+  projectId,
   department,
   onClose,
   onSaved,
@@ -118,7 +126,7 @@ export default function DepartmentFormDialog({
       if (mode === 'edit' && department !== undefined) {
         await updateDepartment(department.id, input);
       } else {
-        await createDepartment(input);
+        await createDepartment(projectId, input);
       }
       onSaved();
     } catch (error) {
