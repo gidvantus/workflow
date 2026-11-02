@@ -216,31 +216,42 @@ export default function ProjectPage({ project, onBack }: ProjectPageProps): JSX.
           </button>
         </div>
 
-        {activeTab === 'tasks' && (
-          <div role="tabpanel" id={tasksPanelId} aria-labelledby={`${tabsId}-tasks`}>
-            <TaskList
-              tasks={tasks.status === 'ready' ? tasks.tasks : []}
-              loading={tasks.status === 'loading'}
-              errorText={tasks.status === 'error' ? tasks.errorText : null}
-              onRetry={() => void loadTasks()}
-              onCreate={() => setTaskFormOpen(true)}
-            />
-          </div>
-        )}
+        {/* Обе панели есть в разметке всегда, невыбранная скрыта атрибутом `hidden`:
+            так `aria-controls` у каждой вкладки ссылается на существующую область, а не
+            в пустоту (`aria-valid-attr-value`), и скрытая панель недоступна ни глазу, ни
+            скринридеру. Своего `display` у панели нет, поэтому пользовательское
+            `[hidden] { display: none }` работает без отдельного правила. */}
+        <div
+          role="tabpanel"
+          id={tasksPanelId}
+          aria-labelledby={`${tabsId}-tasks`}
+          hidden={activeTab !== 'tasks'}
+        >
+          <TaskList
+            tasks={tasks.status === 'ready' ? tasks.tasks : []}
+            loading={tasks.status === 'loading'}
+            errorText={tasks.status === 'error' ? tasks.errorText : null}
+            onRetry={() => void loadTasks()}
+            onCreate={() => setTaskFormOpen(true)}
+          />
+        </div>
 
-        {activeTab === 'departments' && (
-          <div role="tabpanel" id={departmentsPanelId} aria-labelledby={`${tabsId}-departments`}>
-            <DepartmentList
-              departments={departments.status === 'ready' ? departments.departments : []}
-              loading={departments.status === 'loading'}
-              errorText={departments.status === 'error' ? departments.errorText : null}
-              onRetry={() => void loadDepartments()}
-              onCreate={() => setDepartmentDialog({ kind: 'create' })}
-              onEdit={(department) => setDepartmentDialog({ kind: 'edit', department })}
-              onDelete={(department) => setDepartmentDialog({ kind: 'delete', department })}
-            />
-          </div>
-        )}
+        <div
+          role="tabpanel"
+          id={departmentsPanelId}
+          aria-labelledby={`${tabsId}-departments`}
+          hidden={activeTab !== 'departments'}
+        >
+          <DepartmentList
+            departments={departments.status === 'ready' ? departments.departments : []}
+            loading={departments.status === 'loading'}
+            errorText={departments.status === 'error' ? departments.errorText : null}
+            onRetry={() => void loadDepartments()}
+            onCreate={() => setDepartmentDialog({ kind: 'create' })}
+            onEdit={(department) => setDepartmentDialog({ kind: 'edit', department })}
+            onDelete={(department) => setDepartmentDialog({ kind: 'delete', department })}
+          />
+        </div>
       </main>
 
       {taskFormOpen && (
