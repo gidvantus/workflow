@@ -1,4 +1,18 @@
-"""Ручки отделов: список живых строк, создание, правка и мягкое удаление.
+"""Ручки отделов: отделы проекта и правка/удаление отдельной строки.
+
+Отдел живёт внутри проекта, поэтому список и создание вложены в проект
+(`/api/projects/{project_id}/departments`) и первым шагом проверяют, что проект жив:
+несуществующий или мягко удалённый проект — это `404` с тем же текстом, что у ручек
+проектов. Проверка берётся из `app.api.projects`, а не переписывается здесь: текст
+`404` у обеих половин один и тот же.
+
+Правка и удаление адресуются отделом, а не парой «проект + отдел»: плоский путь
+`/api/departments/{department_id}` достаёт и строку без проекта — сироту, заведённую до
+привязки отделов к проектам. В списке проекта такая строка не видна, а `PATCH` и
+`DELETE` по ней работают: иначе мёртвый груз нельзя было бы убрать вовсе.
+
+Уникальность названия — правило проекта: имя занято, только если живой отдел **этого**
+проекта уже так называется. Одно и то же имя в двух проектах — не конфликт.
 
 Тексты отказов — часть контракта: фронт показывает их пользователю дословно и не
 переписывает, поэтому они собраны здесь константами и нигде больше не сочиняются.
@@ -17,12 +31,18 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.api.projects import PROJECT_NOT_FOUND, _get_alive_project
 from app.db import get_db
 from app.models.department import Department
 from app.models.role import Role
 from app.schemas.department import DepartmentCreate, DepartmentResponse, DepartmentUpdate
 
-router = APIRouter(prefix="/api/departments", tags=["departments"])
+# Отделы проекта: список и создание.
+router = APIRouter(prefix="/api/projects/{project_id}/departments", tags=["departments"])
+
+# Один отдел: правка и мягкое удаление. Путь плоский, потому что отдел уже существует
+# и его проект для правки не нужен — см. политику сирот в докстроке модуля.
+items_router = APIRouter(prefix="/api/departments", tags=["departments"])
 
 # Сессия на запрос: одна и та же зависимость у всех четырёх ручек.
 DbSession = Annotated[Session, Depends(get_db)]
@@ -105,11 +125,21 @@ def _clock(value: time) -> str:
     return value.strftime(CLOCK_FORMAT)
 
 
-def _name_is_taken(db: Session, name: str, exclude_id: int | None = None) -> bool:
-    """Занято ли название среди живых строк: сравнение без учёта регистра.
+def _name_is_taken(
+    db: Session,
+    project_id: int | None,
+    name: str,
+    exclude_id: int | None = None,
+) -> bool:
+    """Занято ли название среди живых строк **этого проекта**: без учёта регистра.
 
     Имя удалённого отдела свободно — частичный индекс смотрит только на строки
-    с `deleted_at IS NULL`.
+    с `deleted_at IS NULL`. Имя, занятое в другом проекте, конфликтом не является:
+    «Разработка» может быть в каждом проекте.
+
+    Отдел без проекта (`project_id IS NULL`) сравнивается с такими же сиротами:
+    `NULL` в индексе не равен `NULL`, поэтому уникальность сирот держит только эта
+    проверка.
 
     Сравнение делается в Python, а не `lower()` в SQL: в SQLite `lower()` опускает
     только латиницу, и проверка «Разработка» / «разработка» на стенде (PostgreSQL)
@@ -117,6 +147,10 @@ def _name_is_taken(db: Session, name: str, exclude_id: int | None = None) -> boo
     дешевле диалектной разницы; уникальность на гонке держит частичный индекс.
     """
     statement = select(Department.name).where(Department.deleted_at.is_(None))
+    if project_id is None:
+        statement = statement.where(Department.project_id.is_(None))
+    else:
+        statement = statement.where(Department.project_id == project_id)
     if exclude_id is not None:
         statement = statement.where(Department.id != exclude_id)
     taken = {candidate.casefold() for candidate in db.scalars(statement)}
@@ -143,12 +177,25 @@ def _commit_or_conflict(db: Session) -> None:
 @router.get(
     "",
     response_model=list[DepartmentResponse],
-    summary="Список живых отделов",
+    summary="Отделы проекта",
+    responses={
+        status.HTTP_404_NOT_FOUND: {"description": f"Проекта нет: «{PROJECT_NOT_FOUND}»."},
+    },
 )
-def list_departments(db: DbSession) -> Sequence[Department]:
-    """Только живые строки, порядок — по `id` возрастанию."""
+def list_departments(project_id: int, db: DbSession) -> Sequence[Department]:
+    """Только живые отделы этого проекта, порядок — по `id` возрастанию.
+
+    Пустой проект — пустой массив, а не отказ. Отделы других проектов и строки без
+    проекта в список не попадают.
+    """
+    _get_alive_project(db, project_id)
     return db.scalars(
-        select(Department).where(Department.deleted_at.is_(None)).order_by(Department.id)
+        select(Department)
+        .where(
+            Department.project_id == project_id,
+            Department.deleted_at.is_(None),
+        )
+        .order_by(Department.id)
     ).all()
 
 
@@ -156,20 +203,28 @@ def list_departments(db: DbSession) -> Sequence[Department]:
     "",
     response_model=DepartmentResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="Создание отдела",
+    summary="Создание отдела в проекте",
     responses={
+        status.HTTP_404_NOT_FOUND: {"description": f"Проекта нет: «{PROJECT_NOT_FOUND}»."},
         status.HTTP_409_CONFLICT: {"description": f"Имя занято: «{NAME_TAKEN}»."},
     },
 )
-def create_department(payload: DepartmentCreate, db: DbSession) -> Department:
-    """`201` с созданным отделом; `409` — имя занято живым отделом."""
+def create_department(project_id: int, payload: DepartmentCreate, db: DbSession) -> Department:
+    """`201` с созданным отделом; `404` — проекта нет, `409` — имя занято в проекте.
+
+    Порядок проверок: проект → название → время → роли → занятость имени. Проект
+    проверяется до разбора тела, поэтому вложенный путь на удалённом проекте отвечает
+    `404`, а не `422` о кривом теле.
+    """
+    _get_alive_project(db, project_id)
     name = validate_name(payload.name)
     start_time, end_time = validate_times(payload.start_time, payload.end_time)
     roles = validate_role_ids(db, payload.role_ids)
-    if _name_is_taken(db, name):
+    if _name_is_taken(db, project_id, name):
         raise HTTPException(status.HTTP_409_CONFLICT, NAME_TAKEN)
 
     department = Department(
+        project_id=project_id,
         name=name,
         start_time=start_time,
         end_time=end_time,
@@ -181,7 +236,7 @@ def create_department(payload: DepartmentCreate, db: DbSession) -> Department:
     return department
 
 
-@router.patch(
+@items_router.patch(
     "/{department_id}",
     response_model=DepartmentResponse,
     summary="Правка отдела",
@@ -203,10 +258,18 @@ def update_department(
     Сначала проверяются все присланные поля, и только потом они присваиваются:
     отказ не должен оставлять в сессии половину правки. `role_ids` заменяет набор
     ролей целиком, а не дополняет его.
+
+    Отдел между проектами не переезжает: `project_id` в теле — не поле правки, его
+    значение игнорируется. Тело из одного `project_id` не меняет ничего, поэтому ручка
+    отдаёт отдел как есть, не трогая строку; пустое тело по-прежнему `422`.
     """
     department = _get_alive_department(db, department_id)
     changes = payload.model_dump(exclude_unset=True)
+    # Переноса отдела между проектами нет: присланный `project_id` не применяется.
+    changes.pop("project_id", None)
     if not changes:
+        if "project_id" in payload.model_fields_set:
+            return department
         raise _reject(NO_FIELDS_TO_UPDATE)
 
     name: str | None = None
@@ -225,7 +288,12 @@ def update_department(
         start_time, end_time = validate_times(raw_start or "", raw_end or "")
     if "role_ids" in changes:
         roles = validate_role_ids(db, changes["role_ids"] or [])
-    if name is not None and _name_is_taken(db, name, exclude_id=department.id):
+    if name is not None and _name_is_taken(
+        db,
+        department.project_id,
+        name,
+        exclude_id=department.id,
+    ):
         raise HTTPException(status.HTTP_409_CONFLICT, NAME_TAKEN)
 
     if name is not None:
@@ -246,7 +314,7 @@ def update_department(
     return department
 
 
-@router.delete(
+@items_router.delete(
     "/{department_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Мягкое удаление отдела",
