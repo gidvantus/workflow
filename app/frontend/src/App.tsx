@@ -1,37 +1,25 @@
 /**
- * Оболочка приложения: бренд, меню с двумя разделами и подвал.
+ * Оболочка приложения: бренд, меню с единственным разделом «Проекты» и подвал.
  *
- * Выбранный раздел — состояние в `App`: роутера и отдельных URL нет, поэтому F5 всегда
- * открывает «Проекты». Оба раздела смонтированы и читают свои списки при старте, чтобы
- * бейдж количества стоял у обоих пунктов меню, а не появлялся после переключения;
- * невыбранный раздел скрыт атрибутом `hidden` и потому недоступен ни глазу, ни
- * вспомогательным технологиям.
+ * Раздел один: отделы живут внутри проекта вкладкой на его странице, отдельного пункта
+ * меню и отдельного экрана у них больше нет. Роутера и отдельных URL в приложении нет,
+ * поэтому F5 всегда открывает «Проекты».
  *
- * Смонтированный раздел живёт между переключениями, поэтому «Проекты» получают признак
- * активности: страница проекта — состояние раздела, и уход в «Отделы» её закрывает
- * (`ProjectsPage` сбрасывает `openProject`), иначе при возврате человек увидел бы не
- * список, а оставленную открытой страницу.
+ * Раздел смонтирован постоянно, и состояние страницы проекта живёт в нём: бейдж меню
+ * показывает то же число, что счётчик списка, и появляется, когда список прочитан.
  */
 
 import { useCallback, useState } from 'react';
 
-import DepartmentsPage from './components/DepartmentsPage';
 import ProjectsPage from './components/ProjectsPage';
 
-type Section = 'projects' | 'departments';
-
 export default function App(): JSX.Element {
-  const [section, setSection] = useState<Section>('projects');
   const [projectsCount, setProjectsCount] = useState<number | null>(null);
-  const [departmentsCount, setDepartmentsCount] = useState<number | null>(null);
 
-  // Обработчики стабильны: разделы зовут их из эффекта, и новая ссылка на каждой
+  // Обработчик стабилен: раздел зовёт его из эффекта, и новая ссылка на каждой
   // отрисовке запускала бы эффект заново.
   const handleProjectsCount = useCallback((count: number | null): void => {
     setProjectsCount(count);
-  }, []);
-  const handleDepartmentsCount = useCallback((count: number | null): void => {
-    setDepartmentsCount(count);
   }, []);
 
   return (
@@ -62,12 +50,9 @@ export default function App(): JSX.Element {
           <a
             className="nav__item"
             href="#"
-            aria-current={section === 'projects' ? 'page' : undefined}
+            aria-current="page"
             data-testid="nav-projects"
-            onClick={(event) => {
-              event.preventDefault();
-              setSection('projects');
-            }}
+            onClick={(event) => event.preventDefault()}
           >
             <svg
               width="16"
@@ -83,44 +68,11 @@ export default function App(): JSX.Element {
             Проекты
             {projectsCount !== null && <span className="nav__count">{projectsCount}</span>}
           </a>
-          <a
-            className="nav__item"
-            href="#"
-            aria-current={section === 'departments' ? 'page' : undefined}
-            data-testid="nav-departments"
-            onClick={(event) => {
-              event.preventDefault();
-              setSection('departments');
-            }}
-          >
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 16 16"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.4"
-              aria-hidden="true"
-            >
-              <path d="M3 13V7.5m5 5.5v-9m5 9V9.5" />
-            </svg>
-            Отделы
-            {departmentsCount !== null && <span className="nav__count">{departmentsCount}</span>}
-          </a>
         </nav>
       </aside>
 
       <div className="main">
-        <div className="page" hidden={section !== 'projects'}>
-          <ProjectsPage
-            onCountChange={handleProjectsCount}
-            active={section === 'projects'}
-          />
-        </div>
-
-        <div className="page" hidden={section !== 'departments'}>
-          <DepartmentsPage onCountChange={handleDepartmentsCount} />
-        </div>
+        <ProjectsPage onCountChange={handleProjectsCount} />
 
         <footer className="footbar">
           <p className="footbar__note">© 2026 Workflow</p>

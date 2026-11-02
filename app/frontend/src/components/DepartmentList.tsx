@@ -1,6 +1,10 @@
 /**
  * Карточка «Список отделов»: состояния загрузки, пустого списка и ошибки загрузки,
- * строки с названием, временем работы, ролями и действиями под «⋯».
+ * строки с названием, временем работы, ролями и действиями под «⋯», кнопка
+ * «Добавить отдел» в шапке карточки рядом со счётчиком.
+ *
+ * Карточка самодостаточна и переиспользуется: она не знает, где стоит — на странице
+ * проекта; проект в запросы подставляет форма, которую открывает `onCreate`.
  *
  * Время — главный элемент раздела: значение приходит с сервера строкой `"ЧЧ:ММ"` и
  * показывается как `13:00–04:00`, под ним длительность смены. Переход через полночь
@@ -212,6 +216,7 @@ type DepartmentListProps = {
   /** Текст ошибки загрузки; `null` — ошибки нет. */
   errorText: string | null;
   onRetry: () => void;
+  onCreate: () => void;
   onEdit: (department: Department) => void;
   onDelete: (department: Department) => void;
 };
@@ -221,6 +226,7 @@ export default function DepartmentList({
   loading,
   errorText,
   onRetry,
+  onCreate,
   onEdit,
   onDelete,
 }: DepartmentListProps): JSX.Element {
@@ -233,7 +239,17 @@ export default function DepartmentList({
         <h2 className="card__title" id={titleId}>
           Список отделов
         </h2>
-        {showCount && <span className="card__meta">{departmentsCount(departments.length)}</span>}
+        <div className="card__tools">
+          {showCount && <span className="card__meta">{departmentsCount(departments.length)}</span>}
+          <button
+            className="btn btn--dark"
+            type="button"
+            data-testid="department-create"
+            onClick={onCreate}
+          >
+            Добавить отдел
+          </button>
+        </div>
       </div>
 
       {loading && (
