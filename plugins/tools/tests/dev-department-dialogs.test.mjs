@@ -76,6 +76,10 @@ const telegram = []
 // PR тестового проекта: номер → { number, head: { ref, sha } }. Пустой список
 // значит «PR нет»: тогда маршрут решает метка, как раньше.
 const pulls = new Map()
+// Отказ GitHub на list_pull_requests: строка — текст ошибки, null — сервер
+// отвечает как обычно. Отказ не значит «PR нет»: это отдельный исход reviewHead(),
+// при котором ревьюера зовут, а метки не снимают.
+let pullsFail = null
 // Файлы PR и счётчик их чтений. Список отдаётся, но диспетчер нового поколения
 // его не запрашивает: маршрут решают пути замечаний, а не состав PR.
 let pullFiles = []
@@ -138,6 +142,7 @@ function mcpTool(name, args) {
     return replyText({ id: 5000 + comments.length, url: 'https://github.com/x/y/issues/' + issue.number })
   }
   if (name === 'list_pull_requests') {
+    if (pullsFail) return replyError(pullsFail)
     return replyText([...pulls.values()])
   }
   if (name === 'issue_write') {
@@ -375,6 +380,8 @@ check('рабочая область отдела зарегистрирован
 
 endTurn(devDialog)
 setLabels(100, ['for-code-review'])
+// Разработчик закончил работу с PR: ревьюеру есть что смотреть.
+pulls.set(100, { number: 100, head: { ref: 'feature/100-demo', sha: 'sha-100-1' } })
 await tick(app)
 step = await tick(app)
 check('после разработки — код-ревьюер', step.result.action + ':' + step.result.role, 'dispatched:code-review')
@@ -403,6 +410,8 @@ check('сказано, что вернул тестировщик', lastPrompt()
 
 endTurn(devDialog)
 setLabels(100, ['for-code-review'])
+// Доработка — новый коммит в ту же ветку: ревизия сменилась, ревьюер снова нужен.
+pulls.set(100, { number: 100, head: { ref: 'feature/100-demo', sha: 'sha-100-2' } })
 await tick(app)
 step = await tick(app)
 check('повторное ревью в прежнем диалоге', step.result.sessionId, reviewDialog)
@@ -483,6 +492,7 @@ check('после снятия конвейер идёт', step.result.action, '
 
 console.log('\n=== сценарий 5: возврат с код-ревью — доработка, и лимит доработок держит петлю ===')
 reset({ number: 500, title: 'Демо-тикет 500', labels: ['ready-for-dev'], state: 'open' })
+pulls.clear()
 app = await boot()
 step = await tick(app)
 const dev5 = step.result.sessionId
@@ -493,6 +503,9 @@ let dropped = null
 for (let i = 0; i < 5 && !dropped; i += 1) {
   endTurn(dev5)
   setLabels(500, ['for-code-review'])
+  // Каждая доработка — новый коммит: ревизия сменилась, ревьюер зовётся снова,
+  // и петлю ограничивает лимит доработок, а не сторож пустого круга.
+  pulls.set(500, { number: 500, head: { ref: 'feature/500-rework-limit', sha: 'sha-500-' + (i + 1) } })
   await tick(app)
   const reviewStep = await tick(app)
   if (reviewStep.result.action !== 'dispatched') { dropped = reviewStep.result; break }
@@ -1089,6 +1102,87 @@ for (const [label, half] of [['chatId: 0', { token: 't', chatId: 0 }], ['token �
   check('служебная строка в журнале (' + label + ')', fs.readFileSync(shiftLog, 'utf8').includes('Telegram: не отправлено — у проекта не задан telegram (только журнал).'), true)
   check('ошибки Telegram в состоянии нет (' + label + ')', String((await app.status()).lastError || '').includes('Telegram'), false)
 }
+
+console.log('\n=== сценарий 24: одиночная половина без ревизии снимает тикет ===')
+// Тот самый случай из постановки: PR нет вовсе, а роль всё равно ставит
+// for-code-review. Ревьюер на пустое место не зовётся: пустой ход записывается
+// половине маршрута, и у одиночной половины роли одна — первый же пустой ход
+// снимает тикет со всеми метками вместе с area:* и ждёт человека.
+reset({ number: 2400, title: 'Демо-тикет 2400', labels: ['ready-for-dev', 'area:backend'], state: 'open' })
+pulls.clear()
+comments.length = 0
+app = await boot()
+step = await tick(app)
+check('бэкенд взял тикет', step.result.action + ':' + step.result.role, 'dispatched:dev-backend')
+const dev24 = step.result.sessionId
+endTurn(dev24)
+setLabels(2400, ['for-code-review', 'area:backend'])
+await tick(app)
+step = await tick(app)
+check('ревьюер на пустой PR не зван', step.result.action, 'dropped')
+check('причина снятия названа', step.result.reason, 'no work in any half')
+check('сессии ревьюера нет', created.filter((c) => c.preset === 'code-review').length, 0)
+check('метки сняты все, включая area:*', issues.get(2400).labels, [])
+const drop24a = comments.filter((c) => c.number === 2400).pop()
+check('комментарий называет пустую половину', [drop24a.body.includes('работы нет ни у одной половины маршрута'), drop24a.body.includes('dev-backend — ветку не создавал и PR не открыл')], [true, true])
+
+console.log('\n=== сценарий 25: полный стек без ревизии — обе половины ни с чем, тикет снят ===')
+// Первая половина вернулась без PR: ревьюер не зовётся, тикет уходит второй
+// половине. Вторая тоже вернулась ни с чем — тикет снимается со всеми метками,
+// комментарий называет обе роли из noWork, а снятый тикет не берут ни
+// findActive(), ни queuedOf() до возврата человеком.
+reset({ number: 2500, title: 'Демо-тикет 2500', labels: ['ready-for-dev', 'area:fullstack'], state: 'open' })
+pulls.clear()
+comments.length = 0
+app = await boot()
+step = await tick(app)
+check('первая половина взяла тикет', step.result.action + ':' + step.result.role, 'dispatched:dev-backend')
+const dev25 = step.result.sessionId
+endTurn(dev25)
+setLabels(2500, ['for-code-review', 'area:fullstack'])
+await tick(app)
+step = await tick(app)
+check('ревьюер на пустой PR не зван', step.result.action, 'handoff')
+check('сессии ревьюера нет', created.filter((c) => c.preset === 'code-review').length, 0)
+check('тикет передан фронтенду', issues.get(2500).labels.slice().sort(), ['area:fullstack', 'ready-for-frontend'])
+check('счётчик попыток обнулён', step.state.projects.vahta.attempts[2500], 0)
+step = await tick(app)
+check('вторая половина взяла тикет', step.result.action + ':' + step.result.role, 'dispatched:dev-frontend')
+const fe25 = step.result.sessionId
+endTurn(fe25)
+setLabels(2500, ['for-code-review', 'area:fullstack', 'phase:frontend'])
+await tick(app)
+step = await tick(app)
+check('пусты все половины — тикет снят', step.result.action, 'dropped')
+check('причина снятия названа', step.result.reason, 'no work in any half')
+check('метки сняты все, включая area:*', issues.get(2500).labels, [])
+check('сессии ревьюера так и не было', created.filter((c) => c.preset === 'code-review').length, 0)
+const drop25 = comments.filter((c) => c.number === 2500).pop()
+check('комментарий называет обе половины', [drop25.body.includes('dev-backend — ветку не создавал и PR не открыл'), drop25.body.includes('dev-frontend — ветку не создавал и PR не открыл')], [true, true])
+step = await tick(app)
+check('снятый тикет конвейер не берёт', step.raw.projects.length, 0)
+setLabels(2500, ['ready-for-dev'])
+step = await tick(app)
+check('человек вернул тикет — он снова в работе', step.result.action + ':' + step.result.role, 'dispatched:dev-fullstack')
+check('пустые ходы после возврата сброшены', step.state.projects.vahta.noWork[2500], undefined)
+
+console.log('\n=== сценарий 26: GitHub не ответил — ревьюер зовётся как раньше, метки целы ===')
+// Отказ list_pull_requests — не «PR нет»: свести error к none значило бы снять
+// тикет со всеми метками в момент сбоя GitHub, а вернуть null из reviewHead() —
+// уронить каждое ветвление в TypeError и оставить тикет в ошибке на каждом тике.
+// Поэтому поддельный сервер умеет отказывать: при отказе ревьюер всё равно
+// получает тикет, метки не двигаются, пустой ход не записывается.
+reset({ number: 2600, title: 'Демо-тикет 2600', labels: ['for-code-review', 'area:backend'], state: 'open' })
+pulls.clear()
+comments.length = 0
+pullsFail = 'list_pull_requests: 502 Bad Gateway'
+app = await boot()
+step = await tick(app)
+check('при отказе GitHub ревьюер зовётся', step.result.action + ':' + step.result.role, 'dispatched:code-review')
+check('метки не тронуты', issues.get(2600).labels, ['for-code-review', 'area:backend'])
+check('пустой ход не записан', step.state.projects.vahta.noWork[2600], undefined)
+check('сбой назван в состоянии', String((await app.status()).lastError || '').includes('502 Bad Gateway'), true)
+pullsFail = null
 
 console.log('\n=== служебное ===')
 const ids = allRequestIds.map((p) => p.requestId)

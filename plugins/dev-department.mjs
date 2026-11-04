@@ -85,6 +85,12 @@
 // качаться бесконечно, потому что каждая сессия двигает метку и обнуляет
 // счётчик попыток.
 //
+// Нет ревизии — ревьюер не зовётся: пустой ход половины записывается в
+// noWork проекта, и если работы не дала ни одна роль маршрута, тикет снимается со
+// всеми метками (area:* в том числе) и ждёт человека. Снятый тикет не берут ни
+// findActive(), ни queuedOf(), пока человек не вернёт его меткой ready-for-dev:
+// живая сессия, дописавшая метку после снятия, иначе завезла бы тикет обратно.
+//
 // Первая строка любого комментария в issue и PR — `**Роль:** <кто> · <о чём>`.
 // По заголовку роли диспетчер отличает свои комментарии от ревьюерских и находит
 // начало круга доработок, поэтому формат — часть контракта конвейера. Свои
@@ -1281,7 +1287,8 @@ export default {
       if (!state.projects[id]) {
         // reviewedHead — ревизия, которую ревьюер уже смотрел; noop — сколько
         // кругов подряд прошло без нового коммита; findings — пути из замечаний,
-        // по которым выбран маршрут доработки.
+        // по которым выбран маршрут доработки; noWork — роли маршрута, которые
+        // вернулись ни с чем (без ветки и PR), по одной на роль.
         state.projects[id] = {
           run: null,
           lastShiftKey: null,
@@ -1292,6 +1299,7 @@ export default {
           reviewedHead: {},
           noop: {},
           findings: {},
+          noWork: {},
           infraFails: 0,
           backoffUntil: null,
         }
@@ -1415,6 +1423,16 @@ export default {
       // Без метки маршрута остаётся разработчик полного стека: старые тикеты и
       // задачи вне разделения ролей должны доделываться, а не вставать.
       return 'dev-fullstack'
+    }
+
+    // Пустой ход половины: роль вернулась без ветки и PR, метку перехода при этом
+    // поставила. Ключ — роль маршрута, которую в этот момент называет
+    // implementer() по меткам маршрута и фазы. Помеченные роли и есть «половины,
+    // которые кончились»: когда помечены все, тикет снимается со всеми метками.
+    function markNoWork(project, issue) {
+      const st = projectState(project.id)
+      st.noWork[issue.number] = Object.assign(st.noWork[issue.number] || {}, { [implementer(issue, project.labels)]: true })
+      return st.noWork[issue.number]
     }
 
     // Каталоги половин работы. Проект задаёт их полем areas в реестре, и это
@@ -1733,24 +1751,29 @@ export default {
     // (ревьюер принял, но метку не снял), должен доехать до ревью, а не проскочить.
     async function findActive(project, issues) {
       const L = project.labels
+      // Снятый с конвейера тикет ждёт человека: диспетчер его не берёт, пока
+      // человек не вернёт ready-for-dev (блок возврата в step()). Иначе живая
+      // сессия, дописавшая метку после снятия, завезла бы тикет обратно.
+      const st = projectState(project.id)
+      const live = issues.filter((i) => !st.dropped[i.number])
       // Ступень фронтенда стоит первой: бэкенд-часть полного стека уже сделана,
       // и тикет нельзя снова отдать ревьюеру или тестировщику — они увидят
       // половину изменения.
-      const waitingFrontend = issues.filter((i) => has(i, L.frontend))
+      const waitingFrontend = live.filter((i) => has(i, L.frontend))
       if (waitingFrontend.length > 0) return { role: 'dev-frontend', issue: waitingFrontend[0], kind: 'stage' }
-      const waitingReview = issues.filter((i) => has(i, L.review))
+      const waitingReview = live.filter((i) => has(i, L.review))
       if (waitingReview.length > 0) return { role: 'code-review', issue: waitingReview[0], kind: 'review' }
-      const waitingTest = issues.filter((i) => has(i, L.test))
+      const waitingTest = live.filter((i) => has(i, L.test))
       if (waitingTest.length > 0) return { role: 'tester', issue: waitingTest[0] }
       // Принятый тестировщиком тикет — уже не финал: его сливает DevOps-инженер.
       // Метка тестировщика означает его зелёный вердикт, а не закрытую задачу.
-      const waitingMerge = issues.filter((i) => has(i, L.ok))
+      const waitingMerge = live.filter((i) => has(i, L.ok))
       if (waitingMerge.length > 0) return { role: 'devops-delivery', issue: waitingMerge[0], kind: 'merge' }
-      const failedTest = issues.filter((i) => has(i, L.failed))
+      const failedTest = live.filter((i) => has(i, L.failed))
       if (failedTest.length > 0) {
         return { role: await roleForRework(project, failedTest[0], L), issue: failedTest[0], kind: 'rework' }
       }
-      const taken = issues.filter((i) => has(i, L.progress))
+      const taken = live.filter((i) => has(i, L.progress))
       if (taken.length > 0) {
         return { role: await roleForRework(project, taken[0], L), issue: taken[0], kind: 'continue' }
       }
@@ -1759,7 +1782,10 @@ export default {
 
     function queuedOf(project, issues) {
       const L = project.labels
-      return issues.filter((i) => has(i, L.dev)
+      // Снятый тикет не возвращается в очередь сам: его возвращает только человек.
+      const st = projectState(project.id)
+      return issues.filter((i) => !st.dropped[i.number]
+        && has(i, L.dev)
         && !has(i, L.progress) && !has(i, L.review) && !has(i, L.test) && !has(i, L.ok) && !has(i, L.failed)
         // Макет — часть постановки: пока его нет, тикет в разработку не уходит.
         // ready-for-dev при этом может стоять заранее, и это нормально.
@@ -2659,6 +2685,10 @@ export default {
         if (has(issue, L.review) && pr) return null
         const fromLabel = has(issue, L.test) ? L.test : L.review
         const reason = pr ? 'бэкенд-часть прошла код-ревью' : 'бэкенд-части в постановке не было'
+        // PR нет — первая половина вернулась без ревизии: записываем её пустой ход
+        // тем же ключом, что и dispatch(). Если и вторая половина вернётся ни с
+        // чем, тикет снимется со всеми метками, а комментарий назовёт обе.
+        if (!pr) markNoWork(project, issue)
         await dropLabels(project, issue.number, [fromLabel, L.review])
         await addLabel(project, issue.number, L.frontend)
         // Передача — это прогресс диспетчера, а не неудачная попытка агента:
@@ -2708,6 +2738,9 @@ export default {
     // Ревизия, которую ревьюер уже смотрел. Живёт в памяти диспетчера, как
     // счётчики: после перезапуска DSH поведение откатывается к «позвать
     // ревьюера» — осознанный деграйд, зависнуть тикет не может.
+    // Три исхода вместо null: 'error' — GitHub не ответил, 'none' — PR по ветке
+    // feature/<номер>-* не существует, 'sha' — PR есть. Функция ничего не пишет
+    // в состояние и ничего не кэширует: решение принимает dispatch().
     async function reviewHead(project, issue) {
       let pr = null
       try {
@@ -2715,30 +2748,35 @@ export default {
       } catch (error) {
         // GitHub не ответил — не решаем за ревьюера, зовём как обычно.
         state.lastError = 'PR #' + issue.number + ': ' + (error && error.message ? error.message : String(error))
-        return null
+        return { kind: 'error' }
       }
-      if (!pr || !pr.head || !pr.head.sha) return null
+      if (!pr || !pr.head || !pr.head.sha) return { kind: 'none' }
       const sha = String(pr.head.sha)
-      return { sha, same: projectState(project.id).reviewedHead[issue.number] === sha }
+      return { kind: 'sha', sha, same: projectState(project.id).reviewedHead[issue.number] === sha }
     }
 
     // Снятие тикета с конвейера: одна уборка на все поводы — лимит попыток, лимит
-    // доработок, два круга ревью без нового коммита. Метки снимаются все до одной:
-    // иначе снятый тикет остаётся в очереди, человек ставит ready-for-dev, и цикл
-    // «снят → возвращён → снят» крутится каждый тик.
+    // доработок, два круга ревью без нового коммита, пустые ходы всех половин
+    // маршрута. Метки снимаются все до одной, вместе с маршрутом area:*: иначе
+    // снятый тикет остаётся в очереди, человек ставит ready-for-dev, и цикл
+    // «снят → возвращён → снят» крутится каждый тик. Маршрут снимается вместе с
+    // остальными метками: после возврата человеком диспетчер выведет его заново
+    // по постановке.
     async function dropFromPipeline(project, issue) {
       const L = project.labels
       // Одна правка на всю уборку: набор меток тикета пишется целиком.
-      await dropLabels(project, issue.number, [L.progress, L.review, L.failed, L.test, L.frontend, L.phaseFrontend, L.ok, L.dev, L.mockup, L.mockupsReady])
+      await dropLabels(project, issue.number, [L.progress, L.review, L.failed, L.test, L.frontend, L.phaseFrontend, L.ok, L.dev, L.mockup, L.mockupsReady, L.areaBackend, L.areaFrontend, L.areaFullstack])
       for (const presetId of ['dev-fullstack', 'dev-backend', 'dev-frontend', 'design', 'tester', 'code-review', 'devops-delivery']) {
         forgetDialog(project, presetId, issue.number)
       }
       const st = projectState(project.id)
       st.dropped[issue.number] = true
-      // Снятый тикет начинается заново: ни истории ревизий, ни пустых кругов.
+      // Снятый тикет начинается заново: ни истории ревизий, ни пустых кругов,
+      // ни пустых ходов половин.
       delete st.reviewedHead[issue.number]
       delete st.noop[issue.number]
       delete st.findings[issue.number]
+      delete st.noWork[issue.number]
     }
 
     async function dispatch(project, decision) {
@@ -2749,13 +2787,20 @@ export default {
       // только после того, как сессия ревьюера создана: упавшее создание сессии
       // не должно превращаться в «ветка не менялась» на следующем тике.
       let reviewSha = null
-      // Сторож пустого круга. Если разработчик закончил ход, не запушив коммит, а
-      // метку for-code-review переставил, ревьюер увидел бы ту же ревизию, что и в
-      // прошлый раз: круг без нового коммита не тратит ни ревью, ни бюджет
-      // доработок, а доработка уходит владельцу замечаний.
+      // Гейт ревью. Порядок ветвлений задан постановкой и не переставляется:
+      //   1) 'error' — GitHub не ответил: ревьюера зовём как раньше, ни одна
+      //      ветвь ниже не срабатывает;
+      //   2) 'sha' и та же ревизия — сторож пустого круга;
+      //   3) 'sha' и новая ревизия — обычное ревью;
+      //   4) 'none' — PR нет вовсе, ревьюеру смотреть нечего, сессия не создаётся.
       if (role === 'code-review') {
         const head = await reviewHead(project, issue)
-        if (head && head.same) {          st.noop[issue.number] = (st.noop[issue.number] || 0) + 1
+        if (head.kind === 'sha' && head.same) {
+          // Сторож пустого круга. Если разработчик закончил ход, не запушив
+          // коммит, а метку for-code-review переставил, ревьюер увидел бы ту же
+          // ревизию, что и в прошлый раз: круг без нового коммита не тратит ни
+          // ревью, ни бюджет доработок, а доработка уходит владельцу замечаний.
+          st.noop[issue.number] = (st.noop[issue.number] || 0) + 1
           if (st.noop[issue.number] >= 2) {
             // Второй круг подряд: выдавать нечего, поэтому и обещания выдачи нет —
             // только комментарий о снятии, иначе в тикете остались бы два
@@ -2784,8 +2829,57 @@ export default {
           // чтобы пустые круги не съедали бюджет задачи.
           st.rework[issue.number] = Math.max(0, (st.rework[issue.number] || 0) - 1)
           return dispatch(project, { role: owner, issue: issue, kind: 'rework' })
+        } else if (head.kind === 'sha') {
+          reviewSha = head.sha
+        } else if (head.kind === 'none') {
+          // PR по ветке feature/<номер>-* не существует: ревизии нет, смотреть
+          // ревьюеру нечего — startSession('code-review') в этой ветви недостижим.
+          // Пустой ход записывается той роли, которая только что сдала тикет: её
+          // и называет implementer() по меткам маршрута и фазы.
+          const emptyHanded = implementer(issue, L)
+          const noWork = markNoWork(project, issue)
+          if (has(issue, L.areaFullstack) && !has(issue, L.phaseFrontend) && !noWork['dev-frontend']) {
+            // Вторая половина маршрута ещё не работала: тикет не снимаем, а
+            // передаём фронтенду — первая половина была пустой, но это не
+            // повод хоронить весь тикет полного стека.
+            await dropLabels(project, issue.number, [L.review])
+            await addLabel(project, issue.number, L.frontend)
+            // Передача — прогресс диспетчера, а не неудачная попытка агента:
+            // счётчик обнуляем, иначе вторая половина сгорала бы на первом шаге.
+            st.attempts[issue.number] = 0
+            try {
+              await postComment(project, issue.number, 'ревизии нет, ревью не зову',
+                'PR по ветке feature/' + issue.number + '-* нет: ' + emptyHanded +
+                  ' вернулся без ревизии — смотреть ревьюеру нечего, код-ревью не зову. ' +
+                  'Тикет передан фронтенд-разработчику (' + L.frontend +
+                  '): он продолжит в той же ветке и том же PR.')
+            } catch (error) {
+              state.lastError = 'комментарий о пустом ходе первой половины: ' + (error && error.message ? error.message : String(error))
+            }
+            if (st.run) {
+              st.run.entries.push({ number: issue.number, title: issue.title, role: emptyHanded, outcome: 'ревизии нет — передано фронтенду (' + L.frontend + ')' })
+            }
+            return { action: 'handoff', project: project.id, issue: issue.number, reason: 'no revision from first half' }
+          }
+          // Работы не дала ни одна помеченная половина маршрута: тикет ждёт
+          // человека, а не крутит ревьюера по пустому месту. Список ролей берётся
+          // из noWork проекта, а не из догадки о маршруте.
+          const emptyRoles = Object.keys(noWork).filter((name) => noWork[name])
+          const outcomes = emptyRoles.map((name) => '- ' + name + ' — ветку не создавал и PR не открыл').join('\n')
+          try {
+            await postComment(project, issue.number, 'работы нет ни у одной половины маршрута',
+              'Ревизии не дала ни одна половина маршрута — смотреть ревьюеру нечего:\n\n' + outcomes +
+                '\n\nТикет снят с конвейера вместе со всеми метками, включая area:*. Нужен человек: поставь ' +
+                L.dev + ', и маршрут вместе с диалогами выведется заново по постановке.')
+          } catch (error) {
+            state.lastError = 'комментарий о пустом ходе всех половин: ' + (error && error.message ? error.message : String(error))
+          }
+          await dropFromPipeline(project, issue)
+          if (st.run) {
+            st.run.entries.push({ number: issue.number, title: issue.title, outcome: 'снят с конвейера: работы нет ни у одной половины маршрута' })
+          }
+          return { action: 'dropped', project: project.id, issue: issue.number, reason: 'no work in any half' }
         }
-        if (head) reviewSha = head.sha
       }
       const attempts = (st.attempts[issue.number] || 0) + 1
       st.attempts[issue.number] = attempts
@@ -3085,6 +3179,9 @@ export default {
         delete st.reviewedHead[issue.number]
         delete st.noop[issue.number]
         delete st.findings[issue.number]
+        // Пустые ходы половин тоже начинаются заново: человек вернул задачу,
+        // значит следующая половина снова получает свой шанс.
+        delete st.noWork[issue.number]
         for (const presetId of ['dev-fullstack', 'dev-backend', 'dev-frontend', 'design']) {
           forgetDialog(project, presetId, issue.number)
         }
