@@ -76,6 +76,10 @@ const advance = (ms) => { clock += ms }
 const issues = new Map()
 const comments = []
 const telegram = []
+// PR тестового проекта: номер → { number, head: { ref, sha } }. Диспетчер зовёт
+// ревьюера только по существующей ревизии, поэтому сценарии, доходящие до
+// код-ревью, кладут сюда PR — без него ревьюера нет вовсе.
+const pulls = new Map()
 
 // Диспетчер говорит с GitHub только по MCP (с переездом GitHub на сервер), поэтому
 // поддельный сервер отвечает на те же инструменты, что и штатный
@@ -135,7 +139,7 @@ function mcpTool(name, args) {
     comments.push({ number: issue.number, body: args.body, user: 'dispatcher' })
     return replyText({ id: 5000 + comments.length, url: 'https://github.com/x/y/issues/' + issue.number })
   }
-  if (name === 'list_pull_requests') return replyText([])
+  if (name === 'list_pull_requests') return replyText([...pulls.values()])
   if (name === 'issue_write') {
     const issue = issues.get(Number(args.issue_number))
     if (!issue) return replyError('failed to update issue: 404 Not Found')
@@ -377,6 +381,8 @@ check('ожидание книгу не меняет', readBook().length, 1)
 
 endTurn(devSession)
 setLabels(15, ['for-code-review', 'area:frontend'])
+// Ревьюеру есть что смотреть: ветка задачи с PR.
+pulls.set(15, { number: 15, head: { ref: 'feature/15-usage-ledger', sha: 'sha-15-1' } })
 await app.tick()
 step = await app.tick()
 check('после разработки — код-ревьюер', step.action + ':' + step.role, 'dispatched:code-review')
@@ -765,6 +771,7 @@ const carriedSession = step.sessionId
 surfaces.set(carriedSession, [msg(1, 1, 1000, 100)])
 endTurn(carriedSession)
 setLabels(30, ['for-code-review', 'area:frontend'])
+pulls.set(30, { number: 30, head: { ref: 'feature/30-carried-usage', sha: 'sha-30-1' } })
 await app.tick()
 step = await app.tick()
 check('смена 1 довела до ревью', step.action + ':' + step.role, 'dispatched:code-review')

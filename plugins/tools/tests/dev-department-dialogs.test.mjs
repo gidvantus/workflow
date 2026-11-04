@@ -375,6 +375,8 @@ check('рабочая область отдела зарегистрирован
 
 endTurn(devDialog)
 setLabels(100, ['for-code-review'])
+// Разработчик закончил работу с PR: ревьюеру есть что смотреть.
+pulls.set(100, { number: 100, head: { ref: 'feature/100-demo', sha: 'sha-100-1' } })
 await tick(app)
 step = await tick(app)
 check('после разработки — код-ревьюер', step.result.action + ':' + step.result.role, 'dispatched:code-review')
@@ -403,6 +405,8 @@ check('сказано, что вернул тестировщик', lastPrompt()
 
 endTurn(devDialog)
 setLabels(100, ['for-code-review'])
+// Доработка — новый коммит в ту же ветку: ревизия сменилась, ревьюер снова нужен.
+pulls.set(100, { number: 100, head: { ref: 'feature/100-demo', sha: 'sha-100-2' } })
 await tick(app)
 step = await tick(app)
 check('повторное ревью в прежнем диалоге', step.result.sessionId, reviewDialog)
@@ -483,6 +487,7 @@ check('после снятия конвейер идёт', step.result.action, '
 
 console.log('\n=== сценарий 5: возврат с код-ревью — доработка, и лимит доработок держит петлю ===')
 reset({ number: 500, title: 'Демо-тикет 500', labels: ['ready-for-dev'], state: 'open' })
+pulls.clear()
 app = await boot()
 step = await tick(app)
 const dev5 = step.result.sessionId
@@ -493,6 +498,9 @@ let dropped = null
 for (let i = 0; i < 5 && !dropped; i += 1) {
   endTurn(dev5)
   setLabels(500, ['for-code-review'])
+  // Каждая доработка — новый коммит: ревизия сменилась, ревьюер зовётся снова,
+  // и петлю ограничивает лимит доработок, а не сторож пустого круга.
+  pulls.set(500, { number: 500, head: { ref: 'feature/500-rework-limit', sha: 'sha-500-' + (i + 1) } })
   await tick(app)
   const reviewStep = await tick(app)
   if (reviewStep.result.action !== 'dispatched') { dropped = reviewStep.result; break }
@@ -1089,6 +1097,69 @@ for (const [label, half] of [['chatId: 0', { token: 't', chatId: 0 }], ['token �
   check('служебная строка в журнале (' + label + ')', fs.readFileSync(shiftLog, 'utf8').includes('Telegram: не отправлено — у проекта не задан telegram (только журнал).'), true)
   check('ошибки Telegram в состоянии нет (' + label + ')', String((await app.status()).lastError || '').includes('Telegram'), false)
 }
+
+console.log('\n=== сценарий 24: одиночная половина без ревизии снимает тикет ===')
+// Тот самый случай из постановки: PR нет вовсе, а роль всё равно ставит
+// for-code-review. Ревьюер на пустое место не зовётся: пустой ход записывается
+// половине маршрута, и у одиночной половины роли одна — первый же пустой ход
+// снимает тикет со всеми метками вместе с area:* и ждёт человека.
+reset({ number: 2400, title: 'Демо-тикет 2400', labels: ['ready-for-dev', 'area:backend'], state: 'open' })
+pulls.clear()
+comments.length = 0
+app = await boot()
+step = await tick(app)
+check('бэкенд взял тикет', step.result.action + ':' + step.result.role, 'dispatched:dev-backend')
+const dev24 = step.result.sessionId
+endTurn(dev24)
+setLabels(2400, ['for-code-review', 'area:backend'])
+await tick(app)
+step = await tick(app)
+check('ревьюер на пустой PR не зван', step.result.action, 'dropped')
+check('причина снятия названа', step.result.reason, 'no work in any half')
+check('сессии ревьюера нет', created.filter((c) => c.preset === 'code-review').length, 0)
+check('метки сняты все, включая area:*', issues.get(2400).labels, [])
+const drop24a = comments.filter((c) => c.number === 2400).pop()
+check('комментарий называет пустую половину', [drop24a.body.includes('работы нет ни у одной половины маршрута'), drop24a.body.includes('dev-backend — ветку не создавал и PR не открыл')], [true, true])
+
+console.log('\n=== сценарий 25: полный стек без ревизии — обе половины ни с чем, тикет снят ===')
+// Первая половина вернулась без PR: ревьюер не зовётся, тикет уходит второй
+// половине. Вторая тоже вернулась ни с чем — тикет снимается со всеми метками,
+// комментарий называет обе роли из noWork, а снятый тикет не берут ни
+// findActive(), ни queuedOf() до возврата человеком.
+reset({ number: 2500, title: 'Демо-тикет 2500', labels: ['ready-for-dev', 'area:fullstack'], state: 'open' })
+pulls.clear()
+comments.length = 0
+app = await boot()
+step = await tick(app)
+check('первая половина взяла тикет', step.result.action + ':' + step.result.role, 'dispatched:dev-backend')
+const dev25 = step.result.sessionId
+endTurn(dev25)
+setLabels(2500, ['for-code-review', 'area:fullstack'])
+await tick(app)
+step = await tick(app)
+check('ревьюер на пустой PR не зван', step.result.action, 'handoff')
+check('сессии ревьюера нет', created.filter((c) => c.preset === 'code-review').length, 0)
+check('тикет передан фронтенду', issues.get(2500).labels.slice().sort(), ['area:fullstack', 'ready-for-frontend'])
+check('счётчик попыток обнулён', step.state.projects.vahta.attempts[2500], 0)
+step = await tick(app)
+check('вторая половина взяла тикет', step.result.action + ':' + step.result.role, 'dispatched:dev-frontend')
+const fe25 = step.result.sessionId
+endTurn(fe25)
+setLabels(2500, ['for-code-review', 'area:fullstack', 'phase:frontend'])
+await tick(app)
+step = await tick(app)
+check('пусты все половины — тикет снят', step.result.action, 'dropped')
+check('причина снятия названа', step.result.reason, 'no work in any half')
+check('метки сняты все, включая area:*', issues.get(2500).labels, [])
+check('сессии ревьюера так и не было', created.filter((c) => c.preset === 'code-review').length, 0)
+const drop25 = comments.filter((c) => c.number === 2500).pop()
+check('комментарий называет обе половины', [drop25.body.includes('dev-backend — ветку не создавал и PR не открыл'), drop25.body.includes('dev-frontend — ветку не создавал и PR не открыл')], [true, true])
+step = await tick(app)
+check('снятый тикет конвейер не берёт', step.raw.projects.length, 0)
+setLabels(2500, ['ready-for-dev'])
+step = await tick(app)
+check('человек вернул тикет — он снова в работе', step.result.action + ':' + step.result.role, 'dispatched:dev-fullstack')
+check('пустые ходы после возврата сброшены', step.state.projects.vahta.noWork[2500], undefined)
 
 console.log('\n=== служебное ===')
 const ids = allRequestIds.map((p) => p.requestId)
