@@ -76,6 +76,10 @@ const telegram = []
 // PR тестового проекта: номер → { number, head: { ref, sha } }. Пустой список
 // значит «PR нет»: тогда маршрут решает метка, как раньше.
 const pulls = new Map()
+// Отказ GitHub на list_pull_requests: строка — текст ошибки, null — сервер
+// отвечает как обычно. Отказ не значит «PR нет»: это отдельный исход reviewHead(),
+// при котором ревьюера зовут, а метки не снимают.
+let pullsFail = null
 // Файлы PR и счётчик их чтений. Список отдаётся, но диспетчер нового поколения
 // его не запрашивает: маршрут решают пути замечаний, а не состав PR.
 let pullFiles = []
@@ -138,6 +142,7 @@ function mcpTool(name, args) {
     return replyText({ id: 5000 + comments.length, url: 'https://github.com/x/y/issues/' + issue.number })
   }
   if (name === 'list_pull_requests') {
+    if (pullsFail) return replyError(pullsFail)
     return replyText([...pulls.values()])
   }
   if (name === 'issue_write') {
@@ -1160,6 +1165,24 @@ setLabels(2500, ['ready-for-dev'])
 step = await tick(app)
 check('человек вернул тикет — он снова в работе', step.result.action + ':' + step.result.role, 'dispatched:dev-fullstack')
 check('пустые ходы после возврата сброшены', step.state.projects.vahta.noWork[2500], undefined)
+
+console.log('\n=== сценарий 26: GitHub не ответил — ревьюер зовётся как раньше, метки целы ===')
+// Отказ list_pull_requests — не «PR нет»: свести error к none значило бы снять
+// тикет со всеми метками в момент сбоя GitHub, а вернуть null из reviewHead() —
+// уронить каждое ветвление в TypeError и оставить тикет в ошибке на каждом тике.
+// Поэтому поддельный сервер умеет отказывать: при отказе ревьюер всё равно
+// получает тикет, метки не двигаются, пустой ход не записывается.
+reset({ number: 2600, title: 'Демо-тикет 2600', labels: ['for-code-review', 'area:backend'], state: 'open' })
+pulls.clear()
+comments.length = 0
+pullsFail = 'list_pull_requests: 502 Bad Gateway'
+app = await boot()
+step = await tick(app)
+check('при отказе GitHub ревьюер зовётся', step.result.action + ':' + step.result.role, 'dispatched:code-review')
+check('метки не тронуты', issues.get(2600).labels, ['for-code-review', 'area:backend'])
+check('пустой ход не записан', step.state.projects.vahta.noWork[2600], undefined)
+check('сбой назван в состоянии', String((await app.status()).lastError || '').includes('502 Bad Gateway'), true)
+pullsFail = null
 
 console.log('\n=== служебное ===')
 const ids = allRequestIds.map((p) => p.requestId)
