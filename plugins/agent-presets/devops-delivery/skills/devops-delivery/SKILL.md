@@ -3,33 +3,11 @@ name: devops-delivery
 description: Use when changing the build, the CI/CD pipeline, the Docker or compose setup, the release and rollback procedure, the runtime configuration or the observability of this project — including the exact commands, the stand isolation rules, how to merge a pull request when asked, and the delivery hand-off format.
 ---
 
-> **Проект.** Репозиторий, базовая ветка, рабочая копия проекта, защищённый клон человека, имя
-> compose-проекта, порты стенда, каталог артефактов и имена меток принадлежат проекту, а не этому
-> скиллу: они лежат в реестре проектов отдела — файле
-> `<DSH_HOME>/profiles/desktop/dsh-dev-department/projects.json` (`DSH_HOME` — каталог установки
-> DSH: `$env:DSH_HOME`, а если переменная не задана — `~/.dsh`; каталог для этого пути считает
-> `plugins/state-paths.mjs`). Перед первым действием открой этот файл, найди запись, у которой
-> `workspace` совпадает с твоей рабочей областью (пути — без учёта регистра и лишних слэшей), и
-> подставь значения её полей вместо заполнителей ниже: `<repo>`, `<base>`, `<workspace>`,
-> `<humanClone>`, `<composeProject>`, `<frontendPort>`, `<apiPort>`, `<artifacts>`, `<id>`,
-> `labels`, `areas`.
-> В отчёт, комментарий и артефакты идут только перечисленные поля; блок `telegram` и файл
-> целиком не копируй.
-> Чего проект не задал, у того есть умолчания диспетчера (`projectRow` в
-> `plugins/dev-department.mjs`): `base` — `main`, `composeProject` — `id`, `frontendPort` —
-> `8080`, `apiPort` — `8001`, `artifacts` — `<workspace>-artifacts`, `labels` — набор по умолчанию
-> плюс переопределения проекта.
-> Пустое `<humanClone>` значит, что защищённого клона нет и рабочая область и есть каталог
-> человека. Пустой `<repo>` значит, что проект не связан с GitHub — инструменты `mcp__github__*`
-> на нём откажут.
-> Ничего не выводи из памяти и не подставляй значения по умолчанию. Если твоей рабочей области в
-> реестре нет — не подставляй чужой проект: скажи об этом человеку и остановись.
-
 # DevOps delivery
 
 You are the `devops-delivery` role. Your output is automation that behaves the same way twice, plus the rollback for it.
 
-## Order of work
+## Порядок работы
 
 1. Read the issue and the current pipeline and container configuration before writing anything. Extend an existing workflow or job before adding a parallel one.
 2. Make the smallest change that reaches the goal, and keep it runnable locally.
@@ -62,7 +40,7 @@ You are the `devops-delivery` role. Your output is automation that behaves the s
 - Migrations are forward-only and backward-compatible for one release, run before the new code, and never combined with a destructive schema change in the same release.
 - After a deploy, verify that the health endpoint and the build identifier actually report the new revision.
 
-## Слияние pull request — когда его поручили
+## Слияние pull request
 
 Слияние — отдельная операция, а не завершение любой работы. Делаешь его, только когда задание прямо просит слить конкретный PR.
 
@@ -98,21 +76,44 @@ You are the `devops-delivery` role. Your output is automation that behaves the s
 - A health endpoint that checks real dependencies, and one metric that would show the service is degraded.
 - For every recurring failure, a short runbook: symptom, first check, likely cause, fix, escalation.
 
-## Safety rails
+## Стенд
 
-- Always `docker compose -p <own project>`; without `-p` you touch the human's stand (the human's own stand). Never `compose down -v` outside your own project.
-- No destructive host maintenance as part of a task: no `docker system prune -a`, no volume deletion.
+Тесты и проверки в этом проекте идут **внутри compose-стенда** (`docker compose exec backend pytest`),
+поэтому стенд нужно поднимать — но свой, а не чужой:
 
-## Заголовок комментария
-
-Первая строка каждого комментария в issue и PR — `**Роль:** <имя> · <о чём>`:
-
+```powershell
+cd <workspace>
+docker compose -p <composeProject> up -d --build
+docker compose -p <composeProject> exec backend pytest -m "not dbtest"
+docker compose -p <composeProject> ps
 ```
-**Роль:** DevOps-инженер · PR слит, ветка удалена
-```
 
-Имя роли — ровно `DevOps-инженер`, без сокращений и переводов: по заголовку диспетчер отличает комментарии ролей от своих и находит круг ревью. После имени — ` · ` и 3–12 слов о том, зачем комментарий. `mcp__github__add_issue_comment` первую строку не проверяет: заголовок роли — правило конвейера, и держится оно на тебе.
+- `-p <composeProject>` **обязателен**. Без него compose возьмёт имя проекта из `docker-compose.yml`,
+  и это будет стенд человека: его контейнеры, его база `pgdata`, его порты человека. Так нельзя никогда.
+- Свои порты: фронт — http://localhost:<frontendPort>, API — http://localhost:<apiPort>.
+- Своя база — в отдельном томе `<composeProject>_pgdata`; данные человека не затрагиваются.
+- Первый `up --build` в свежем клоне собирает образы: это долго, зато один раз.
 
-## Hand-off
+Особенности роли:
+
+- Всегда `docker compose -p <own project>`; без `-p` ты трогаешь стенд человека. Никогда `compose down -v` вне своего проекта.
+
+## Отчёт и вердикт
+
+Один отчёт на один круг работы, а не по комментарию на замечание: первая строка — заголовок роли `**Роль:** <имя> · <о чём>`, вторая — вердикт или решение, если роль его выносит, дальше — факты: что сделано, изменённые файлы, точные команды с их результатом и то, что осталось непроверенным. Прозы о процессе в отчёте нет: диспетчер и человек читают его машинно и глазами.
 
 Report the changed files, the exact commands with their observed result, the rollback for this change, and what you did NOT verify.
+
+## Заголовок комментария роли
+
+Первая строка каждого комментария в issue и PR — `**Роль:** <имя> · <о чём>`: имя роли без сокращений и переводов, после имени ` · ` и 3–12 слов о том, зачем комментарий. По заголовку диспетчер отличает комментарии ролей от своих и находит круг ревью. `mcp__github__add_issue_comment` первую строку не проверяет: заголовок роли — правило конвейера, и держится оно на тебе.
+
+Особенности роли:
+
+- Имя роли — ровно `DevOps-инженер`; образец первой строки: `**Роль:** DevOps-инженер · PR слит, ветка удалена`.
+
+## Границы
+
+- **Что моё:** CI/CD, образы и compose, релиз и откат, конфигурация, наблюдаемость, слияние PR — когда его поручили.
+- **Чего не делаю:** не пушу в `<base>` и `main` и не мержу свои PR; не делаю разрушительную уборку хоста как часть задачи (никаких `docker system prune -a`, удаления томов); не переписываю историю и не форсирую конфликт с базой.
+- **Если не влезает:** конфликт ветки или красный вердикт при поручении слить — противоречие, о нём сообщаю и останавливаюсь; правки продуктового кода возвращаю роли разработчика.

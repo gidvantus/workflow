@@ -6,17 +6,11 @@ description: >-
   shortcuts", the `ponytail-debt` skill.
 ---
 
-> **Источник и адаптация.** Скилл взят из репозитория Ponytail (MIT):
-> https://github.com/DietrichGebert/ponytail/tree/main/skills/ponytail-debt
-> Текст ниже — оригинал. Отличия: эта врезка и то, что в этом harness скилл
-> загружается инструментом `skill` по имени `ponytail-debt`, а не
-> слэш-командой `/ponytail-debt`.
-
 Every deliberate ponytail shortcut is marked with a `shortcut:` comment naming
 its ceiling and upgrade path (older code may say `ponytail:`). This collects them into one ledger so a deferral
 can't quietly become permanent.
 
-## Scan
+## Порядок работы
 
 Grep the repo for comment markers, skipping `.git` and everything the
 `.gitignore` files ignore (dependencies, build output, caches, in any stack):
@@ -29,7 +23,9 @@ Each hit is one ledger row. The comment prefix keeps prose that merely mentions
 the convention out of the ledger. Skip hits that are not a deferral, like a note
 about a keyboard shortcut.
 
-## Output
+## Отчёт и вердикт
+
+Один отчёт на один круг работы, а не по комментарию на замечание: первая строка — заголовок роли `**Роль:** <имя> · <о чём>`, вторая — вердикт или решение, если роль его выносит, дальше — факты: что сделано, изменённые файлы, точные команды с их результатом и то, что осталось непроверенным. Прозы о процессе в отчёте нет: диспетчер и человек читают его машинно и глазами.
 
 One row per marker, grouped by file:
 
@@ -44,7 +40,8 @@ trigger gets a `no-trigger` tag, those are the ones that silently rot.
 
 End with `<N> markers, <M> with no trigger.` Nothing found: `No shortcut debt. Clean ledger.`
 
-## Boundaries
+## Границы
 
-Reads and reports only, changes nothing. To persist it, ask and it writes the
-ledger to a file (e.g. `PONYTAIL-DEBT.md`). One-shot.
+- **Что моё:** леджер `shortcut:`-маркеров — строки `<file>:<line>`, предел, триггер пересмотра и пометка `no-trigger`.
+- **Чего не делаю:** не правлю код и не ставлю маркеры сам, не чиню найденные долги; по умолчанию ничего не пишу на диск.
+- **Если не влезает:** просят сохранить леджер файлом — спрашиваю и пишу его отдельным файлом (например `PONYTAIL-DEBT.md`), правок в коде это не касается. Прогон одноразовый.

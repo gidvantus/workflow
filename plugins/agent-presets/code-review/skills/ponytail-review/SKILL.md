@@ -9,18 +9,12 @@ description: >-
   `ponytail-review` skill.
 ---
 
-> **Источник и адаптация.** Скилл взят из репозитория Ponytail (MIT):
-> https://github.com/DietrichGebert/ponytail/tree/main/skills/ponytail-review
-> Текст ниже — оригинал. Отличия: эта врезка и то, что в этом harness скилл
-> загружается инструментом `skill` по имени `ponytail-review`, а не
-> слэш-командой `/ponytail-review`.
-
 Review a change like the senior developer who will be paged when it breaks.
 Order of importance: correct, safe, holds under load, tested, fast, lean.
 Lean still matters: every extra line must be read, tested and fixed later.
 This is a report the user asked for, so give it in full.
 
-## 1. Understand first
+## Порядок работы
 
 - Review what the user names: uncommitted or staged changes, a branch, a PR
   link, or files. Nothing named: the uncommitted changes, or the last commit
@@ -34,7 +28,7 @@ This is a report the user asked for, so give it in full.
   running a script, or many users and processes at once. Judge scale against
   that, and say which load you assumed.
 
-## 2. Look for
+## Что искать
 
 1. **Bug:** wrong result, crash, missed edge case (empty, zero, last item,
    rounding, time zones), a caller broken by the change, a fix applied in one
@@ -61,19 +55,18 @@ This is a report the user asked for, so give it in full.
      or test. Split by job, never by line count, and never into helpers that
      exist only to make a function shorter.
 
-## 3. Check before you report
+## Доказательства
 
-- Every finding needs a concrete case: "this input or situation leads to this
-  wrong result". No case, no finding.
-- Re-read the lines and confirm: the caller exists, the value can really be
-  empty, the code really is unused.
-- A shortcut marked with a `shortcut:` (or older `ponytail:`) comment that names its limit is a
-  decision, not a finding, unless the expected load already crosses it.
-- Propose the smallest fix that works. Prefer fixes that delete code. Never
-  add layers, frameworks or config the problem does not need.
-- No style taste, no "consider", no vague worries.
+- У каждого замечания есть `path:line`, конкретный случай («такой вход или такая ситуация приводит к такому неверному результату»), минимальная правка и цена, если её не делать.
+- Нет случая — нет замечания: никакого вкуса, никаких «можно рассмотреть», никаких расплывчатых опасений.
+- Перед отправкой перечитай строки и подтверди: вызывающий существует, значение правда может быть пустым, код правда не используется. Неиспользуемость проверяется грепом по всему дереву, включая тесты, фикстуры, конфиг и обращения по строке.
+- Комментарий `shortcut:` (или старый `ponytail:`), называющий свой предел, — это решение, а не замечание, пока ожидаемая нагрузка не пересекает этот предел.
+- Минимальная правка та, что работает, и правка, удаляющая код, лучше добавляющей: слои, фреймворки и конфиг, которых задача не требует, не появляются.
+- Настоящий секрет, токен или пароль в комментарий не попадает никогда: показывай `***`, место и то, что его надо отозвать.
 
-## 4. Output
+## Отчёт и вердикт
+
+Один отчёт на один круг работы, а не по комментарию на замечание: первая строка — заголовок роли `**Роль:** <имя> · <о чём>`, вторая — вердикт или решение, если роль его выносит, дальше — факты: что сделано, изменённые файлы, точные команды с их результатом и то, что осталось непроверенным. Прозы о процессе в отчёте нет: диспетчер и человек читают его машинно и глазами.
 
 Very simple English: short sentences, everyday words. Explain a technical
 term the first time you use it. The reader may never have seen this code.
