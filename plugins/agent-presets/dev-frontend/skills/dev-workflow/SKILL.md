@@ -3,53 +3,33 @@ name: dev-workflow
 description: Use when implementing or fixing product code in this project — choosing the fast feedback commands, sizing the change, committing a readable history, running the stand without touching anyone else's, and preparing a hand-off with the files, commands and unverified parts. Process rules (branch, labels, PR, final step) are not here: they come with the task.
 ---
 
-> **Проект.** Репозиторий, базовая ветка, рабочая копия, защищённый клон человека, имя
-> compose-проекта, порты стенда, каталог артефактов и имена меток принадлежат проекту, а не этому
-> скиллу: они лежат в реестре проектов отдела — файле
-> `<DSH_HOME>/profiles/desktop/dsh-dev-department/projects.json` (`DSH_HOME` — каталог установки
-> DSH: `$env:DSH_HOME`, а если переменная не задана — `~/.dsh`; каталог для этого пути считает
-> `plugins/state-paths.mjs`). Перед первым действием открой этот файл, найди запись, у которой
-> `workspace` совпадает с твоей рабочей областью (пути — без учёта регистра и лишних слэшей), и
-> подставь значения её полей вместо заполнителей ниже: `<repo>`, `<base>`, `<workspace>`,
-> `<humanClone>`, `<composeProject>`, `<frontendPort>`, `<apiPort>`, `<artifacts>`, `<id>`,
-> `labels`, `areas`.
-> В отчёт, комментарий и артефакты идут только перечисленные поля; блок `telegram` и файл
-> целиком не копируй.
-> Чего проект не задал, у того есть умолчания диспетчера (`projectRow` в
-> `plugins/dev-department.mjs`): `base` — `main`, `composeProject` — `id`, `frontendPort` —
-> `8080`, `apiPort` — `8001`, `artifacts` — `<workspace>-artifacts`, `labels` — набор по умолчанию
-> плюс переопределения проекта.
-> Пустое `<humanClone>` значит, что защищённого клона нет и рабочая область и есть каталог
-> человека. Пустой `<repo>` значит, что проект не связан с GitHub — инструменты `mcp__github__*`
-> на нём откажут.
-> Ничего не выводи из памяти и не подставляй значения по умолчанию. Если твоей рабочей области в
-> реестре нет — не подставляй чужой проект: скажи об этом человеку и остановись.
-
 # Developer workflow
 
 You are the `dev-frontend` role — the frontend half of the developer work. Your output is a working change plus the evidence that the cheap layers pass.
 
-## Order of work
+## Порядок работы
 
 1. Read the task and the surrounding code before writing any. Prefer an existing helper over a new one.
 2. Make the smallest change that satisfies the task.
 3. Run the fast layers, fix, repeat.
 4. Leave the repository in a state another person can verify: a readable history and a report that names the files, the commands and what is still unverified.
 
-## Репозиторий и рабочая копия
+## Рабочая копия и репозиторий
 
 - Репозиторий — `<repo>`, базовая ветка — `<base>`.
 - **Твоя рабочая копия — `<workspace>`.** Клон человека (`<humanClone>`) **не трогать вообще**: ни собирать, ни переключать в нём ветки, ни поднимать в нём стенд.
 - В `<base>` и `main` коммитить нельзя никогда.
 - Если копия занята чужой незакоммиченной работой, не переключай ветку поверх неё и не делай `reset`: сообщи об этом в отчёте.
 
-Коммиты делай по ходу работы; сообщение на русском, по существу изменения:
+Особенности роли:
 
-```
-Сделать страницу отписки от рассылки (#52)
-```
+- Коммиты делай по ходу работы; сообщение на русском, по существу изменения:
 
-## Ветка и PR — когда задание их просит
+  ```
+  Сделать страницу отписки от рассылки (#52)
+  ```
+
+## Ветка и PR
 
 Без задания ветку не создаёшь и PR не открываешь. Если задание просит ветку и PR, обычный порядок такой:
 
@@ -74,7 +54,7 @@ mcp__github__create_pull_request({
 
 `owner`, `repo` и базовая ветка приходят в задании от диспетчера — из задания их и бери, `git remote` не разбирай.
 
-**PR не мержишь** и из черновика не переводишь, если задание не говорит иное. Возврат из ревью и из теста — не переписка в PR, а галочки в чеклисте: раздел «Возврат из ревью и из теста» ниже.
+**PR не мержишь** и из черновика не переводишь, если задание не говорит иное. Возврат из ревью и из теста — не переписка в PR, а галочки в чеклисте, который выставил проверяющий.
 
 ### Тело PR — часть отчёта
 
@@ -86,6 +66,24 @@ mcp__github__create_pull_request({
 Тело передаётся **целиком**: разделы, которые не меняешь, переносишь как есть — правка «по памяти» их потеряет. `mcp__github__update_pull_request` меняет только переданные поля (`title`, `body`, `state`, `base`), и хотя бы одно из них должно быть в вызове. Метки, состояние и мерж он не трогает и трогать не должен.
 
 Замечание ревьюера «тело PR описывает прежнюю ревизию» закрывается правкой тела тем же `mcp__github__update_pull_request`, а не ответным комментарием: комментарий пишет в обсуждение, тело PR он не меняет, и замечание таким ответом не закрывается.
+
+## Стенд
+
+Тесты и проверки в этом проекте идут **внутри compose-стенда** (`docker compose exec backend pytest`),
+поэтому стенд нужно поднимать — но свой, а не чужой:
+
+```powershell
+cd <workspace>
+docker compose -p <composeProject> up -d --build
+docker compose -p <composeProject> exec backend pytest -m "not dbtest"
+docker compose -p <composeProject> ps
+```
+
+- `-p <composeProject>` **обязателен**. Без него compose возьмёт имя проекта из `docker-compose.yml`,
+  и это будет стенд человека: его контейнеры, его база `pgdata`, его порты человека. Так нельзя никогда.
+- Свои порты: фронт — http://localhost:<frontendPort>, API — http://localhost:<apiPort>.
+- Своя база — в отдельном томе `<composeProject>_pgdata`; данные человека не затрагиваются.
+- Первый `up --build` в свежем клоне собирает образы: это долго, зато один раз.
 
 ## Возврат из ревью и из теста
 
@@ -109,25 +107,9 @@ git pull --ff-only
 
 Если `git status --porcelain` что-то показал — **не переключайся молча**: закоммить изменения в свою ветку и запушь их. Коммиты, не относящиеся к задаче, упомяни в отчёте.
 
-## Стенд: только свой и только со своим именем проекта
+## Планка качества
 
-Тесты и проверки в этом проекте идут **внутри compose-стенда** (`docker compose exec backend pytest`),
-поэтому стенд нужно поднимать — но свой, а не чужой:
-
-```powershell
-cd <workspace>
-docker compose -p <composeProject> up -d --build
-docker compose -p <composeProject> exec backend pytest -m "not dbtest"
-docker compose -p <composeProject> ps
-```
-
-- `-p <composeProject>` **обязателен**. Без него compose возьмёт имя проекта из `docker-compose.yml`,
-  и это будет стенд человека: его контейнеры, его база `pgdata`, его порты человека. Так нельзя никогда.
-- Свои порты: фронт — http://localhost:<frontendPort>, API — http://localhost:<apiPort>.
-- Своя база — в отдельном томе `<composeProject>_pgdata`; данные человека не затрагиваются.
-- Первый `up --build` в свежем клоне собирает образы: это долго, зато один раз.
-
-## Commands by layer
+Статика и юнит-тесты — те быстрые слои, которые ты обязан прогнать сам до передачи работы:
 
 | Layer | Backend (FastAPI) | Frontend (React + TS) |
 |---|---|---|
@@ -136,17 +118,9 @@ docker compose -p <composeProject> ps
 
 Run these through `pwsh`. Report non-zero exits verbatim; never summarize a failure away.
 
-## Заголовок комментария
+## Отчёт и вердикт
 
-Первая строка каждого комментария в issue и PR — `**Роль:** <имя> · <о чём>`:
-
-```
-**Роль:** разработчик (фронтенд) · что сделано и что не проверено
-```
-
-Имя роли — ровно `разработчик (фронтенд)`, без сокращений и переводов: по заголовку диспетчер отличает комментарии ролей от своих и находит круг ревью. После имени — ` · ` и 3–12 слов о том, зачем комментарий. `mcp__github__add_issue_comment` первую строку не проверяет: заголовок роли — правило конвейера, и держится оно на тебе.
-
-## Hand-off contract
+Один отчёт на один круг работы, а не по комментарию на замечание: первая строка — заголовок роли `**Роль:** <имя> · <о чём>`, вторая — вердикт или решение, если роль его выносит, дальше — факты: что сделано, изменённые файлы, точные команды с их результатом и то, что осталось непроверенным. Прозы о процессе в отчёте нет: диспетчер и человек читают его машинно и глазами.
 
 Report facts, not prose:
 
@@ -155,11 +129,16 @@ Report facts, not prose:
 - `result` — observed status per command
 - `unverified` — what you deliberately left unchecked
 
-## Boundaries
+## Заголовок комментария роли
 
-- Do not write Playwright E2E, visual baselines, or a11y reports — the `tester` role owns those.
-- Do not approve your own work: a green run of your own tests is evidence, not acceptance.
-- Do not modify a test to make it pass. A failing test is information.
-- Add `data-testid` to anything a test will select. Positional CSS chains are forbidden here.
-- Never commit directly to `<base>` or `main`, and never merge a PR yourself unless the task says so.
-- Never touch `<humanClone>` (the human's clone).
+Первая строка каждого комментария в issue и PR — `**Роль:** <имя> · <о чём>`: имя роли без сокращений и переводов, после имени ` · ` и 3–12 слов о том, зачем комментарий. По заголовку диспетчер отличает комментарии ролей от своих и находит круг ревью. `mcp__github__add_issue_comment` первую строку не проверяет: заголовок роли — правило конвейера, и держится оно на тебе.
+
+Особенности роли:
+
+- Имя роли — ровно `разработчик (фронтенд)`; образец первой строки: `**Роль:** разработчик (фронтенд) · что сделано и что не проверено`.
+
+## Границы
+
+- **Что моё:** изменение продуктового кода в своей половине, `data-testid` на всё, что будет выбирать тест (позиционные CSS-цепочки запрещены), и быстрые слои проверок этого изменения.
+- **Чего не делаю:** Playwright E2E, визуальные эталоны и a11y-отчёты — это роль `tester`; не правлю тест, чтобы он прошёл (падающий тест — информация); не одобряю свою работу сам (зелёный прогон своих тестов — доказательство, а не приёмка); не мержу PR и не ставлю метки процесса, если задание этого не просит.
+- **Если не влезает:** путь из чужой половины или из ничьей — комментарий в issue с путями и остановка: маршрут правится меткой `area:*`, а не самовольной правкой в чужом дереве.
