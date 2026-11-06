@@ -80,6 +80,10 @@ const pulls = new Map()
 // отвечает как обычно. Отказ не значит «PR нет»: это отдельный исход reviewHead(),
 // при котором ревьюера зовут, а метки не снимают.
 let pullsFail = null
+// История коммитов ветки, от старых к новым: [{ sha, files: [...] }]. Нужна
+// гейту R2: по ней поддельный list_commits отвечает, какие файлы трогали до
+// указанной ревизии, — так же, как настоящий инструмент с фильтром по пути.
+let commitChain = []
 // Файлы PR и счётчик их чтений. Список отдаётся, но диспетчер нового поколения
 // его не запрашивает: маршрут решают пути замечаний, а не состав PR.
 let pullFiles = []
@@ -144,6 +148,21 @@ function mcpTool(name, args) {
   if (name === 'list_pull_requests') {
     if (pullsFail) return replyError(pullsFail)
     return replyText([...pulls.values()])
+  }
+  if (name === 'list_commits') {
+    // Ревизии до указанной, от новых к старым, с фильтром по пути — как у
+    // настоящего инструмента. Неизвестная ревизия — отказ, а не пустой ответ:
+    // пустой ответ значил бы «файл не менялся» и молча пометил бы пункт
+    // неисправленным по несуществующим данным.
+    const at = commitChain.findIndex((row) => row.sha === String(args.sha || ''))
+    if (at < 0) return replyError('list_commits: 404 Not Found')
+    const wanted = args.path ? String(args.path) : null
+    const rows = commitChain.slice(0, at + 1)
+      .filter((row) => !wanted || (row.files || []).indexOf(wanted) !== -1)
+      .reverse()
+      .slice(0, Number(args.perPage || 30))
+      .map((row) => ({ sha: row.sha, commit: { message: 'коммит ' + row.sha } }))
+    return replyText(rows)
   }
   if (name === 'issue_write') {
     const issue = issues.get(Number(args.issue_number))
@@ -367,6 +386,7 @@ function reset(extraIssues) {
   updatedAt.clear()
   turnTails.clear()
   prompts.length = 0
+  commitChain = []
   if (extraIssues) issues.set(extraIssues.number, extraIssues)
 }
 
@@ -416,6 +436,14 @@ await tick(app)
 step = await tick(app)
 check('повторное ревью в прежнем диалоге', step.result.sessionId, reviewDialog)
 check('сказано, что ревью повторное', lastPrompt().text.includes('ПОВТОРНО'), true)
+// Повторный круг читается разделами по порядку: сначала прошлые пункты, потом
+// новое по диффу, и только потом то, что не блокирует (правило R5).
+check('в повторном задании три раздела', [
+  lastPrompt().text.includes('### Повторная проверка'),
+  lastPrompt().text.includes('### Новое'),
+  lastPrompt().text.includes('### Замечания (не блокирует)'),
+], [true, true, true])
+check('«не блокирует» выведена из маршрута в задании', lastPrompt().text.includes('не создают доработку и в маршруте не участвуют'), true)
 
 endTurn(reviewDialog)
 setLabels(100, ['ready-for-test'])
@@ -1183,6 +1211,257 @@ check('метки не тронуты', issues.get(2600).labels, ['for-code-revi
 check('пустой ход не записан', step.state.projects.vahta.noWork[2600], undefined)
 check('сбой назван в состоянии', String((await app.status()).lastError || '').includes('502 Bad Gateway'), true)
 pullsFail = null
+
+console.log('\n=== сценарий 27: вердикт BLOCKED не создаёт доработку и не тратит бюджет ===')
+// Правило T1: BLOCKED — это «проверять нечего», а не «вот список правок».
+// Раньше он не отличался от FIX, и тикет уезжал в доработку половине, которая
+// ничего не могла сделать: доработка без пунктов съедала бюджет и возвращала
+// ревьюера на ту же пару блокеров.
+reset({ number: 2700, title: 'Демо-тикет 2700', labels: ['ready-for-dev', 'area:backend'], state: 'open' })
+pulls.clear()
+comments.length = 0
+pulls.set(2700, { number: 2700, head: { ref: 'feature/2700-blocked', sha: 'sha-2700-1' }, changed_files: 3, additions: 40, deletions: 2 })
+app = await boot()
+step = await tick(app)
+check('разработчик взял тикет', step.result.action + ':' + step.result.role, 'dispatched:dev-backend')
+const devBlocked = step.result.sessionId
+endTurn(devBlocked)
+setLabels(2700, ['for-code-review', 'area:backend'])
+await tick(app)
+step = await tick(app)
+const reviewBlocked = step.result.sessionId
+check('ревьюер вызван впервые', step.result.action + ':' + step.result.role, 'dispatched:code-review')
+// Канон: заголовок роли первой строкой, вердикт второй. Ни одного пункта нет.
+reviewer(2700, '**Роль:** код-ревьюер · проверять нечего\nBLOCKED\n\nPR пустой: ветка создана, но кода в ней нет.')
+endTurn(reviewBlocked)
+setLabels(2700, ['ready-for-dev', 'area:backend'])
+await tick(app)
+const sessionsBefore = created.length
+step = await tick(app)
+check('BLOCKED не создаёт сессию половины', created.length, sessionsBefore)
+check('тикет снят, а не отдан в доработку', step.result.action, 'dropped')
+check('причина снятия названа', step.result.reason, 'review blocked without code')
+check('бюджет доработок не вырос', step.state.projects.vahta.rework[2700], undefined)
+check('в тикете сказано про BLOCKED и пустоту', comments.some((c) => c.number === 2700 && c.body.includes('BLOCKED') && c.body.includes('проверять нечего')), true)
+check('доработки в задании нет', lastPrompt().text.includes('доработка'), false)
+
+console.log('\n=== сценарий 28: BLOCKED на первой половине полного стека передаёт тикет фронтенду ===')
+// Та же ветка «работы нет», что у пустого PR: первая половина ничего не дала, но
+// это не повод хоронить весь тикет полного стека.
+reset({ number: 2800, title: 'Демо-тикет 2800', labels: ['ready-for-dev', 'area:fullstack'], state: 'open' })
+pulls.clear()
+comments.length = 0
+pulls.set(2800, { number: 2800, head: { ref: 'feature/2800-blocked-halves', sha: 'sha-2800-1' }, changed_files: 1, additions: 5, deletions: 0 })
+app = await boot()
+step = await tick(app)
+check('первая половина взяла тикет', step.result.action + ':' + step.result.role, 'dispatched:dev-backend')
+const devBlockedFs = step.result.sessionId
+endTurn(devBlockedFs)
+setLabels(2800, ['for-code-review', 'area:fullstack'])
+await tick(app)
+step = await tick(app)
+const reviewBlockedFs = step.result.sessionId
+endTurn(reviewBlockedFs)
+reviewer(2800, '**Роль:** код-ревьюер · проверять нечего\nBLOCKED\n\nБэкенд-части в постановке нет.')
+setLabels(2800, ['ready-for-dev', 'area:fullstack'])
+await tick(app)
+step = await tick(app)
+check('ревизии нет — передача фронтенду', step.result.action, 'handoff')
+check('метки передачи', issues.get(2800).labels.slice().sort(), ['area:fullstack', 'ready-for-frontend'])
+check('счётчик попыток обнулён', step.state.projects.vahta.attempts[2800], 0)
+check('в comment названа причина', comments.some((c) => c.number === 2800 && c.body.includes('BLOCKED') && c.body.includes('передан фронтенд-разработчику')), true)
+
+console.log('\n=== сценарий 29: пустой дифф — «смотреть нечего», сессии ревьюера нет ===')
+// Правило T1: PR есть, но changed_files = 0 — второй повод для kind: 'none'.
+// Такое бывает, когда роль открыла PR без единого коммита или с пустым деревом.
+reset({ number: 2900, title: 'Демо-тикет 2900', labels: ['for-code-review', 'area:backend'], state: 'open' })
+pulls.clear()
+comments.length = 0
+pulls.set(2900, { number: 2900, head: { ref: 'feature/2900-empty-diff', sha: 'sha-2900-1' }, changed_files: 0, additions: 0, deletions: 0 })
+app = await boot()
+step = await tick(app)
+check('ревьюер не зван', step.result.action, 'dropped')
+check('сессии ревьюера нет', created.filter((c) => c.preset === 'code-review').length, 0)
+check('в тикете сказано про пустой дифф', comments.some((c) => c.number === 2900 && c.body.includes('пустой дифф')), true)
+check('счётчик попыток не тратился на ревью', step.state.projects.vahta.rework[2900], undefined)
+
+console.log('\n=== сценарий 30: пункты без путей — ни одна половина сессию не получает ===')
+// Правило T3: замечания прочитаны, а пути не назвал ни один пункт. Развести
+// доработку по половинам нечем — значит тикет ждёт человека, а не возвращается в
+// очередь с задачей без замечаний.
+reset({ number: 3000, title: 'Демо-тикет 3000', labels: ['ready-for-dev', 'area:backend'], state: 'open' })
+pulls.clear()
+comments.length = 0
+pulls.set(3000, { number: 3000, head: { ref: 'feature/3000-no-paths', sha: 'sha-3000-1' }, changed_files: 2, additions: 10, deletions: 1 })
+app = await boot()
+step = await tick(app)
+const devNoPaths = step.result.sessionId
+endTurn(devNoPaths)
+setLabels(3000, ['for-code-review', 'area:backend'])
+await tick(app)
+step = await tick(app)
+const reviewNoPaths = step.result.sessionId
+reviewer(3000, '**Роль:** код-ревьюер · вердикт FIX: два пункта\nFIX: 2\n\n### Бэкенд\n- [ ] Б1 — пустой список не отличим от 404\n- [ ] Б2 — нет проверки прав\n')
+endTurn(reviewNoPaths)
+setLabels(3000, ['ready-for-dev', 'area:backend'])
+const sessionsBefore30 = created.length
+await tick(app)
+step = await tick(app)
+check('ни одна половина не получила сессию', created.length, sessionsBefore30)
+check('тикет снят к человеку', step.result.action, 'dropped')
+check('причина снятия названа', step.result.reason, 'no paths in findings')
+check('в комментарии номера пунктов', comments.some((c) => c.number === 3000 && c.body.includes('Б1, Б2') && c.body.includes('без `path:line`')), true)
+check('метки сняты все, включая area:*', issues.get(3000).labels, [])
+
+console.log('\n=== сценарий 31: замечания только в одной половине — сессию получает только она ===')
+// Правило T5: тикет полного стека, метка без фазы фронтенда завела бы доработку
+// бэкендеру — но пути замечаний все фронтовые, и бэкендер правил бы чужое дерево.
+reset({ number: 3100, title: 'Демо-тикет 3100', labels: ['ready-for-dev', 'area:fullstack'], state: 'open' })
+pulls.clear()
+comments.length = 0
+pulls.set(3100, { number: 3100, head: { ref: 'feature/3100-front-only', sha: 'sha-3100-1' }, changed_files: 2, additions: 10, deletions: 1 })
+app = await boot()
+step = await tick(app)
+const devFs31 = step.result.sessionId
+check('первая половина взяла тикет', step.result.action + ':' + step.result.role, 'dispatched:dev-backend')
+endTurn(devFs31)
+setLabels(3100, ['for-code-review', 'area:fullstack'])
+await tick(app)
+step = await tick(app)
+const reviewFs31 = step.result.sessionId
+reviewer(3100, '**Роль:** код-ревьюер · вердикт FIX: один пункт\nFIX: 1\n\n### Фронтенд\n- [ ] Ф1 · `frontend/src/pages/Vacancy.tsx:41` — нет признака отписки\n')
+endTurn(reviewFs31)
+setLabels(3100, ['ready-for-dev', 'area:fullstack'])
+await tick(app)
+step = await tick(app)
+check('доработка ушла фронтендеру', step.result.action + ':' + step.result.role, 'dispatched:dev-frontend')
+check('в задании путь фронтенда', lastPrompt().text.includes('frontend/src/pages/Vacancy.tsx:41'), true)
+check('следа бэкендера в задании нет', lastPrompt().text.includes('Границы бэкендера'), false)
+
+console.log('\n=== сценарий 32: незакрытые пункты — не повод звать ревьюера (R1) ===')
+// Правило R1: разработчик закрывает свои пункты галочками. Если галочек нет,
+// ревьюер увидит тот же дефект и вернёт тикет снова — это круг без работы.
+// Первый отказ уводит доработку по путям незакрытых пунктов и не тратит бюджет,
+// второй подряд снимает тикет к человеку.
+reset({ number: 3200, title: 'Демо-тикет 3200', labels: ['ready-for-dev', 'area:backend'], state: 'open' })
+pulls.clear()
+comments.length = 0
+commitChain = [
+  { sha: 'sha-3200-1', files: ['backend/app/api/orders.py', 'backend/app/service/billing.py'] },
+]
+pulls.set(3200, { number: 3200, head: { ref: 'feature/3200-unclosed', sha: 'sha-3200-1' }, changed_files: 2, additions: 12, deletions: 3 })
+app = await boot()
+step = await tick(app)
+const dev32 = step.result.sessionId
+endTurn(dev32)
+setLabels(3200, ['for-code-review', 'area:backend'])
+await tick(app)
+step = await tick(app)
+const review32 = step.result.sessionId
+const checklist32 = '**Роль:** код-ревьюер · вердикт FIX: два пункта\nFIX: 2\n\n### Бэкенд\n- [ ] Б1 · `backend/app/api/orders.py:41` — пустой список не отличим от 404\n- [ ] Б2 · `backend/app/service/billing.py:12` — нет проверки прав\n'
+reviewer(3200, checklist32)
+endTurn(review32)
+setLabels(3200, ['ready-for-dev', 'area:backend'])
+await tick(app)
+step = await tick(app)
+check('первая доработка ушла разработчику', step.result.action + ':' + step.result.role, 'dispatched:dev-backend')
+check('бюджет первой доработки — 1', step.state.projects.vahta.rework[3200], 1)
+// Доработка закончилась новым коммитом, но пункты не отмечены.
+endTurn(dev32)
+commitChain.push({ sha: 'sha-3200-2', files: ['backend/app/api/orders.py'] })
+pulls.set(3200, { number: 3200, head: { ref: 'feature/3200-unclosed', sha: 'sha-3200-2' }, changed_files: 2, additions: 15, deletions: 3 })
+setLabels(3200, ['for-code-review', 'area:backend'])
+const reviewsBefore32 = created.filter((c) => c.preset === 'code-review').length
+await tick(app)
+step = await tick(app)
+check('ревьюер не вызван при незакрытых пунктах', created.filter((c) => c.preset === 'code-review').length, reviewsBefore32)
+check('доработка ушла по путям пунктов', step.result.action + ':' + step.result.role, 'dispatched:dev-backend')
+check('бюджет не вырос за круг без ревью', step.state.projects.vahta.rework[3200], 1)
+check('в тикете названы незакрытые пункты', comments.some((c) => c.number === 3200 && c.body.includes('Б1, Б2 не закрыты')), true)
+check('в задании есть пути незакрытых пунктов', [
+  lastPrompt().text.includes('backend/app/api/orders.py'),
+  lastPrompt().text.includes('backend/app/service/billing.py'),
+], [true, true])
+// Второй отказ подряд: тикет ждёт человека.
+endTurn(dev32)
+commitChain.push({ sha: 'sha-3200-3', files: ['backend/app/service/billing.py'] })
+pulls.set(3200, { number: 3200, head: { ref: 'feature/3200-unclosed', sha: 'sha-3200-3' }, changed_files: 2, additions: 18, deletions: 3 })
+setLabels(3200, ['for-code-review', 'area:backend'])
+await tick(app)
+step = await tick(app)
+check('второй отказ снимает тикет', step.result.action, 'dropped')
+check('причина снятия названа', step.result.reason, 'review checklist not closed twice')
+check('человеку сказано про чеклист', comments.some((c) => c.number === 3200 && c.body.includes('Второй раз подряд чеклист не закрыт')), true)
+check('метки сняты все', issues.get(3200).labels, [])
+check('ревьюер так и не был вызван', created.filter((c) => c.preset === 'code-review').length, reviewsBefore32)
+
+console.log('\n=== сценарий 33: отмеченный пункт без изменения файла — не исправлен (R2) ===')
+// Правило R2: галочка без правки файла ничего не значит. Файл сравнивается с
+// ревизией прошлого ревью, и в комментарий идёт доказательство с sha.
+reset({ number: 3300, title: 'Демо-тикет 3300', labels: ['ready-for-dev', 'area:backend'], state: 'open' })
+pulls.clear()
+comments.length = 0
+commitChain = [
+  { sha: 'c0ffee1', files: ['backend/app/api/orders.py', 'backend/app/service/billing.py'] },
+]
+pulls.set(3300, { number: 3300, head: { ref: 'feature/3300-unmoved', sha: 'c0ffee1' }, changed_files: 2, additions: 12, deletions: 3 })
+app = await boot()
+step = await tick(app)
+const dev33 = step.result.sessionId
+endTurn(dev33)
+setLabels(3300, ['for-code-review', 'area:backend'])
+await tick(app)
+step = await tick(app)
+const review33 = step.result.sessionId
+endTurn(review33)
+reviewer(3300, '**Роль:** код-ревьюер · вердикт FIX: один пункт\nFIX: 1\n\n### Бэкенд\n- [ ] Б1 · `backend/app/api/orders.py:41` — пустой список не отличим от 404\n')
+setLabels(3300, ['ready-for-dev', 'area:backend'])
+await tick(app)
+step = await tick(app)
+check('доработка ушла разработчику', step.result.action + ':' + step.result.role, 'dispatched:dev-backend')
+endTurn(dev33)
+// Коммит есть, но он тронул другой файл: пункт Б1 отмечен галочкой «на слово».
+commitChain.push({ sha: 'c0ffee2', files: ['backend/app/service/billing.py'] })
+pulls.set(3300, { number: 3300, head: { ref: 'feature/3300-unmoved', sha: 'c0ffee2' }, changed_files: 2, additions: 14, deletions: 3 })
+comments.filter((c) => c.user === 'reviewer').pop().body = '**Роль:** код-ревьюер · вердикт FIX: один пункт\nFIX: 1\n\n### Бэкенд\n- [x] Б1 · `backend/app/api/orders.py:41` — пустой список не отличим от 404\n'
+setLabels(3300, ['for-code-review', 'area:backend'])
+const reviewsBefore33 = created.filter((c) => c.preset === 'code-review').length
+await tick(app)
+step = await tick(app)
+check('ревьюер не вызван по неизменённому файлу', created.filter((c) => c.preset === 'code-review').length, reviewsBefore33)
+check('доработка ушла по этому пути', step.result.action + ':' + step.result.role, 'dispatched:dev-backend')
+check('в комментарии доказательство с sha', comments.some((c) => c.number === 3300 && c.body.includes('`backend/app/api/orders.py` не менялся с `c0ffee2`')), true)
+check('бюджет не вырос', step.state.projects.vahta.rework[3300], 1)
+
+console.log('\n=== сценарий 34: секция «не блокирует» не участвует в маршруте (R5) ===')
+// Правило R5: замечания по текстам и телу PR идут отдельной секцией. Их путь не
+// создаёт доработку — иначе бэкендер правил бы код, который ревьюер трогать не
+// просил, а фронтенд-пункт уезжал бы не той половине.
+reset({ number: 3400, title: 'Демо-тикет 3400', labels: ['ready-for-dev', 'area:backend'], state: 'open' })
+pulls.clear()
+comments.length = 0
+pulls.set(3400, { number: 3400, head: { ref: 'feature/3400-nonblocking', sha: 'sha-3400-1' }, changed_files: 2, additions: 9, deletions: 1 })
+app = await boot()
+step = await tick(app)
+const dev34 = step.result.sessionId
+endTurn(dev34)
+setLabels(3400, ['for-code-review', 'area:backend'])
+await tick(app)
+step = await tick(app)
+const review34 = step.result.sessionId
+check('в задании ревьюеру семантика BLOCKED', [
+  lastPrompt().text.includes('`BLOCKED` ставится ТОЛЬКО когда проверять нечего'),
+  lastPrompt().text.includes('не повод вернуть тикет в разработку'),
+], [true, true])
+reviewer(3400, '**Роль:** код-ревьюер · вердикт FIX: один блокирующий пункт\nFIX: 1\n\n### Фронтенд\n- [ ] Ф1 · `frontend/src/pages/Vacancy.tsx:41` — нет признака отписки\n\n### Замечания (не блокирует)\n- [ ] Б1 · `backend/app/api/orders.py:7` — опечатка в теле PR\n')
+endTurn(review34)
+setLabels(3400, ['ready-for-dev', 'area:backend'])
+await tick(app)
+step = await tick(app)
+check('доработка ушла только фронтендеру', step.result.action + ':' + step.result.role, 'dispatched:dev-frontend')
+check('в задании нет пути из «не блокирует»', lastPrompt().text.includes('backend/app/api/orders.py'), false)
+const dispatcher34 = comments.filter((c) => c.number === 3400 && String(c.body).startsWith('**Роль:** диспетчер'))
+check('след маршрута без «не блокирует»', dispatcher34.some((c) => c.body.includes('backend/app/api/orders.py')), false)
 
 console.log('\n=== служебное ===')
 const ids = allRequestIds.map((p) => p.requestId)
