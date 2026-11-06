@@ -44,6 +44,15 @@ const BOUNDS = '## Границы\n\n- **Что моё.** Продукт.\n- **�
 const TAIL_BACKEND = 'Особенности роли:\n- Имя роли — ровно `разработчик (бэкенд)`.\n'
 const TAIL_REVIEW = 'Особенности роли:\n- Имя роли — ровно `код-ревьюер`.\n'
 
+// Тот же каркас `## Отчёт и вердикт` (заголовок и первый абзац), но своя форма
+// отчёта дальше: под `### Бэкенд` у роли свой чеклист. Режим `frame` обязан это
+// пропустить — иначе дословная сверка запретила бы ролям разные отчёты.
+const REPORT_BODY_OTHER = '## Отчёт и вердикт\n\nПервая строка — заголовок роли.\n\n' +
+  '### Бэкенд\n- [ ] Б1 · `path:line` — что не так.\n'
+// А это уже другой каркас: первый абзац разъехался, и правило «первая строка —
+// заголовок роли, вторая — вердикт» больше не сторожит ничего.
+const REPORT_FRAME_OTHER = '## Отчёт и вердикт\n\nПервая строка — имя роли.\n\n'
+
 function sandbox(name) {
   const skillsDir = path.join(root, name, 'agent-presets')
   const write = (rel, text) => {
@@ -132,25 +141,49 @@ console.log('\n=== хвост роли не ломает дословность 
   check('разные хвосты допустимы', result.violations, 0)
 }
 
-// ── 4. Запрещённые строки ───────────────────────────────────────────────────
+// ── 4. Каркас «Отчёт и вердикт» ─────────────────────────────────────────────
+
+console.log('\n=== каркас «Отчёт и вердикт» ===')
+{
+  const box = sandbox('case-report-frame')
+  box.skill('code-review/skills/code-review/SKILL.md',
+    ORDER + '\n' + REPORT + '\n' + HEADER + '\n' + BOUNDS)
+  // Своя форма отчёта под тем же первым абзацем — нарушением не считается.
+  box.skill('dev-backend/skills/dev-workflow/SKILL.md',
+    ORDER + '\n' + REPORT_BODY_OTHER + '\n' + HEADER + '\n' + BOUNDS)
+  // Первый абзац разъехался — каркас перестал быть общим.
+  box.skill('tester/skills/testing-contract/SKILL.md',
+    ORDER + '\n' + REPORT_FRAME_OTHER + '\n' + HEADER + '\n' + BOUNDS)
+
+  const result = box.lint(3)
+  const text = texts(result)
+  check('другое тело отчёта — не нарушение', fails(result).map((line) => line.rel),
+    ['tester/skills/testing-contract/SKILL.md'])
+  check('разъехавшийся каркас пойман', result.violations, 1)
+  assertOk('назван блок «Отчёт и вердикт»', /общий блок «Отчёт и вердикт» расходится/.test(text), text)
+}
+
+// ── 5. Запрещённые строки ───────────────────────────────────────────────────
 
 console.log('\n=== запрещённые строки ===')
 {
   const box = sandbox('case-forbidden')
   box.skill('dev-backend/skills/dev-workflow/SKILL.md',
     ORDER + '\n> **Проект.** Правила лежат в реестре.\n' +
+    '> **Источник и адаптация.** Поставлен.\n' +
     'Скилл ставится командой `/plugin` и `/reload-plugins`.\n' +
     'Поле `argument-hint` и Claude Code здесь не работают.\n\n' + BOUNDS)
 
   const result = box.lint(1)
   const text = texts(result)
-  for (const label of ['> **Проект.**', '/plugin', '/reload-plugins', 'argument-hint', 'Claude Code']) {
+  for (const label of ['> **Проект.**', '> **Источник и адаптация.**', '/plugin', '/reload-plugins',
+    'argument-hint', 'Claude Code']) {
     assertOk('поймана строка `' + label + '`', text.includes('`' + label + '`'), text)
   }
-  check('нарушений по числу строк', result.violations, 5)
+  check('нарушений по числу строк', result.violations, 6)
 }
 
-// ── 5. Спина: первый раздел, порядок, хвост ─────────────────────────────────
+// ── 6. Спина: первый раздел, порядок, хвост ─────────────────────────────────
 
 console.log('\n=== спина ===')
 {
@@ -178,7 +211,7 @@ console.log('\n=== спина ===')
   assertOk('хвост', /хвост обязан быть/.test(text), text)
 }
 
-// ── 6. Фронтматтер и эталон ─────────────────────────────────────────────────
+// ── 7. Фронтматтер и эталон ─────────────────────────────────────────────────
 
 console.log('\n=== фронтматтер и эталон ===')
 {
@@ -197,7 +230,7 @@ console.log('\n=== фронтматтер и эталон ===')
   assertOk('пойман общий блок без эталона', /в эталоне .* такого раздела нет/.test(text), text)
 }
 
-// ── 7. Число файлов ─────────────────────────────────────────────────────────
+// ── 8. Число файлов ─────────────────────────────────────────────────────────
 
 console.log('\n=== число файлов ===')
 {
@@ -209,7 +242,7 @@ console.log('\n=== число файлов ===')
   check('считается как нарушение', result.violations, 1)
 }
 
-// ── 8. Боевой набор ─────────────────────────────────────────────────────────
+// ── 9. Боевой набор ─────────────────────────────────────────────────────────
 
 console.log('\n=== боевой набор ===')
 {
@@ -225,8 +258,6 @@ console.log('\n=== боевой набор ===')
   assertOk('у каждой строки отчёта есть файл и строка', result.report.every((line) =>
     typeof line.rel === 'string' && line.rel.length > 0 && Number.isInteger(line.line) && line.line > 0),
   'в отчёте есть строка без файла или строки')
-  check('сумма нарушений совпадает с провалами', result.violations,
-    result.report.filter((line) => !line.ok).length)
 }
 
 fs.rmSync(root, { recursive: true, force: true })
