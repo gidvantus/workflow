@@ -1430,7 +1430,9 @@ await tick(app)
 step = await tick(app)
 check('ревьюер не вызван по неизменённому файлу', created.filter((c) => c.preset === 'code-review').length, reviewsBefore33)
 check('доработка ушла по этому пути', step.result.action + ':' + step.result.role, 'dispatched:dev-backend')
-check('в комментарии доказательство с sha', comments.some((c) => c.number === 3300 && c.body.includes('`backend/app/api/orders.py` не менялся с `c0ffee2`')), true)
+// Доказательство ссылается на ревизию ПРОШЛОГО ревью (c0ffee1), а не на текущий
+// head: «не менялся с <текущая>» тривиально верно и ничего не доказывает.
+check('в комментарии доказательство с sha прошлого ревью', comments.some((c) => c.number === 3300 && c.body.includes('`backend/app/api/orders.py` не менялся с `c0ffee1`')), true)
 check('бюджет не вырос', step.state.projects.vahta.rework[3300], 1)
 
 console.log('\n=== сценарий 34: секция «не блокирует» не участвует в маршруте (R5) ===')
@@ -1462,6 +1464,91 @@ check('доработка ушла только фронтендеру', step.re
 check('в задании нет пути из «не блокирует»', lastPrompt().text.includes('backend/app/api/orders.py'), false)
 const dispatcher34 = comments.filter((c) => c.number === 3400 && String(c.body).startsWith('**Роль:** диспетчер'))
 check('след маршрута без «не блокирует»', dispatcher34.some((c) => c.body.includes('backend/app/api/orders.py')), false)
+
+console.log('\n=== сценарий 35: пункт с путём вне areas — доработка по метке, тикет не снят (Б1) ===')
+// Возврат №1 по #48: `plugins/` не описан в areas проекта, и путь
+// `plugins/dev-department.mjs` не попадает ни в одну половину. Это НЕ «пункт без
+// пути»: доработку обязана получить половина из метки, а тикет остаться в работе.
+reset({ number: 3500, title: 'Демо-тикет 3500', labels: ['ready-for-dev', 'area:fullstack'], state: 'open' })
+pulls.clear()
+comments.length = 0
+pulls.set(3500, { number: 3500, head: { ref: 'feature/3500-outside-areas', sha: 'sha-3500-1' }, changed_files: 2, additions: 20, deletions: 4 })
+app = await boot()
+step = await tick(app)
+const devOutside = step.result.sessionId
+check('первая половина взяла тикет', step.result.action + ':' + step.result.role, 'dispatched:dev-backend')
+endTurn(devOutside)
+setLabels(3500, ['for-code-review', 'area:fullstack'])
+await tick(app)
+step = await tick(app)
+const reviewOutside = step.result.sessionId
+reviewer(3500, '**Роль:** код-ревьюер · вердикт FIX: один пункт\nFIX: 1\n\n### Бэкенд\n- [ ] Б1 · `plugins/dev-department.mjs:2960` — порядок ветвлений съехал\n')
+endTurn(reviewOutside)
+setLabels(3500, ['ready-for-dev', 'area:fullstack'])
+await tick(app)
+step = await tick(app)
+check('доработка ушла по метке, а не человеку', step.result.action + ':' + step.result.role, 'dispatched:dev-backend')
+check('тикет не снят с конвейера', issues.get(3500).labels.includes('area:fullstack'), true)
+check('сказано, что разбор невозможен', comments.some((c) => c.number === 3500 && c.body.includes('разбор замечаний невозможен')), false)
+
+console.log('\n=== сценарий 36: идущая работа не снимается из-за разбора замечаний (Б2) ===')
+// Тикет в in-progress (ход половины закончился, метку не сдвинул). В PR лежит
+// прошлый чеклист ревьюера без путей — это НЕ возврат из ревью, и снимать живой
+// тикет к человеку из-за него нельзя: решает метка area:*.
+reset({ number: 3600, title: 'Демо-тикет 3600', labels: ['in-progress', 'area:backend'], state: 'open' })
+pulls.clear()
+comments.length = 0
+pulls.set(3600, { number: 3600, head: { ref: 'feature/3600-in-progress', sha: 'sha-3600-1' }, changed_files: 1, additions: 4, deletions: 1 })
+app = await boot()
+comments.push({ number: 3600, user: 'reviewer', body: '**Роль:** код-ревьюер · вердикт FIX: два пункта\nFIX: 2\n\n### Бэкенд\n- [ ] Б1 — пустой список не отличим от 404\n- [ ] Б2 — нет проверки прав\n' })
+step = await tick(app)
+check('идущий тикет остался в работе', step.result.action + ':' + step.result.role, 'dispatched:dev-backend')
+check('снятия не было', String(step.result.reason || ''), '')
+check('метка маршрута на месте', issues.get(3600).labels.includes('area:backend'), true)
+
+console.log('\n=== сценарий 37: test-failed без вердикта тестировщика — маршрут по метке (Б2) ===')
+// testFindings() вернул null (в issue нет распознанного вердикта тестировщика), и
+// разбор ушёл в PR. Маршрут test-failed постановка менять запрещает: снятие тут
+// было бы регрессией, поэтому возврат тестировщика «путей нет» не касается.
+reset({ number: 3700, title: 'Демо-тикет 3700', labels: ['test-failed', 'area:backend'], state: 'open' })
+pulls.clear()
+comments.length = 0
+pulls.set(3700, { number: 3700, head: { ref: 'feature/3700-test-failed', sha: 'sha-3700-1' }, changed_files: 1, additions: 6, deletions: 2 })
+app = await boot()
+comments.push({ number: 3700, user: 'reviewer', body: '**Роль:** код-ревьюер · вердикт FIX: один пункт\nFIX: 1\n\n### Бэкенд\n- [ ] Б1 — пустой список не отличим от 404\n' })
+step = await tick(app)
+check('возврат теста ушёл половине из метки', step.result.action + ':' + step.result.role, 'dispatched:dev-backend')
+check('снятия не было', String(step.result.reason || ''), '')
+
+console.log('\n=== сценарий 38: BLOCKED в заголовке не перебивает строку вердикта (Б3) ===')
+// Заголовок «о чём» — свободный текст: на тикете про семантику BLOCKED слово
+// BLOCKED в нём нормально. Вердикт читается сначала из СТРОКИ вердикта, иначе
+// FIX: 2 превращался бы в «смотреть нечего» и тикет уезжал из конвейера даром.
+reset({ number: 3800, title: 'Демо-тикет 3800', labels: ['ready-for-dev', 'area:backend'], state: 'open' })
+pulls.clear()
+comments.length = 0
+pulls.set(3800, { number: 3800, head: { ref: 'feature/3800-header-blocked', sha: 'sha-3800-1' }, changed_files: 2, additions: 11, deletions: 3 })
+app = await boot()
+step = await tick(app)
+const dev38 = step.result.sessionId
+endTurn(dev38)
+setLabels(3800, ['for-code-review', 'area:backend'])
+await tick(app)
+step = await tick(app)
+const review38 = step.result.sessionId
+reviewer(3800, '**Роль:** код-ревьюер · гейты ревью: BLOCKED не доработка\nFIX: 2\n\n### Бэкенд\n- [ ] Б1 · `backend/app/api/orders.py:41` — пустой список не отличим от 404\n- [ ] Б2 · `backend/app/service/billing.py:12` — нет проверки прав\n')
+endTurn(review38)
+setLabels(3800, ['ready-for-dev', 'area:backend'])
+await tick(app)
+step = await tick(app)
+check('вердикт FIX, а не BLOCKED из заголовка', step.result.action + ':' + step.result.role, 'dispatched:dev-backend')
+check('тикет не снят и не передан дальше', issues.get(3800).labels.includes('area:backend'), true)
+check('в задании пути обоих пунктов', [
+  lastPrompt().text.includes('backend/app/api/orders.py'),
+  lastPrompt().text.includes('backend/app/service/billing.py'),
+], [true, true])
+const dispatcher38 = comments.filter((c) => c.number === 3800 && String(c.body).startsWith('**Роль:** диспетчер'))
+check('о пустом коде речи нет', dispatcher38.some((c) => c.body.includes('BLOCKED')), false)
 
 console.log('\n=== служебное ===')
 const ids = allRequestIds.map((p) => p.requestId)

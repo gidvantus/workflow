@@ -1771,7 +1771,12 @@ export default {
     // ревью — круг ревьюера в PR. Нет путей или ничего не прочитано — решает
     // метка маршрута, как раньше.
     async function roleForRework(project, issue, L) {
-      const findings = (has(issue, L.failed) ? await testFindings(project, issue) : null)
+      // Откуда возврат, решает метка, а не источник найденных путей: после
+      // test-failed маршрут живёт своей меткой, и «нет путей» его не касается —
+      // иначе сбой чтения чеклиста тестировщика (testFindings() вернул null и
+      // разбор ушёл в PR) превращался бы в снятие живого тикета.
+      const fromTest = has(issue, L.failed)
+      const findings = (fromTest ? await testFindings(project, issue) : null)
         || await reviewFindings(project, issue)
       if (findings) projectState(project.id).findings[issue.number] = findings
       if (findings) {
@@ -1780,13 +1785,14 @@ export default {
         if (backend && frontend) return 'dev-fullstack'
         if (frontend) return 'dev-frontend'
         if (backend) return 'dev-backend'
-        // Пункты прочитаны, а пути не назвал ни один: развести доработку по
-        // половинам нечем. null — это «разобрали, путей нет», и dispatch()
-        // снимет тикет к человеку. Возврат null при сбое сети не отличается от
-        // метки: там findings === null, и ниже решает area:*, как раньше.
-        // После test-failed поведение прежнее: его маршрут живёт своей меткой,
-        // и менять его эта задача не вправе.
-        if (findings.source !== 'тестировщика' && (findings.items || []).length > 0) return null
+        // «Путей нет» — это когда их не назвал НИ ОДИН пункт. Пункт с путём вне
+        // areas (в этом проекте так выглядит любой `plugins/*.mjs`) путь назвал:
+        // половину по нему не определить, но маршрут по метке area:* остаётся
+        // рабочим, и снимать живой тикет из-за этого нельзя. Возврат null при
+        // сбое сети сюда не попадает вовсе: там findings === null, и ниже решает
+        // метка, как раньше.
+        const noPathsAtAll = (findings.items || []).length > 0 && !findings.items.some((item) => item.path)
+        if (!fromTest && findings.source !== 'тестировщика' && noPathsAtAll) return null
       }
       return implementer(issue, L)
     }
@@ -1860,7 +1866,11 @@ export default {
       }
       const taken = live.filter((i) => has(i, L.progress))
       if (taken.length > 0) {
-        return { role: await roleForRework(project, taken[0], L), issue: taken[0], kind: 'continue' }
+        // Идущая работа не снимается из-за разбора замечаний: это не возврат
+        // из ревью, а тикет, по которому прямо сейчас шла работа (перезапуск
+        // DSH, снятый зависший ход). Нет путей — решает метка, как раньше.
+        const role = (await roleForRework(project, taken[0], L)) || implementer(taken[0], L)
+        return { role: role, issue: taken[0], kind: 'continue' }
       }
       return null
     }
@@ -2872,16 +2882,24 @@ export default {
       return false
     }
 
-    // Вердикт из шапки комментария ревьюера. Смотрим те же три первые строки, что
-    // и круг замечаний, плюс «о чём» заголовка: `BLOCKED` важнее `FIX`, потому что
-    // именно он говорит «проверять нечего», а не «вот список правок».
+    // Вердикт из шапки комментария ревьюера. Порядок чтения тот же, что в
+    // isReviewerVerdict(): сначала СТРОКА вердикта в первых трёх строках, и только
+    // если её нет — «вердикт …» в заголовке роли. Смешивать их нельзя: «о чём»
+    // заголовка — свободный текст, и на тикете про семантику `BLOCKED` слово
+    // `BLOCKED` в нём — обычная формулировка, а не вердикт. Пока вердикт искали
+    // одной кучей, `**Роль:** код-ревьюер · гейты ревью: BLOCKED не доработка`
+    // со строкой `FIX: 2` ниже читался как BLOCKED, и живой тикет уезжал в
+    // «смотреть нечего» вместо доработки.
     function verdictWord(text) {
       const lines = String(text).split('\n')
+      const head = lines.slice(0, 3).join('\n')
+      const line = ROUND_VERDICT.exec(head)
+      if (line) return line[1] === 'FIX:' ? 'FIX' : line[1]
       const about = (HEADER_ABOUT.exec(lines[0].replace(/\r$/, '')) || [])[1] || ''
-      const head = lines.slice(0, 3).join('\n') + '\n' + about
-      if (/BLOCKED\b/.test(head)) return 'BLOCKED'
-      if (/FIX:/.test(head)) return 'FIX'
-      if (/SHIP\b/.test(head)) return 'SHIP'
+      if (!/^вердикт(\s|:|$)/i.test(about.trim())) return null
+      if (/BLOCKED\b/.test(about)) return 'BLOCKED'
+      if (/FIX:/.test(about)) return 'FIX'
+      if (/SHIP\b/.test(about)) return 'SHIP'
       return null
     }
 
@@ -3019,10 +3037,14 @@ export default {
       }
       if (open.length === 0 && unmoved.length === 0) { delete st.unclosed[issue.number]; return null }
       st.unclosed[issue.number] = (st.unclosed[issue.number] || 0) + 1
-      const shortSha = String(head.sha).slice(0, 7)
+      // Доказательство ссылается на ревизию ПРОШЛОГО ревью, а не на текущую:
+      // «не менялся с <текущая>» тривиально верно для любого файла до неё и
+      // разработчику ничего не доказывает. Смысл утверждения — файл не трогали
+      // после того, как ревьюер его смотрел.
+      const prevShort = prev ? String(prev).slice(0, 7) : ''
       const why = []
       if (open.length > 0) why.push('пункты ' + open.map((item) => item.id).join(', ') + ' не закрыты — ревью не зову')
-      for (const item of unmoved) why.push('`' + item.path + '` не менялся с `' + shortSha + '` — пункт ' + item.id + ' не исправлен')
+      for (const item of unmoved) why.push('`' + item.path + '` не менялся с `' + prevShort + '` — пункт ' + item.id + ' не исправлен')
       // Второй отказ подряд: «не закрыл → не закрыл» — это уже не ревью, а
       // человеку. Уборка та же, что у сторожа пустых кругов.
       if (st.unclosed[issue.number] >= 2) {
@@ -3142,8 +3164,12 @@ export default {
       const L = project.labels
       const { role, issue } = decision
       // Маршрут доработки не определён: пункты прочитаны, но пути не назвал ни
-      // один. Ни одна половина сессию не получает — тикет ждёт человека.
-      if (role === null) return dropUnroutableRework(project, issue)
+      // один. Снимать за это можно только возврат из ревью — у идущей работы и у
+      // возврата тестировщика маршрут обязан остаться: там берётся метка.
+      if (role === null) {
+        if ((decision.kind || 'new') === 'rework') return dropUnroutableRework(project, issue)
+        return dispatch(project, { role: implementer(issue, L), issue: issue, kind: decision.kind })
+      }
       // Ревизия, на которой сейчас выдаётся ревью. Записывается в reviewedHead
       // только после того, как сессия ревьюера создана: упавшее создание сессии
       // не должно превращаться в «ветка не менялась» на следующем тике.
