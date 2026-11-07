@@ -1298,6 +1298,7 @@ export default {
           dropped: {},
           reviewedHead: {},
           noop: {},
+          unclosed: {},
           findings: {},
           noWork: {},
           infraFails: 0,
@@ -1528,6 +1529,72 @@ export default {
       return items.filter((line) => (CHECKLIST_LINE.exec(line) || [])[2] === ' ').join('\n')
     }
 
+    // ── секции чеклиста и его пункты ────────────────────────────────────────
+    // Блокирующие секции (`### Бэкенд`, `### Фронтенд`, `### Новое`) решают
+    // маршрут доработки и вердикт. Секция `### Замечания (не блокирует)` — это
+    // тексты, тело PR и наблюдения вне диффа: её пункты не создают доработку и в
+    // маршруте не участвуют. Пока секции «не блокирует» в комментарии нет, разбор
+    // идёт по всему тексту: круги до этого правила писались прозой, и потерять их
+    // пути значило бы оставить возврат без маршрута.
+    const CHECKLIST_HEADING = /^#{1,6}\s+(.+)$/
+    const NON_BLOCKING_HEADING = /не\s*блокир/i
+
+    function headingHalf(title) {
+      const t = String(title || '').toLowerCase()
+      if (NON_BLOCKING_HEADING.test(t)) return 'nonblocking'
+      if (/бэкенд|backend/.test(t)) return 'backend'
+      if (/фронтенд|frontend/.test(t)) return 'frontend'
+      // `### Новое` половину не называет: её решает путь пункта.
+      return null
+    }
+
+    // Текст без неблокирующей секции. Прочие заголовки остаются на месте — по ним
+    // вторая половина разбора восстанавливает половину пункта. Решения «вырезать
+    // всё, кроме блокирующих секций» здесь нет намеренно: заголовок, написанный не
+    // по канону, обязан деградировать в разбор целого текста, а не отдать пустоту
+    // и оставить тикет без маршрута из-за кривой строки.
+    function blockingPart(text) {
+      const lines = String(text).split('\n')
+      const kept = []
+      let sawNonBlocking = false
+      let skip = false
+      for (const line of lines) {
+        const head = CHECKLIST_HEADING.exec(line)
+        if (head) {
+          skip = headingHalf(head[1]) === 'nonblocking'
+          if (skip) sawNonBlocking = true
+          if (!skip) kept.push(line)
+          continue
+        }
+        if (!skip) kept.push(line)
+      }
+      return sawNonBlocking ? kept.join('\n') : String(text)
+    }
+
+    // Пункты чеклиста: номер (Б1/Ф1), галочка, половина и путь из `path:line`.
+    // Половина берётся из секции, если пункт под ней стоит, иначе — из пути: у
+    // старых кругов секций нет, а путь есть. Пункты неблокирующей секции сюда не
+    // попадают вовсе: по ним не бывает ни доработки, ни отказа в ревью.
+    function checklistState(project, text) {
+      const areas = areasOf(project)
+      const items = []
+      let half = null
+      for (const line of String(text).split('\n')) {
+        const head = CHECKLIST_HEADING.exec(line)
+        if (head) { half = headingHalf(head[1]); continue }
+        const marked = CHECKLIST_LINE.exec(line)
+        if (!marked) continue
+        if (half === 'nonblocking') continue
+        const found = new RegExp(FINDING_PATH.source).exec(marked[5])
+        const raw = found ? found[0] : null
+        const at = raw ? ((raw.match(/:([0-9]+(?:-[0-9]+)?)$/) || [])[1] || null) : null
+        const path = raw ? raw.replace(/:\d+(?:-\d+)?$/, '').replace(/\\/g, '/').replace(/^\.\//, '') : null
+        const itemHalf = half === 'backend' || half === 'frontend' ? half : (path ? areaOfPath(path, areas) : null)
+        items.push({ id: marked[4], checked: marked[2] !== ' ', path, at, half: itemHalf })
+      }
+      return items
+    }
+
     // Круг ревью начинается вердиктом: всё, что выше последнего вердикта, — уже
     // закрытая история и к текущему возврату отношения не имеет. Заголовок роли
     // в первой строке — основной признак; регулярка ниже остаётся запасным
@@ -1596,8 +1663,12 @@ export default {
       const backend = []
       const frontend = []
       const seen = new Set()
+      // Пункты неблокирующей секции в маршруте не участвуют: их путь не ищется
+      // вовсе, иначе замечание «поправь текст в теле PR» отправляло бы
+      // разработчика править код, который ревьюер не просил трогать.
+      const text = blockingPart(round)
       FINDING_PATH.lastIndex = 0
-      let match = FINDING_PATH.exec(round)
+      let match = FINDING_PATH.exec(text)
       while (match) {
         const raw = match[0]
         // Суффикс :строка срезается для маршрута и для следа в тикете, но сам
@@ -1611,9 +1682,13 @@ export default {
           if (half === 'backend') backend.push({ path: cleaned, at })
           if (half === 'frontend') frontend.push({ path: cleaned, at })
         }
-        match = FINDING_PATH.exec(round)
+        match = FINDING_PATH.exec(text)
       }
-      return { backend, frontend, source }
+      // Пункты блокирующих секций нужны отдельно: по ним отличается «разобрали,
+      // но путей нет» (тикет ждёт человека) от «ничего не прочитано» (маршрут
+      // решает метка area:*). Список пунктов идёт в комментарий с номерами.
+      const items = checklistState(project, text)
+      return { backend, frontend, source, items }
     }
 
     // Замечания последнего круга ревью, разложенные по половинам работы. Вердикт
@@ -1652,7 +1727,10 @@ export default {
         }
       }
       if (from < 0) return { backend: [], frontend: [], source: 'ревьюера' }
-      const round = texts.slice(from).map(checklistPart).join('\n')
+      // Секции разбираются ДО галочек: неблокирующая секция вырезается на целом
+      // комментарии, иначе фильтр чеклиста оставил бы её пункты в тексте круга и
+      // путь из «не блокирует» уехал бы в маршрут доработки.
+      const round = texts.slice(from).map((text) => checklistPart(blockingPart(text))).join('\n')
       return collectFindings(project, round, 'ревьюера')
     }
 
@@ -1681,7 +1759,7 @@ export default {
         if (TESTER_VERDICT.test(texts[i])) verdict = i
       }
       if (last < 0) return null
-      return collectFindings(project, checklistPart(texts[verdict >= 0 ? verdict : last]), 'тестировщика')
+      return collectFindings(project, checklistPart(blockingPart(texts[verdict >= 0 ? verdict : last])), 'тестировщика')
     }
 
     // Кому отдать доработку. Решают пути из замечаний: подсчёт файлов всего PR
@@ -1693,7 +1771,12 @@ export default {
     // ревью — круг ревьюера в PR. Нет путей или ничего не прочитано — решает
     // метка маршрута, как раньше.
     async function roleForRework(project, issue, L) {
-      const findings = (has(issue, L.failed) ? await testFindings(project, issue) : null)
+      // Откуда возврат, решает метка, а не источник найденных путей: после
+      // test-failed маршрут живёт своей меткой, и «нет путей» его не касается —
+      // иначе сбой чтения чеклиста тестировщика (testFindings() вернул null и
+      // разбор ушёл в PR) превращался бы в снятие живого тикета.
+      const fromTest = has(issue, L.failed)
+      const findings = (fromTest ? await testFindings(project, issue) : null)
         || await reviewFindings(project, issue)
       if (findings) projectState(project.id).findings[issue.number] = findings
       if (findings) {
@@ -1702,6 +1785,14 @@ export default {
         if (backend && frontend) return 'dev-fullstack'
         if (frontend) return 'dev-frontend'
         if (backend) return 'dev-backend'
+        // «Путей нет» — это когда их не назвал НИ ОДИН пункт. Пункт с путём вне
+        // areas (в этом проекте так выглядит любой `plugins/*.mjs`) путь назвал:
+        // половину по нему не определить, но маршрут по метке area:* остаётся
+        // рабочим, и снимать живой тикет из-за этого нельзя. Возврат null при
+        // сбое сети сюда не попадает вовсе: там findings === null, и ниже решает
+        // метка, как раньше.
+        const noPathsAtAll = (findings.items || []).length > 0 && !findings.items.some((item) => item.path)
+        if (!fromTest && findings.source !== 'тестировщика' && noPathsAtAll) return null
       }
       return implementer(issue, L)
     }
@@ -1775,7 +1866,11 @@ export default {
       }
       const taken = live.filter((i) => has(i, L.progress))
       if (taken.length > 0) {
-        return { role: await roleForRework(project, taken[0], L), issue: taken[0], kind: 'continue' }
+        // Идущая работа не снимается из-за разбора замечаний: это не возврат
+        // из ревью, а тикет, по которому прямо сейчас шла работа (перезапуск
+        // DSH, снятый зависший ход). Нет путей — решает метка, как раньше.
+        const role = (await roleForRework(project, taken[0], L)) || implementer(taken[0], L)
+        return { role: role, issue: taken[0], kind: 'continue' }
       }
       return null
     }
@@ -2579,11 +2674,24 @@ export default {
         'Обязательный финал: первой строкой комментария — `**Роль:** код-ревьюер · <о чём>`, второй строкой — вердикт `SHIP` / `FIX: <n>` / `BLOCKED` (разбор примет его и в самом заголовке: `**Роль:** код-ревьюер · вердикт FIX: 2`); решение — меткой: принял → ' + L.test + ' и снять ' + L.review + '; нужны правки → ' + L.dev + ' и снять ' + L.review + '. В issue — одна короткая строка, и ничего больше: «ревью пройдено, PR #<номер>» либо «вернул: <n> пунктов в комментарии PR #<номер>».',
         'Если в ветке PR есть макет постановки (mockups/<номер>/), сверь изменение с ним: раскладка, состояния и тексты из макета — часть задания, расхождение без объяснения в PR — замечание.',
         'Продуктовый код не править, PR не мержить, стенд не поднимать — прогон и приёмочные слои принадлежат тестировщику.',
+        // BLOCKED перестал быть «возвратом»: это «смотреть нечего». Диспетчер по
+        // нему не создаёт доработку и не тратит бюджет, поэтому роль обязана
+        // понимать, что за него не спрятать просьбу что-то поправить.
+        '`BLOCKED` ставится ТОЛЬКО когда проверять нечего: PR нет, ветка пустая, дифф пустой. В этом случае пунктов чеклиста нет, бюджет доработок не тратится, а причина пишется одной строкой. `BLOCKED` — не повод вернуть тикет в разработку: диспетчер доработку по нему не создаст.',
         'В ' + project.base + ' и main не коммитить и не переключать ветки в рабочей копии: ревью читает, а не строит.' +
           (project.humanClone ? ' В клон человека ' + project.humanClone + ' не заходить.' : ''),
         'Поставь себе цель, чтобы довести ревью до конца: тикет не должен остаться без метки.',
       ]
       if (repeat) lines.splice(2, 0, 'Это тот же диалог, где ты уже ревьюил этот тикет: твои прошлые замечания и правки разработчика в его истории — проверь в первую очередь то, что тогда вернул.')
+      // Повторный круг читается сверху вниз: сначала закрыты ли прошлые пункты,
+      // потом новое по диффу, и только потом всё, что не блокирует. Секции —
+      // часть контракта: по `### Повторная проверка` и `### Новое` диспетчер
+      // решает, закрыты ли пункты и куда идёт доработка, а секция «не блокирует»
+      // не влияет ни на вердикт, ни на маршрут.
+      if (repeat) {
+        lines.splice(2, 0,
+          'Повторный круг: в комментарии PR обязательны разделы по порядку — `### Повторная проверка` (по каждому пункту прошлого круга `Б1 — закрыто` либо `Б1 — не закрыто` с одной строкой доказательства), `### Новое` (только замечания по файлам, изменённым в этом круге: их список бери из `get_diff` PR) и `### Замечания (не блокирует)` (тексты, тело PR, доки, наблюдения вне диффа). Пункты секции «не блокирует» не создают доработку и в маршруте не участвуют — поэтому блокирующие пункты держи в первых двух разделах.')
+      }
       lines.push(reworkCounterLine(project, issue))
       // Первая половина полного стека ревьюится отдельно и раньше фронтенда:
       // иначе контракт и серверная логика едут в тест непроверенными.
@@ -2738,9 +2846,10 @@ export default {
     // Ревизия, которую ревьюер уже смотрел. Живёт в памяти диспетчера, как
     // счётчики: после перезапуска DSH поведение откатывается к «позвать
     // ревьюера» — осознанный деграйд, зависнуть тикет не может.
-    // Три исхода вместо null: 'error' — GitHub не ответил, 'none' — PR по ветке
-    // feature/<номер>-* не существует, 'sha' — PR есть. Функция ничего не пишет
-    // в состояние и ничего не кэширует: решение принимает dispatch().
+    // Три исхода вместо null: 'error' — GitHub не ответил, 'none' — смотреть
+    // нечего (PR по ветке feature/<номер>-* не существует или в нём пустой дифф),
+    // 'sha' — PR есть и в нём есть изменения. Функция ничего не пишет в состояние
+    // и ничего не кэширует: решение принимает dispatch().
     async function reviewHead(project, issue) {
       let pr = null
       try {
@@ -2750,9 +2859,311 @@ export default {
         state.lastError = 'PR #' + issue.number + ': ' + (error && error.message ? error.message : String(error))
         return { kind: 'error' }
       }
-      if (!pr || !pr.head || !pr.head.sha) return { kind: 'none' }
+      if (!pr || !pr.head || !pr.head.sha) return { kind: 'none', why: 'pr' }
+      // PR есть, а дифф пустой: смотреть ревьюеру нечего так же, как если бы PR
+      // не было. Второй повод для 'none' — не новый исход: у диспетчера уже есть
+      // одна ветка «работы нет», и второй экземпляр той же уборки завёл бы две
+      // несогласованные копии.
+      //
+      // Числа диффа берутся из ЧТЕНИЯ ОДНОГО PR, а не из списка: живой
+      // list_pull_requests отдаёт только number и head (проверено тестировщиком
+      // на code-review #48 по возврату №2), поэтому гейт на списке был написан, но
+      // в бою не срабатывал. Не прочитали подробности — считаем, что дифф есть:
+      // отказ инструмента не повод снимать живой тикет.
+      const details = await pullRequestDetails(project, pr.number)
+      if (prHasNoDiff(details || pr)) return { kind: 'none', why: 'empty-diff', pr }
       const sha = String(pr.head.sha)
-      return { kind: 'sha', sha, same: projectState(project.id).reviewedHead[issue.number] === sha }
+      return { kind: 'sha', sha, pr, same: projectState(project.id).reviewedHead[issue.number] === sha }
+    }
+
+    // Полное чтение одного PR: только оно отдаёт changed_files/additions/deletions
+    // (list_pull_requests — нет). Отказ инструмента — null, а не исключение: ревью
+    // из-за него не встаёт, а гейт пустого диффа остаётся fail-open.
+    async function pullRequestDetails(project, number) {
+      try {
+        const { owner, repo } = repoOf(project)
+        return await mcpRead('pull_request_read', { method: 'get', owner, repo, pullNumber: Number(number) })
+      } catch (error) {
+        state.lastError = 'PR #' + number + ': ' + (error && error.message ? error.message : String(error))
+        return null
+      }
+    }
+
+    // Пустой PR: менять в нём нечего. Числа берутся из полного чтения PR; нет их
+    // (урезанный ответ, отказ инструмента) — считаем, что дифф не пустой: гейт не
+    // должен срабатывать по отсутствию данных, иначе неполный ответ GitHub снимал
+    // бы живые тикеты.
+    function prHasNoDiff(pr) {
+      const files = pr && pr.changed_files
+      const adds = pr && pr.additions
+      const dels = pr && pr.deletions
+      if (typeof files === 'number' && files === 0) return true
+      if (typeof adds === 'number' && typeof dels === 'number' && adds + dels === 0) return true
+      return false
+    }
+
+    // Вердикт из шапки комментария ревьюера. Порядок чтения тот же, что в
+    // isReviewerVerdict(): сначала СТРОКА вердикта в первых трёх строках, и только
+    // если её нет — «вердикт …» в заголовке роли. Смешивать их нельзя: «о чём»
+    // заголовка — свободный текст, и на тикете про семантику `BLOCKED` слово
+    // `BLOCKED` в нём — обычная формулировка, а не вердикт. Пока вердикт искали
+    // одной кучей, `**Роль:** код-ревьюер · гейты ревью: BLOCKED не доработка`
+    // со строкой `FIX: 2` ниже читался как BLOCKED, и живой тикет уезжал в
+    // «смотреть нечего» вместо доработки.
+    function verdictWord(text) {
+      const lines = String(text).split('\n')
+      const head = lines.slice(0, 3).join('\n')
+      const line = ROUND_VERDICT.exec(head)
+      if (line) return line[1] === 'FIX:' ? 'FIX' : line[1]
+      const about = (HEADER_ABOUT.exec(lines[0].replace(/\r$/, '')) || [])[1] || ''
+      if (!/^вердикт(\s|:|$)/i.test(about.trim())) return null
+      if (/BLOCKED\b/.test(about)) return 'BLOCKED'
+      if (/FIX:/.test(about)) return 'FIX'
+      if (/SHIP\b/.test(about)) return 'SHIP'
+      return null
+    }
+
+    // Последний вердикт код-ревьюера в PR: 'SHIP' | 'FIX' | 'BLOCKED' | null.
+    // Читается так же, как круг замечаний: комментарии PR, из них последний,
+    // распознанный isReviewerVerdict(). null — вердикта нет или GitHub не ответил:
+    // тогда решение принимает то, что есть (метки, ревизия, чеклист).
+    async function reviewerVerdict(project, issue) {
+      let pr = null
+      try {
+        pr = await findPr(project, issue.number)
+      } catch (error) {
+        state.lastError = 'вердикт ревьюера #' + issue.number + ': ' + (error && error.message ? error.message : String(error))
+        return null
+      }
+      if (!pr) return null
+      let rows = null
+      try {
+        rows = await issueComments(project, pr.number)
+      } catch (error) {
+        state.lastError = 'вердикт ревьюера в PR #' + pr.number + ': ' + (error && error.message ? error.message : String(error))
+        return null
+      }
+      let verdict = null
+      for (const text of commentTexts(rows)) {
+        if (!isReviewerVerdict(text)) continue
+        const word = verdictWord(text)
+        if (word) verdict = word
+      }
+      return verdict
+    }
+
+    // ── гейты ревью: файлы, которых не касались ─────────────────────────────
+    // Последний коммит в ветке до указанной ревизии, затрагивающий путь. Двух
+    // таких чтений хватает, чтобы понять, менялся ли файл между прошлым ревью и
+    // текущей ревизией. Своего REST-клиента у диспетчера больше нет (GitHub —
+    // только через MCP), поэтому сравнение идёт инструментом list_commits с
+    // фильтром по пути: пустой список значит «в ветке этот файл не менялся».
+    async function lastCommitForPath(project, sha, filePath) {
+      const { owner, repo } = repoOf(project)
+      const answer = await mcpRead('list_commits', { owner, repo, path: filePath, sha, perPage: 1 })
+      const rows = Array.isArray(answer) ? answer : ((answer && answer.commits) || [])
+      const first = rows[0] || null
+      if (!first) return ''
+      return String(first.sha || (first.commit && first.commit.sha) || '')
+    }
+
+    // Менялся ли файл между двумя ревизиями. null — сравнивать нельзя (сеть или
+    // отказ инструмента): такой пункт не идёт в доказательство ни в одну из
+    // сторон, и гейт деградирует в fail-open, а не снимает тикет по неполным
+    // данным.
+    async function fileChangedSince(project, prevSha, headSha, filePath) {
+      try {
+        const atHead = await lastCommitForPath(project, headSha, filePath)
+        if (!atHead) return false
+        const atPrev = await lastCommitForPath(project, prevSha, filePath)
+        return atHead !== atPrev
+      } catch (error) {
+        state.lastError = 'сравнение ревизий по ' + filePath + ': ' + (error && error.message ? error.message : String(error))
+        return null
+      }
+    }
+
+    // Половина по пунктам чеклиста — тем же правилом, что и в roleForRework().
+    function halfOwner(items) {
+      const backend = (items || []).some((item) => item.half === 'backend')
+      const frontend = (items || []).some((item) => item.half === 'frontend')
+      if (backend && frontend) return 'dev-fullstack'
+      if (frontend) return 'dev-frontend'
+      if (backend) return 'dev-backend'
+      return null
+    }
+
+    // Замечания прочитаны, но ни один пункт не назвал путь: развести доработку по
+    // половинам нечем. Без снятия ready-for-dev остался бы в очереди, и
+    // разработчик получил бы задачу без замечаний — поэтому тикет ждёт человека, а
+    // комментарий называет номера пунктов.
+    async function dropUnroutableRework(project, issue) {
+      const st = projectState(project.id)
+      const L = project.labels
+      const findings = st.findings[issue.number] || null
+      const ids = ((findings && findings.items) || []).map((item) => item.id).filter(Boolean)
+      const list = ids.length > 0 ? ids.join(', ') : 'Б1, Б2…'
+      try {
+        await postComment(project, issue.number, 'разбор замечаний невозможен',
+          'Разбор замечаний невозможен: ни один пункт не называет путь — ' + list +
+            ' без `path:line`. Ни одна половина сессию не получила: маршрут доработки определить нечем. ' +
+            'Тикет снят с конвейера, нужен человек: поставь ' + L.dev + ', и диалоги обнулятся.')
+      } catch (error) {
+        state.lastError = 'комментарий о невозможном разборе замечаний: ' + (error && error.message ? error.message : String(error))
+      }
+      await dropFromPipeline(project, issue)
+      if (st.run) {
+        st.run.entries.push({ number: issue.number, title: issue.title, outcome: 'снят с конвейера: ни один пункт замечаний не называет путь' })
+      }
+      return { action: 'dropped', project: project.id, issue: issue.number, reason: 'no paths in findings' }
+    }
+
+    // Гейт перед сессией ревьюера. R1: незакрытые пункты прошлого чеклиста — не
+    // повод звать ревьюера, доработка уходит по их путям. R2: отмеченный пункт, у
+    // которого файл не менялся с прошлой ревизии, считается не исправленным, и в
+    // комментарий идёт доказательство. Непустой возврат значит «ревьюер не
+    // позван»; null — звать как раньше (fail-open: нет чеклиста, нет прошлого
+    // круга, формат не распознан, сеть).
+    async function reviewChecklistGate(project, issue, head, st) {
+      const L = project.labels
+      const hadRound = (st.rework[issue.number] || 0) > 0 || !!st.reviewedHead[issue.number]
+      const pr = head.pr
+      if (!hadRound || !pr || !pr.number) return null
+      let rows = null
+      try {
+        rows = await issueComments(project, pr.number)
+      } catch (error) {
+        state.lastError = 'чеклист прошлого круга #' + issue.number + ': ' + (error && error.message ? error.message : String(error))
+        return null
+      }
+      let last = null
+      for (const text of commentTexts(rows)) {
+        if (isReviewerVerdict(text)) last = text
+      }
+      if (!last) return null
+      const items = checklistState(project, last)
+      // Чеклиста нет — судить не о чем: ревьюера зовём как раньше.
+      if (items.length === 0) { delete st.unclosed[issue.number]; return null }
+      const prev = st.reviewedHead[issue.number]
+      const open = []
+      const unmoved = []
+      for (const item of items) {
+        if (!item.checked) { open.push(item); continue }
+        // Сравнивать не с чем (нет прошлой ревизии или ревизия та же) — пункт не
+        // доказательство ни в одну из сторон.
+        if (!item.path || !prev || prev === head.sha) continue
+        const changed = await fileChangedSince(project, prev, head.sha, item.path)
+        if (changed === false) unmoved.push(item)
+      }
+      if (open.length === 0 && unmoved.length === 0) { delete st.unclosed[issue.number]; return null }
+      st.unclosed[issue.number] = (st.unclosed[issue.number] || 0) + 1
+      // Доказательство ссылается на ревизию ПРОШЛОГО ревью, а не на текущую:
+      // «не менялся с <текущая>» тривиально верно для любого файла до неё и
+      // разработчику ничего не доказывает. Смысл утверждения — файл не трогали
+      // после того, как ревьюер его смотрел.
+      const prevShort = prev ? String(prev).slice(0, 7) : ''
+      const why = []
+      if (open.length > 0) why.push('пункты ' + open.map((item) => item.id).join(', ') + ' не закрыты — ревью не зову')
+      for (const item of unmoved) why.push('`' + item.path + '` не менялся с `' + prevShort + '` — пункт ' + item.id + ' не исправлен')
+      // Второй отказ подряд: «не закрыл → не закрыл» — это уже не ревью, а
+      // человеку. Уборка та же, что у сторожа пустых кругов.
+      if (st.unclosed[issue.number] >= 2) {
+        try {
+          await postComment(project, issue.number, 'пункты чеклиста не закрыты дважды',
+            'Второй раз подряд чеклист не закрыт: ' + why.join('; ') + '. Тикет снят с конвейера, нужен человек: поставь ' +
+              L.dev + ', и счётчики вместе с диалогами обнулятся.')
+        } catch (error) {
+          state.lastError = 'комментарий о снятии после незакрытого чеклиста: ' + (error && error.message ? error.message : String(error))
+        }
+        await dropFromPipeline(project, issue)
+        if (st.run) {
+          st.run.entries.push({ number: issue.number, title: issue.title, outcome: 'снят с конвейера: пункты чеклиста не закрыты дважды' })
+        }
+        return { action: 'dropped', project: project.id, issue: issue.number, reason: 'review checklist not closed twice' }
+      }
+      try {
+        await postComment(project, issue.number, 'ревью не зову: чеклист не закрыт', why.join('; ') + '.')
+      } catch (error) {
+        state.lastError = 'комментарий о незакрытых пунктах: ' + (error && error.message ? error.message : String(error))
+      }
+      // Круг ревью не состоялся, значит и бюджет доработок он тратить не вправе:
+      // возвращаем счётчик назад, как это делает сторож пустого круга. Следующий
+      // шаг — выдача доработки, и она снова его увеличит.
+      st.rework[issue.number] = Math.max(0, (st.rework[issue.number] || 0) - 1)
+      const refused = open.concat(unmoved)
+      st.findings[issue.number] = {
+        backend: refused.filter((item) => item.half === 'backend' && item.path).map((item) => ({ path: item.path, at: item.at })),
+        frontend: refused.filter((item) => item.half === 'frontend' && item.path).map((item) => ({ path: item.path, at: item.at })),
+        source: 'ревьюера',
+        items: refused,
+      }
+      // Половина по пунктам, а когда её нет — по метке маршрута. Пункт без
+      // секции половины может стоять на пути вне `areas` (в этом репозитории так
+      // выглядит любой `plugins/*.mjs`): путь назван, значит маршрут по метке
+      // `area:*` рабочий. Снимать тикет к человеку за это нельзя — ровно этот
+      // случай закрыт в `roleForRework()`, и гейт обязан вести себя так же,
+      // иначе повторный круг по `plugins/*` сам же снимает тикет. `null` остаётся
+      // только для «путь не назвал ни один пункт».
+      const owner = halfOwner(refused)
+      return dispatch(project, {
+        role: owner || (refused.some((item) => item.path) ? implementer(issue, L) : null),
+        issue: issue,
+        kind: 'rework',
+      })
+    }
+
+    // «Смотреть нечего» — ревьюеру нет ревизии. Причин три, ветка одна: PR по
+    // ветке нет, в PR пустой дифф, ревьюер написал BLOCKED (проверять нечего). Ни
+    // одна из них не создаёт доработку и не тратит бюджет: половина маршрута,
+    // которая только что сдала тикет, помечается пустым ходом, полный стек
+    // передаётся фронтенду, а если пустые ходы уже у всех половин — тикет уходит
+    // человеку.
+    async function noCodeBranch(project, issue, note) {
+      const st = projectState(project.id)
+      const L = project.labels
+      const emptyHanded = implementer(issue, L)
+      const noWork = markNoWork(project, issue)
+      if (has(issue, L.areaFullstack) && !has(issue, L.phaseFrontend) && !noWork['dev-frontend']) {
+        // Вторая половина маршрута ещё не работала: тикет не снимаем, а передаём
+        // фронтенду — первая половина была пустой, но это не повод хоронить весь
+        // тикет полного стека.
+        await dropLabels(project, issue.number, [L.review, L.dev])
+        await addLabel(project, issue.number, L.frontend)
+        // Передача — прогресс диспетчера, а не неудачная попытка агента: счётчик
+        // обнуляем, иначе вторая половина сгорала бы на первом же шаге.
+        st.attempts[issue.number] = 0
+        try {
+          await postComment(project, issue.number, 'ревизии нет, ревью не зову',
+            note.text + ': ' + emptyHanded +
+              ' вернулся без ревизии — смотреть ревьюеру нечего, код-ревью не зову. ' +
+              'Тикет передан фронтенд-разработчику (' + L.frontend +
+              '): он продолжит в той же ветке и том же PR.')
+        } catch (error) {
+          state.lastError = 'комментарий о пустом ходе первой половины: ' + (error && error.message ? error.message : String(error))
+        }
+        if (st.run) {
+          st.run.entries.push({ number: issue.number, title: issue.title, role: emptyHanded, outcome: 'ревизии нет — передано фронтенду (' + L.frontend + ')' })
+        }
+        return { action: 'handoff', project: project.id, issue: issue.number, reason: note.reason }
+      }
+      // Работы не дала ни одна помеченная половина маршрута: тикет ждёт человека,
+      // а не крутит ревьюера по пустому месту. Список ролей берётся из noWork
+      // проекта, а не из догадки о маршруте.
+      const emptyRoles = Object.keys(noWork).filter((name) => noWork[name])
+      const outcomes = emptyRoles.map((name) => '- ' + name + ' — ветку не создавал и PR не открыл').join('\n')
+      try {
+        await postComment(project, issue.number, 'работы нет ни у одной половины маршрута',
+          'Ревизии не дала ни одна половина маршрута — смотреть ревьюеру нечего (' + note.text + '):\n\n' + outcomes +
+            '\n\nТикет снят с конвейера вместе со всеми метками, включая area:*. Нужен человек: поставь ' +
+            L.dev + ', и маршрут вместе с диалогами выведется заново по постановке.')
+      } catch (error) {
+        state.lastError = 'комментарий о пустом ходе всех половин: ' + (error && error.message ? error.message : String(error))
+      }
+      await dropFromPipeline(project, issue)
+      if (st.run) {
+        st.run.entries.push({ number: issue.number, title: issue.title, outcome: 'снят с конвейера: работы нет ни у одной половины маршрута' })
+      }
+      return { action: 'dropped', project: project.id, issue: issue.number, reason: note.reason }
     }
 
     // Снятие тикета с конвейера: одна уборка на все поводы — лимит попыток, лимит
@@ -2775,6 +3186,7 @@ export default {
       // ни пустых ходов половин.
       delete st.reviewedHead[issue.number]
       delete st.noop[issue.number]
+      delete st.unclosed[issue.number]
       delete st.findings[issue.number]
       delete st.noWork[issue.number]
     }
@@ -2783,6 +3195,13 @@ export default {
       const st = projectState(project.id)
       const L = project.labels
       const { role, issue } = decision
+      // Маршрут доработки не определён: пункты прочитаны, но пути не назвал ни
+      // один. Снимать за это можно только возврат из ревью — у идущей работы и у
+      // возврата тестировщика маршрут обязан остаться: там берётся метка.
+      if (role === null) {
+        if ((decision.kind || 'new') === 'rework') return dropUnroutableRework(project, issue)
+        return dispatch(project, { role: implementer(issue, L), issue: issue, kind: decision.kind })
+      }
       // Ревизия, на которой сейчас выдаётся ревью. Записывается в reviewedHead
       // только после того, как сессия ревьюера создана: упавшее создание сессии
       // не должно превращаться в «ветка не менялась» на следующем тике.
@@ -2791,8 +3210,8 @@ export default {
       //   1) 'error' — GitHub не ответил: ревьюера зовём как раньше, ни одна
       //      ветвь ниже не срабатывает;
       //   2) 'sha' и та же ревизия — сторож пустого круга;
-      //   3) 'sha' и новая ревизия — обычное ревью;
-      //   4) 'none' — PR нет вовсе, ревьюеру смотреть нечего, сессия не создаётся.
+      //   3) 'sha' и новая ревизия — гейт чеклиста прошлого круга, затем ревью;
+      //   4) 'none' — смотреть нечего (PR нет или дифф пустой), сессия не создаётся.
       if (role === 'code-review') {
         const head = await reviewHead(project, issue)
         if (head.kind === 'sha' && head.same) {
@@ -2830,55 +3249,19 @@ export default {
           st.rework[issue.number] = Math.max(0, (st.rework[issue.number] || 0) - 1)
           return dispatch(project, { role: owner, issue: issue, kind: 'rework' })
         } else if (head.kind === 'sha') {
+          // Чеклист прошлого круга проверяется ДО создания сессии: незакрытый
+          // пункт — не повод звать ревьюера, а отмеченный пункт без изменения
+          // файла — не исправленный пункт.
+          const gate = await reviewChecklistGate(project, issue, head, st)
+          if (gate) return gate
           reviewSha = head.sha
         } else if (head.kind === 'none') {
-          // PR по ветке feature/<номер>-* не существует: ревизии нет, смотреть
-          // ревьюеру нечего — startSession('code-review') в этой ветви недостижим.
-          // Пустой ход записывается той роли, которая только что сдала тикет: её
-          // и называет implementer() по меткам маршрута и фазы.
-          const emptyHanded = implementer(issue, L)
-          const noWork = markNoWork(project, issue)
-          if (has(issue, L.areaFullstack) && !has(issue, L.phaseFrontend) && !noWork['dev-frontend']) {
-            // Вторая половина маршрута ещё не работала: тикет не снимаем, а
-            // передаём фронтенду — первая половина была пустой, но это не
-            // повод хоронить весь тикет полного стека.
-            await dropLabels(project, issue.number, [L.review])
-            await addLabel(project, issue.number, L.frontend)
-            // Передача — прогресс диспетчера, а не неудачная попытка агента:
-            // счётчик обнуляем, иначе вторая половина сгорала бы на первом шаге.
-            st.attempts[issue.number] = 0
-            try {
-              await postComment(project, issue.number, 'ревизии нет, ревью не зову',
-                'PR по ветке feature/' + issue.number + '-* нет: ' + emptyHanded +
-                  ' вернулся без ревизии — смотреть ревьюеру нечего, код-ревью не зову. ' +
-                  'Тикет передан фронтенд-разработчику (' + L.frontend +
-                  '): он продолжит в той же ветке и том же PR.')
-            } catch (error) {
-              state.lastError = 'комментарий о пустом ходе первой половины: ' + (error && error.message ? error.message : String(error))
-            }
-            if (st.run) {
-              st.run.entries.push({ number: issue.number, title: issue.title, role: emptyHanded, outcome: 'ревизии нет — передано фронтенду (' + L.frontend + ')' })
-            }
-            return { action: 'handoff', project: project.id, issue: issue.number, reason: 'no revision from first half' }
-          }
-          // Работы не дала ни одна помеченная половина маршрута: тикет ждёт
-          // человека, а не крутит ревьюера по пустому месту. Список ролей берётся
-          // из noWork проекта, а не из догадки о маршруте.
-          const emptyRoles = Object.keys(noWork).filter((name) => noWork[name])
-          const outcomes = emptyRoles.map((name) => '- ' + name + ' — ветку не создавал и PR не открыл').join('\n')
-          try {
-            await postComment(project, issue.number, 'работы нет ни у одной половины маршрута',
-              'Ревизии не дала ни одна половина маршрута — смотреть ревьюеру нечего:\n\n' + outcomes +
-                '\n\nТикет снят с конвейера вместе со всеми метками, включая area:*. Нужен человек: поставь ' +
-                L.dev + ', и маршрут вместе с диалогами выведется заново по постановке.')
-          } catch (error) {
-            state.lastError = 'комментарий о пустом ходе всех половин: ' + (error && error.message ? error.message : String(error))
-          }
-          await dropFromPipeline(project, issue)
-          if (st.run) {
-            st.run.entries.push({ number: issue.number, title: issue.title, outcome: 'снят с конвейера: работы нет ни у одной половины маршрута' })
-          }
-          return { action: 'dropped', project: project.id, issue: issue.number, reason: 'no work in any half' }
+          // Смотреть нечего: PR по ветке feature/<номер>-* не существует или в нём
+          // пустой дифф. Ревьюеру нет ревизии — startSession('code-review') в этой
+          // ветви недостижим, а вся уборка лежит в noCodeBranch().
+          return noCodeBranch(project, issue, head.why === 'empty-diff'
+            ? { text: 'в PR #' + head.pr.number + ' нет изменений (пустой дифф)', reason: 'empty diff' }
+            : { text: 'PR по ветке feature/' + issue.number + '-* нет', reason: 'no work in any half' })
         }
       }
       const attempts = (st.attempts[issue.number] || 0) + 1
@@ -2912,6 +3295,21 @@ export default {
       }
       if (role === 'dev-fullstack' || role === 'dev-backend' || role === 'dev-frontend') {
         const kind = decision.kind || 'new'
+        // Ревьюер написал BLOCKED — проверять ему было нечего. Такой возврат
+        // доработкой не считается: сессия половины не создаётся, бюджет не растёт
+        // (выход идёт ДО увеличения счётчика, поэтому откатывать нечего), а тикету
+        // находится другой путь — та же ветка «работы нет», что у пустого PR.
+        // После test-failed вердикт ревьюера ни при чём: там решает метка.
+        if (kind === 'rework' && !has(issue, L.failed)) {
+          const verdict = await reviewerVerdict(project, issue)
+          if (verdict === 'BLOCKED') {
+            delete st.findings[issue.number]
+            return noCodeBranch(project, issue, {
+              text: 'ревью не состоялось: код-ревьюер написал BLOCKED — проверять нечего',
+              reason: 'review blocked without code',
+            })
+          }
+        }
         const rounds = st.rework[issue.number] || 0
         if (kind === 'rework' && rounds >= project.department.maxRework) {
           await postComment(project, issue.number, 'лимит доработок исчерпан',
@@ -2984,6 +3382,8 @@ export default {
         if (reviewSha) {
           st.reviewedHead[issue.number] = reviewSha
           delete st.noop[issue.number]
+          // Ревью состоялось — счётчик отказов по чеклисту начинается заново.
+          delete st.unclosed[issue.number]
         }
         st.session = { role: 'code-review', issue: issue.number, title: issue.title, sessionId, startedAt: new Date().toISOString() }
         st.run.sessions = (st.run.sessions || 0) + 1
@@ -3178,6 +3578,7 @@ export default {
         // и прошлая ревизия больше ничего не значит.
         delete st.reviewedHead[issue.number]
         delete st.noop[issue.number]
+        delete st.unclosed[issue.number]
         delete st.findings[issue.number]
         // Пустые ходы половин тоже начинаются заново: человек вернул задачу,
         // значит следующая половина снова получает свой шанс.
