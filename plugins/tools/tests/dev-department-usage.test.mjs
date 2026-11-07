@@ -140,6 +140,15 @@ function mcpTool(name, args) {
     return replyText({ id: 5000 + comments.length, url: 'https://github.com/x/y/issues/' + issue.number })
   }
   if (name === 'list_pull_requests') return replyText([...pulls.values()])
+  // Полное чтение одного PR: только оно отдаёт числа диффа (list_pull_requests —
+  // нет, это живая форма сервера). Гейту пустого диффа эти поля нужны, поэтому
+  // поддельный сервер обязан отвечать и на этот инструмент.
+  if (name === 'pull_request_read') {
+    const pull = pulls.get(Number(args.pullNumber))
+    if (!pull) return replyError('pull_request_read: 404 Not Found')
+    if (args.method !== 'get') return replyError('unsupported method ' + args.method)
+    return replyText({ number: pull.number, head: pull.head, changed_files: 1, additions: 2, deletions: 0 })
+  }
   if (name === 'issue_write') {
     const issue = issues.get(Number(args.issue_number))
     if (!issue) return replyError('failed to update issue: 404 Not Found')

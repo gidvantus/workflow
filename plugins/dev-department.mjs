@@ -2864,15 +2864,35 @@ export default {
       // не было. Второй повод для 'none' — не новый исход: у диспетчера уже есть
       // одна ветка «работы нет», и второй экземпляр той же уборки завёл бы две
       // несогласованные копии.
-      if (prHasNoDiff(pr)) return { kind: 'none', why: 'empty-diff', pr }
+      //
+      // Числа диффа берутся из ЧТЕНИЯ ОДНОГО PR, а не из списка: живой
+      // list_pull_requests отдаёт только number и head (проверено тестировщиком
+      // на code-review #48 по возврату №2), поэтому гейт на списке был написан, но
+      // в бою не срабатывал. Не прочитали подробности — считаем, что дифф есть:
+      // отказ инструмента не повод снимать живой тикет.
+      const details = await pullRequestDetails(project, pr.number)
+      if (prHasNoDiff(details || pr)) return { kind: 'none', why: 'empty-diff', pr }
       const sha = String(pr.head.sha)
       return { kind: 'sha', sha, pr, same: projectState(project.id).reviewedHead[issue.number] === sha }
     }
 
-    // Пустой PR: менять в нём нечего. Числа берутся из самого PR; нет их (урезанный
-    // ответ, старый список) — считаем, что дифф не пустой: гейт не должен
-    // срабатывать по отсутствию данных, иначе неполный ответ GitHub снимал бы
-    // живые тикеты.
+    // Полное чтение одного PR: только оно отдаёт changed_files/additions/deletions
+    // (list_pull_requests — нет). Отказ инструмента — null, а не исключение: ревью
+    // из-за него не встаёт, а гейт пустого диффа остаётся fail-open.
+    async function pullRequestDetails(project, number) {
+      try {
+        const { owner, repo } = repoOf(project)
+        return await mcpRead('pull_request_read', { method: 'get', owner, repo, pullNumber: Number(number) })
+      } catch (error) {
+        state.lastError = 'PR #' + number + ': ' + (error && error.message ? error.message : String(error))
+        return null
+      }
+    }
+
+    // Пустой PR: менять в нём нечего. Числа берутся из полного чтения PR; нет их
+    // (урезанный ответ, отказ инструмента) — считаем, что дифф не пустой: гейт не
+    // должен срабатывать по отсутствию данных, иначе неполный ответ GitHub снимал
+    // бы живые тикеты.
     function prHasNoDiff(pr) {
       const files = pr && pr.changed_files
       const adds = pr && pr.additions

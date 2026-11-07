@@ -76,6 +76,15 @@ const telegram = []
 // PR тестового проекта: номер → { number, head: { ref, sha } }. Пустой список
 // значит «PR нет»: тогда маршрут решает метка, как раньше.
 const pulls = new Map()
+// Полное чтение одного PR (`pull_request_read` с method: get) — единственное
+// место, где живут числа диффа: живой list_pull_requests отдаёт только number и
+// head (возврат №2 от тестировщика по code-review #48). Нет записи — дифф не
+// пустой; счётчик чтений показывает, что гейт пустого диффа ходит именно сюда.
+const pullDetails = new Map()
+let pullDetailsReads = 0
+// Отказ чтения одного PR: гейт пустого диффа обязан деградировать в fail-open,
+// а не снимать живой тикет по неполным данным.
+let pullDetailsFail = null
 // Отказ GitHub на list_pull_requests: строка — текст ошибки, null — сервер
 // отвечает как обычно. Отказ не значит «PR нет»: это отдельный исход reviewHead(),
 // при котором ревьюера зовут, а метки не снимают.
@@ -147,7 +156,34 @@ function mcpTool(name, args) {
   }
   if (name === 'list_pull_requests') {
     if (pullsFail) return replyError(pullsFail)
-    return replyText([...pulls.values()])
+    // Живая форма ответа: числа диффа список не отдаёт вовсе. Если бы поддельный
+    // сервер их отдавал, гейт пустого диффа проходил бы на данных, которых в
+    // производстве не бывает, — ровно так сценарий 29 был зелёным при мёртвом
+    // правиле (возврат №2 от тестировщика).
+    return replyText([...pulls.values()].map((pull) => ({
+      number: pull.number,
+      state: 'open',
+      base: { ref: 'main' },
+      head: pull.head,
+    })))
+  }
+  if (name === 'pull_request_read') {
+    if (pullDetailsFail) return replyError(pullDetailsFail)
+    const number = Number(args.pullNumber)
+    const pull = pulls.get(number)
+    if (!pull) return replyError('pull_request_read: 404 Not Found')
+    if (args.method !== 'get') return replyError('unsupported method ' + args.method)
+    pullDetailsReads += 1
+    const diff = pullDetails.get(number) || { changed_files: 2, additions: 10, deletions: 2 }
+    return replyText({
+      number: number,
+      state: 'open',
+      base: { ref: 'main' },
+      head: pull.head,
+      changed_files: diff.changed_files,
+      additions: diff.additions,
+      deletions: diff.deletions,
+    })
   }
   if (name === 'list_commits') {
     // Ревизии до указанной, от новых к старым, с фильтром по пути — как у
@@ -387,6 +423,9 @@ function reset(extraIssues) {
   turnTails.clear()
   prompts.length = 0
   commitChain = []
+  pullDetails.clear()
+  pullDetailsReads = 0
+  pullDetailsFail = null
   if (extraIssues) issues.set(extraIssues.number, extraIssues)
 }
 
@@ -1272,16 +1311,22 @@ check('счётчик попыток обнулён', step.state.projects.vahta.
 check('в comment названа причина', comments.some((c) => c.number === 2800 && c.body.includes('BLOCKED') && c.body.includes('передан фронтенд-разработчику')), true)
 
 console.log('\n=== сценарий 29: пустой дифф — «смотреть нечего», сессии ревьюера нет ===')
-// Правило T1: PR есть, но changed_files = 0 — второй повод для kind: 'none'.
+// Правило T1: PR есть, но изменений в нём нет — второй повод для kind: 'none'.
 // Такое бывает, когда роль открыла PR без единого коммита или с пустым деревом.
+// Числа диффа приходят ТОЛЬКО из полного чтения одного PR: живой list_pull_requests
+// их не отдаёт (возврат №2 от тестировщика — гейт был написан, но в бою недостижим,
+// а сценарий зеленел на данных, которых не бывает).
 reset({ number: 2900, title: 'Демо-тикет 2900', labels: ['for-code-review', 'area:backend'], state: 'open' })
 pulls.clear()
 comments.length = 0
-pulls.set(2900, { number: 2900, head: { ref: 'feature/2900-empty-diff', sha: 'sha-2900-1' }, changed_files: 0, additions: 0, deletions: 0 })
+pulls.set(2900, { number: 2900, head: { ref: 'feature/2900-empty-diff', sha: 'sha-2900-1' } })
+pullDetails.set(2900, { changed_files: 0, additions: 0, deletions: 0 })
+check('список PR отдаёт живую форму — без чисел диффа', Object.keys([...pulls.values()][0]).sort(), ['head', 'number'])
 app = await boot()
 step = await tick(app)
 check('ревьюер не зван', step.result.action, 'dropped')
 check('сессии ревьюера нет', created.filter((c) => c.preset === 'code-review').length, 0)
+check('подробности PR читались', pullDetailsReads > 0, true)
 check('в тикете сказано про пустой дифф', comments.some((c) => c.number === 2900 && c.body.includes('пустой дифф')), true)
 check('счётчик попыток не тратился на ревью', step.state.projects.vahta.rework[2900], undefined)
 
@@ -1593,6 +1638,21 @@ check('гейт увёл доработку половине, а не челов
 check('тикет остался в конвейере', step.state.projects.vahta.dropped[3900], undefined)
 check('в тикете назван незакрытый пункт', comments.some((c) => c.number === 3900 && c.body.includes('Б1 не закрыты')), true)
 check('маршрут на месте', issues.get(3900).labels.includes('area:backend'), true)
+
+console.log('\n=== сценарий 40: чтение одного PR отказало — гейт пустого диффа fail-open ===')
+// Числа диффа приходят из `pull_request_read`, и его отказ не должен ни звать
+// «работы нет», ни снимать тикет: сбой GitHub — не повод терять живую задачу.
+reset({ number: 4000, title: 'Демо-тикет 4000', labels: ['for-code-review', 'area:backend'], state: 'open' })
+pulls.clear()
+comments.length = 0
+pulls.set(4000, { number: 4000, head: { ref: 'feature/4000-details-fail', sha: 'sha-4000-1' } })
+pullDetailsFail = 'pull_request_read: 502 Bad Gateway'
+app = await boot()
+step = await tick(app)
+check('при отказе чтения PR ревьюер зовётся', step.result.action + ':' + step.result.role, 'dispatched:code-review')
+check('метки не тронуты', issues.get(4000).labels.slice().sort(), ['area:backend', 'for-code-review'])
+check('сбой назван в состоянии', String((await app.status()).lastError || '').includes('502 Bad Gateway'), true)
+pullDetailsFail = null
 
 console.log('\n=== служебное ===')
 const ids = allRequestIds.map((p) => p.requestId)
