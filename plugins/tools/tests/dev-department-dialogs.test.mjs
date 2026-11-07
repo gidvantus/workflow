@@ -1550,6 +1550,50 @@ check('в задании пути обоих пунктов', [
 const dispatcher38 = comments.filter((c) => c.number === 3800 && String(c.body).startsWith('**Роль:** диспетчер'))
 check('о пустом коде речи нет', dispatcher38.some((c) => c.body.includes('BLOCKED')), false)
 
+console.log('\n=== сценарий 39: гейт R1 не снимает тикет по пункту вне areas (Б5) ===')
+// Возврат №2 по #48: гейт чеклиста разводил доработку по `item.half`, а у пункта
+// без секции половины (`### Новое` нового формата) половина берётся из пути и
+// остаётся null для любого `plugins/*.mjs` — путь вне `areas`. `dispatch()` с
+// role === null и kind 'rework' уходил в dropUnroutableRework(): тикет снимался
+// со всеми метками, хотя путь назван. Правило то же, что в roleForRework():
+// снимать только когда путь не назвал ни один пункт, иначе маршрут по area:*.
+reset({ number: 3900, title: 'Демо-тикет 3900', labels: ['ready-for-dev', 'area:backend'], state: 'open' })
+pulls.clear()
+comments.length = 0
+pulls.set(3900, { number: 3900, head: { ref: 'feature/3900-gate-outside-areas', sha: 'sha-3900-1' }, changed_files: 2, additions: 9, deletions: 2 })
+app = await boot()
+step = await tick(app)
+const dev39 = step.result.sessionId
+check('первая половина взяла тикет', step.result.action + ':' + step.result.role, 'dispatched:dev-backend')
+endTurn(dev39)
+setLabels(3900, ['for-code-review', 'area:backend'])
+await tick(app)
+step = await tick(app)
+const review39 = step.result.sessionId
+// Повторный круг по контракту скилла: заголовок роли и вердикт первыми, дальше
+// `### Повторная проверка` и `### Новое` — секции половины в этом формате нет,
+// поэтому половину пункта определяет только путь.
+reviewer(3900, '**Роль:** код-ревьюер · вердикт FIX: 1\nFIX: 1\n\n### Повторная проверка\n- Б1 — не закрыто: `plugins/dev-department.mjs` в диффе круга не менялся\n### Новое\n- [ ] Б1 · `plugins/dev-department.mjs:2990` — порядок ветвлений съехал\n')
+endTurn(review39)
+setLabels(3900, ['ready-for-dev', 'area:backend'])
+await tick(app)
+step = await tick(app)
+check('доработка по пункту вне areas ушла по метке', step.result.action + ':' + step.result.role, 'dispatched:dev-backend')
+check('тикет не снят с конвейера', issues.get(3900).labels.includes('area:backend'), true)
+check('о невозможном разборе речи нет', comments.some((c) => c.number === 3900 && c.body.includes('разбор замечаний невозможен')), false)
+// Разработчик принёс новый коммит, а галочку не поставил: срабатывает гейт R1.
+endTurn(dev39)
+pulls.set(3900, { number: 3900, head: { ref: 'feature/3900-gate-outside-areas', sha: 'sha-3900-2' }, changed_files: 2, additions: 12, deletions: 2 })
+setLabels(3900, ['for-code-review', 'area:backend'])
+const reviewsBefore39 = created.filter((c) => c.preset === 'code-review').length
+await tick(app)
+step = await tick(app)
+check('ревьюер не зван при незакрытом пункте', created.filter((c) => c.preset === 'code-review').length, reviewsBefore39)
+check('гейт увёл доработку половине, а не человеку', step.result.action + ':' + step.result.role, 'dispatched:dev-backend')
+check('тикет остался в конвейере', step.state.projects.vahta.dropped[3900], undefined)
+check('в тикете назван незакрытый пункт', comments.some((c) => c.number === 3900 && c.body.includes('Б1 не закрыты')), true)
+check('маршрут на месте', issues.get(3900).labels.includes('area:backend'), true)
+
 console.log('\n=== служебное ===')
 const ids = allRequestIds.map((p) => p.requestId)
 check('requestId уникальны', new Set(ids).size, ids.length)

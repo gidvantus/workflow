@@ -3077,7 +3077,19 @@ export default {
         source: 'ревьюера',
         items: refused,
       }
-      return dispatch(project, { role: halfOwner(refused), issue: issue, kind: 'rework' })
+      // Половина по пунктам, а когда её нет — по метке маршрута. Пункт без
+      // секции половины может стоять на пути вне `areas` (в этом репозитории так
+      // выглядит любой `plugins/*.mjs`): путь назван, значит маршрут по метке
+      // `area:*` рабочий. Снимать тикет к человеку за это нельзя — ровно этот
+      // случай закрыт в `roleForRework()`, и гейт обязан вести себя так же,
+      // иначе повторный круг по `plugins/*` сам же снимает тикет. `null` остаётся
+      // только для «путь не назвал ни один пункт».
+      const owner = halfOwner(refused)
+      return dispatch(project, {
+        role: owner || (refused.some((item) => item.path) ? implementer(issue, L) : null),
+        issue: issue,
+        kind: 'rework',
+      })
     }
 
     // «Смотреть нечего» — ревьюеру нет ревизии. Причин три, ветка одна: PR по
