@@ -1,0 +1,2896 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Макет · Вид отдела, создание выбором и страница правки · issue #51</title>
+    <style>
+      /*
+       * МАКЕТ постановки issue #51: свободное название отдела заменено справочником
+       * видов («Разработка», «Маркетинг»), создание выбирает вид, правка переехала с
+       * модального окна на отдельную страницу, набор полей которой задаёт вид.
+       *
+       * Стили ниже не являются продуктом: это копия токенов и компонентов
+       * app/frontend/src/index.css в одном файле, чтобы макет открывался двойным
+       * щелчком без сборки, npm и CDN. Имена классов совпадают с продуктовыми;
+       * всё новое помечено «НОВОЕ» и вынесено после продуктовой части.
+       *
+       * Новых цветов, гарнитур, теней и радиусов нет: палитра — 17 токенов продукта.
+       * Гарнитура одна — system-ui; моноширинный только у машинных значений, как
+       * адрес репозитория в продукте.
+       */
+
+:root {
+  --canvas: #e8e6e0;
+  --chrome: #fcfbf8;
+  --rail: #edebe4;
+  --band: #f2f0ea;
+  --shell: #f7f6f3;
+  --panel: #ffffff;
+  --line: #ece9e2;
+  --border: #e4e1d9;
+  --ink: #17170f;
+  --muted: #6f6d64;
+  /*
+   * Второй уровень текста на сером рейле. `--muted` на `--rail` даёт 4.34:1 —
+   * меньше требуемых 4.5:1 (WCAG 2.1 AA, 1.4.3), поэтому подписи меню и неактивный
+   * пункт меню берут это значение: 4.56:1. На белых панелях `--muted` остаётся,
+   * там 5.19:1.
+   */
+  --muted-rail: #6b6a61;
+  --muted-2: #9c9a90;
+  --dark: #1b1b16;
+  --dark-hover: #2e2e26;
+  --green: #4a7a52;
+  --danger: #a63d2e;
+  --danger-soft: #fbeeea;
+
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  color: var(--ink);
+  background-color: var(--canvas);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  padding: 1.75rem;
+}
+
+/* ---------- оболочка приложения ---------- */
+
+.app {
+  display: grid;
+  grid-template-columns: 15.5rem minmax(0, 1fr);
+  max-width: 80rem;
+  min-height: calc(100vh - 3.5rem);
+  margin: 0 auto;
+  background-color: var(--chrome);
+  border: 1px solid var(--border);
+  border-radius: 1.125rem;
+  box-shadow: 0 30px 60px -48px rgba(23, 23, 15, 0.55);
+  overflow: hidden;
+}
+
+/* ---------- левое меню ---------- */
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 1.75rem;
+  padding: 1.25rem 1rem 1rem;
+  background-color: var(--rail);
+  border-right: 1px solid var(--border);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.25rem 0.375rem;
+}
+
+.brand__mark {
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  color: var(--shell);
+  background-color: var(--dark);
+  border-radius: 0.5rem;
+}
+
+.brand__name {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.brand__sub {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--muted-rail);
+}
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.nav__label {
+  margin: 0;
+  padding: 0 0.375rem;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-rail);
+}
+
+.nav__item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.625rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  /*
+   * Неактивный пункт меню — текст 14 px на рейле, значит нужен контраст 4.5:1
+   * (WCAG 2.1 AA, 1.4.3). `--muted` здесь давал 4.34:1, поэтому берём токен рейла
+   * `--muted-rail` — 4.56:1. До второго раздела пункт всегда был активным и рисовался
+   * `--ink`; дефект появился ровно с появлением неактивного пункта.
+   */
+  color: var(--muted-rail);
+  text-decoration: none;
+  background-color: transparent;
+  border: 1px solid transparent;
+  border-radius: 0.5rem;
+}
+
+.nav__item:hover {
+  color: var(--ink);
+  background-color: rgba(255, 255, 255, 0.65);
+}
+
+.nav__item[aria-current='page'] {
+  color: var(--ink);
+  background-color: var(--panel);
+  border-color: var(--border);
+}
+
+.nav__item svg {
+  flex: none;
+}
+
+.nav__count {
+  margin-left: auto;
+  padding: 0.0625rem 0.375rem;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: var(--muted);
+  background-color: var(--band);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+/* ---------- шапка ---------- */
+
+.topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+  padding: 0.875rem 1.5rem;
+  background-color: var(--chrome);
+  border-bottom: 1px solid var(--border);
+}
+
+.crumbs {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+
+.crumbs__sep {
+  color: var(--muted-2);
+}
+
+.crumbs__current {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+/* ---------- страница проекта: паспорт и подразделы ---------- */
+
+/* Сводка проекта — не карточка и не сетка метрик: название, описание как есть и одна
+   служебная строка репозитория и даты. Странице проекта не нужен дашборд — ей нужен
+   паспорт: счётчиков задач, сумм и карточек статистики здесь нет. */
+.project-head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  min-width: 0;
+}
+
+.project-head__desc {
+  margin: 0;
+  max-width: 68ch;
+  font-size: 0.9375rem;
+  line-height: 1.55;
+  color: var(--ink);
+}
+
+.project-head__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.5rem;
+  margin: 0.125rem 0 0;
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+
+.project-repo {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+/* Полоса подразделов — тихая линия, а не пилюли: подразделов два, и оба — один уровень
+   навигации. У выбранной вкладки линия `--ink` толщиной 2 px сливается с линией полосы,
+   счётчиков в подписях нет. */
+.tabs {
+  display: flex;
+  gap: 0.25rem;
+  min-width: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.tab {
+  position: relative;
+  margin-bottom: -1px;
+  padding: 0.4375rem 0.75rem 0.5rem;
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.3;
+  /* Подпись неактивной вкладки — текст 13 px на панели: `--muted` даёт 5.19:1. */
+  color: var(--muted);
+  background-color: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+
+.tab:hover {
+  color: var(--ink);
+}
+
+.tab[aria-selected='true'] {
+  color: var(--ink);
+  border-bottom-color: var(--ink);
+}
+
+/* ---------- кнопки ---------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  padding: 0.4375rem 0.75rem;
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.25;
+  color: var(--ink);
+  background-color: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  cursor: pointer;
+}
+
+.btn:hover {
+  background-color: var(--shell);
+}
+
+.btn--dark {
+  padding: 0.5rem 0.9375rem;
+  color: var(--shell);
+  background-color: var(--dark);
+  border-color: var(--dark);
+}
+
+.btn--dark:hover {
+  background-color: var(--dark-hover);
+  border-color: var(--dark-hover);
+}
+
+.btn--danger {
+  color: #fdf8f6;
+  background-color: var(--danger);
+  border-color: var(--danger);
+}
+
+.btn--danger:hover {
+  background-color: #8f3325;
+  border-color: #8f3325;
+}
+
+.btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.btn:focus-visible,
+.nav__item:focus-visible,
+.field__input:focus-visible,
+.field__textarea:focus-visible,
+.kebab:focus-visible,
+.menu__item:focus-visible,
+.dialog__close:focus-visible,
+.tab:focus-visible,
+.row__name--button:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+/* ---------- содержимое ---------- */
+
+.main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.content {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  padding: 1.5rem;
+}
+
+.page-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.page-head__title {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 1.25;
+}
+
+.page-head__sub {
+  margin: 0.25rem 0 0;
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+
+/* ---------- карточка списка ---------- */
+
+.card {
+  display: flex;
+  flex-direction: column;
+  background-color: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0.875rem;
+  overflow: hidden;
+}
+
+.card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.875rem 1.125rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.card__title {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.card__meta {
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+
+/* Правая часть шапки карточки: счётчик и действие, которое пополняет этот список.
+   Действие стоит здесь, а не в шапке страницы: оно относится к карточке. */
+.card__tools {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.card__body {
+  padding: 1.5rem 1.125rem;
+}
+
+.table__head,
+.row {
+  display: grid;
+  grid-template-columns: minmax(0, 2.3fr) minmax(0, 1.2fr) 7.5rem 5.5rem;
+  gap: 1.25rem;
+  align-items: center;
+  padding: 0.625rem 1.125rem;
+}
+
+.table__head {
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #6b6a61;
+  background-color: var(--band);
+  border-bottom: 1px solid var(--line);
+}
+
+.table__head span:last-child {
+  text-align: right;
+}
+
+.table__body {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.row {
+  padding-top: 0.875rem;
+  padding-bottom: 0.875rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.row:last-child {
+  border-bottom: 0;
+}
+
+.row:hover {
+  background-color: #fbfaf7;
+}
+
+.row__main {
+  min-width: 0;
+}
+
+.row__name {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+/* ---------- строка проекта — ссылка на страницу ---------- */
+
+/* Наведение подсвечивает строку и подчёркивает название: подчёркивание говорит «это
+   текст, по которому ходят», без новой иконки-стрелки. «⋯» лежит в отдельной ячейке
+   и в эту подсветку не вовлечён. */
+.row--clickable {
+  cursor: pointer;
+}
+
+.row--clickable:hover {
+  background-color: var(--shell);
+}
+
+.row--clickable:hover .row__name,
+.row--clickable:hover .row__name--button {
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.15em;
+}
+
+/* Кнопка-название выглядит как текст: шрифт, цвет и вес наследуются, выравнивание
+   по левому краю, рамки нет, ширина — по содержимому. `display: inline` нужен ещё и
+   для того, чтобы подчёркивание при наведении доходило от строки до кнопки. */
+.row__name--button {
+  display: inline;
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--ink);
+  text-align: left;
+  background-color: transparent;
+  border: 0;
+  border-radius: 0.25rem;
+  cursor: pointer;
+}
+
+.row__desc {
+  margin: 0.125rem 0 0;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.row__repo,
+.row__date {
+  margin: 0;
+  min-width: 0;
+  font-size: 0.8125rem;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.row__repo {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 0.75rem;
+}
+
+/* ---------- строка задачи ---------- */
+
+/* Три колонки: номер, название, стоимость. Шапки колонок нет — подписи «Задача» и
+   «Стоимость» к трём строкам ничего не добавляют, а знак ₽ сам называет колонку.
+   Строка одна: описания в ней нет, поэтому список читается как ведомость. */
+.task-row {
+  display: grid;
+  grid-template-columns: 2.75rem minmax(0, 1fr) 9rem;
+  gap: 1.25rem;
+  align-items: baseline;
+  padding: 0.5625rem 1.125rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.task-row:last-child {
+  border-bottom: 0;
+}
+
+.task-row:hover {
+  background-color: #fbfaf7;
+}
+
+/* Номер задачи — служебная подпись, а не данные: приглушённый цвет и табличные цифры,
+   чтобы номера стояли друг под другом разрядами. На белой панели `--muted` даёт 5.19:1. */
+.row__id {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.task-row__name {
+  margin: 0;
+  min-width: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+/* Деньги — данные, а не подпись: цвет основной, вес 500, табличные цифры, чтобы суммы
+   стояли друг под другом разрядами. */
+.row__cost {
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.4;
+  text-align: right;
+  white-space: nowrap;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.row__actions {
+  position: relative;
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.25rem;
+}
+
+.kebab {
+  display: grid;
+  place-items: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  color: var(--muted);
+  background-color: transparent;
+  border: 1px solid transparent;
+  border-radius: 0.375rem;
+  cursor: pointer;
+}
+
+.kebab:hover,
+.kebab[aria-expanded='true'] {
+  color: var(--ink);
+  background-color: var(--shell);
+  border-color: var(--border);
+}
+
+.menu {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  right: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  min-width: 8rem;
+  padding: 0.25rem;
+  background-color: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0.625rem;
+  box-shadow: 0 18px 32px -18px rgba(23, 23, 15, 0.35);
+}
+
+/* Карточка обрезает содержимое по своим границам (`overflow: hidden` ради скруглений),
+   поэтому меню последней строки раскрывается вверх — вниз оно ушло бы под обрез и
+   пункты «Изменить» и «Удалить» стали бы недоступны. */
+.row:last-child .menu {
+  top: auto;
+  bottom: calc(100% + 0.25rem);
+}
+
+.menu__item {
+  padding: 0.4375rem 0.5rem;
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  text-align: left;
+  color: var(--ink);
+  background-color: transparent;
+  border: 0;
+  border-radius: 0.375rem;
+  cursor: pointer;
+}
+
+.menu__item:hover {
+  background-color: var(--shell);
+}
+
+.menu__item--delete {
+  color: var(--danger);
+}
+
+.menu__item--delete:hover {
+  background-color: var(--danger-soft);
+}
+
+/* ---------- состояния списка ---------- */
+
+.state__line {
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+.state__hint {
+  margin: 0.375rem 0 0;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.state__error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.625rem 1rem;
+}
+
+.error {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--danger);
+}
+
+/* ---------- раздел «Отделы» ---------- */
+
+/* Пять колонок вместо четырёх: название, время, роли, дата, действия.
+   Время — фиксированная колонка, роли — самая широкая и переносимая. */
+.table__head--department,
+.row--department {
+  grid-template-columns:
+    minmax(0, 1.15fr) 8.5rem minmax(0, 2.4fr) 7.5rem
+    5.5rem;
+}
+
+/* Время работы — главный герой раздела. Две строки: значение табличными цифрами,
+   под ним длительность смены, а у перехода через полночь — ещё и словами. Без шкалы:
+   полоска в 3 px в колонке 8.5 rem на телефоне читается как случайные чёрточки,
+   а слова «через полночь» говорят то же самое. */
+.dept-time {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-width: 0;
+}
+
+.dept-time__value {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.3;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.dept-time__note {
+  font-size: 0.75rem;
+  line-height: 1.3;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Роли в строке — текст через запятую, а не чипы: это контракт
+   `department-item-roles`, и 4–6 тегов подряд превращают таблицу в ёлку. */
+.row__roles {
+  margin: 0;
+  min-width: 0;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.time-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.time-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: end;
+  gap: 0.5rem;
+}
+
+.time-row__dash {
+  padding-bottom: 0.5rem;
+  font-size: 0.875rem;
+  color: var(--muted-2);
+}
+
+.roles {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.roles__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.25rem 0.75rem;
+}
+
+.roles__title {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+/* Счётчик отмеченных ролей — единственное место раздела, где уместен чип:
+   он отвечает на вопрос «сколько я уже выбрал», не занимая строку. */
+.chip {
+  padding: 0.0625rem 0.375rem;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: var(--muted);
+  background-color: var(--band);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+}
+
+.roles__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.4375rem 0.875rem;
+}
+
+.checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  font-size: 0.8125rem;
+  line-height: 1.35;
+  color: var(--ink);
+}
+
+.checkbox input {
+  flex: none;
+  width: 0.9375rem;
+  height: 0.9375rem;
+  margin: 0.0625rem 0 0;
+  accent-color: var(--dark);
+}
+
+.checkbox input:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+/* ---------- состояние сервиса: полоса под списком ---------- */
+
+.service {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+  padding: 0.875rem 1.125rem;
+  background-color: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0.875rem;
+}
+
+.service__label {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.service__line {
+  display: flex;
+  align-items: center;
+  gap: 0.4375rem;
+  margin: 0.1875rem 0 0;
+  font-size: 0.8125rem;
+  color: var(--ink);
+}
+
+.service__error {
+  margin-top: 0.375rem;
+}
+
+.status__dot {
+  width: 0.4375rem;
+  height: 0.4375rem;
+  background-color: var(--green);
+  border-radius: 50%;
+}
+
+.status__text {
+  white-space: nowrap;
+}
+
+/* ---------- подвал ---------- */
+
+.footbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1.5rem;
+  margin-top: auto;
+  padding: 0.875rem 1.5rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+}
+
+.footbar__note {
+  margin: 0;
+}
+
+/* ---------- диалоги ---------- */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  background-color: rgba(23, 23, 15, 0.45);
+  animation: overlay-in 120ms ease-out;
+}
+
+.dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  width: min(28rem, 100%);
+  max-height: calc(100vh - 3rem);
+  overflow-y: auto;
+  padding: 1.25rem;
+  background-color: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0.875rem;
+  box-shadow: 0 24px 48px -30px rgba(23, 23, 15, 0.45);
+  animation: dialog-in 120ms ease-out;
+}
+
+/* Окно формы отдела шире обычного диалога: десять ролей в две колонки.
+   Стоит сразу за `.dialog`, потому что специфичность у обоих правил одинаковая
+   (`0,1,0`), и побеждает то, что ниже в файле: выше `.dialog` перебивал эту ширину,
+   и на десктопе окно оставалось 28 rem вместо 34 rem из макета. */
+.dialog--wide {
+  width: min(34rem, 100%);
+}
+
+.dialog:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.dialog__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.dialog__title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.dialog__close {
+  display: grid;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  color: var(--muted);
+  background-color: transparent;
+  border: 0;
+  border-radius: 0.375rem;
+  cursor: pointer;
+}
+
+.dialog__close:hover {
+  color: var(--ink);
+  background-color: var(--shell);
+}
+
+.dialog__close:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.dialog__text {
+  margin: -0.5rem 0 0;
+  font-size: 0.875rem;
+  line-height: 1.55;
+  color: var(--ink);
+}
+
+.dialog__form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3125rem;
+}
+
+.field__label {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.field__input,
+.field__textarea {
+  width: 100%;
+  padding: 0.5rem 0.625rem;
+  font: inherit;
+  font-size: 0.875rem;
+  line-height: 1.4;
+  color: var(--ink);
+  background-color: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+}
+
+.field__textarea {
+  min-height: 4.25rem;
+  resize: vertical;
+}
+
+.field__input[aria-invalid='true'],
+.field__textarea[aria-invalid='true'] {
+  border-color: var(--danger);
+}
+
+.field__hint {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+/* Стоимость — короткое поле: сумма на всю ширину окна выглядела бы пустой формой.
+   Табличные цифры, чтобы введённое число было легко сверить с ним же на экране. */
+.field--cost .field__input {
+  max-width: 12rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.5rem);
+  }
+}
+
+/* ---------- ≤ 900 px: меню полосой, таблица строками ---------- */
+
+@media (max-width: 900px) {
+  .app {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sidebar {
+    flex-direction: row;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.75rem 1rem;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .nav {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  /* Два пункта с бейджами в узком рейле: подпись и число не должны разъезжаться
+     по разным строкам. */
+  .nav__item {
+    white-space: nowrap;
+  }
+
+  .nav__count {
+    flex: none;
+  }
+
+  .nav__label {
+    display: none;
+  }
+
+  .topbar {
+    padding: 0.75rem 1rem;
+  }
+
+  .content {
+    padding: 1rem;
+  }
+
+  .table__head {
+    display: none;
+  }
+
+  .row,
+  .row--department {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.5rem;
+    align-items: start;
+    padding: 0.875rem 1rem;
+  }
+
+  .row__actions {
+    justify-content: flex-start;
+    margin-left: -0.4375rem;
+  }
+
+  /* на телефоне меню — панель во всю ширину строки и раскрывается вверх,
+     чтобы не накрывать следующий проект */
+  .menu {
+    top: auto;
+    right: 0;
+    bottom: calc(100% + 0.25rem);
+    left: 0;
+    min-width: 0;
+  }
+
+  .row__desc {
+    white-space: normal;
+    overflow: visible;
+  }
+
+  .page-head__title {
+    font-size: 1.375rem;
+  }
+}
+
+/* ---------- ≤ 600 px: всё в одну колонку ---------- */
+
+@media (max-width: 600px) {
+  body {
+    padding: 0.75rem;
+  }
+
+  .app {
+    min-height: calc(100vh - 1.5rem);
+    border-radius: 0.875rem;
+  }
+
+  .sidebar {
+    flex-wrap: wrap;
+    gap: 0.5rem 0.75rem;
+  }
+
+  .brand__sub {
+    display: none;
+  }
+
+  .service {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.625rem;
+    padding: 0.875rem 1rem;
+  }
+
+  .service .btn {
+    width: 100%;
+  }
+
+  .page-head {
+    align-items: flex-start;
+  }
+
+  .page-head .btn--dark {
+    width: 100%;
+  }
+
+  .card__head {
+    flex-wrap: wrap;
+    gap: 0.625rem 0.75rem;
+    padding: 0.75rem 1rem;
+  }
+
+  .card__body {
+    padding: 1.25rem 1rem;
+  }
+
+  /* На телефоне счётчик и «Добавить задачу»/«Добавить отдел» делят одну строку:
+     кнопка остаётся у правого края, чтобы под ней был список, который она пополняет. */
+  .card__tools {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  /* Строка задачи и на телефоне остаётся одной линией: номер и название слева,
+     стоимость справа. Стоимость не переносится под название — иначе список из десяти
+     задач превращается в двадцать строк. */
+  .task-row {
+    grid-template-columns: 2.25rem minmax(0, 1fr) auto;
+    gap: 0.75rem;
+    padding: 0.5625rem 1rem;
+  }
+
+  .field--cost .field__input {
+    max-width: none;
+  }
+
+  .overlay {
+    padding: 0.75rem;
+  }
+
+  /* На телефоне широкое окно занимает всю ширину, роли идут одной колонкой. */
+  .dialog--wide {
+    width: 100%;
+  }
+
+  .roles__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .footbar {
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 0.75rem 1rem;
+  }
+}
+
+/* ---------- ≤ 480 px: возврат со страницы проекта во всю ширину ---------- */
+
+@media (max-width: 480px) {
+  /* «← К проектам» на узком экране переносится под крошки и занимает всю ширину:
+     маленькая цель в углу шапки там неудобна. */
+  .topbar .btn {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .overlay,
+  .dialog {
+    animation: none;
+  }
+}
+
+      /* =========================================================
+         НОВОЕ — страница правки отдела (issue #51).
+         Значения все из токенов и шкалы продукта; новых цветов,
+         гарнитур, радиусов и теней нет.
+         ========================================================= */
+
+      /* Шапка страницы отдела: название, под ним одна служебная строка
+         «вид · обновлён» — то же место и тот же кегль, что у паспорта проекта,
+         но страница отдела это не проект, поэтому класс свой. */
+      .dept-head {
+        display: flex;
+        flex-direction: column;
+        gap: 0.375rem;
+        min-width: 0;
+      }
+
+      .dept-head__meta {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 0.25rem 0.5rem;
+        margin: 0.125rem 0 0;
+        font-size: 0.8125rem;
+        color: var(--muted);
+      }
+
+      /* Секции формы. Порядок секций и полей — порядок каталога вида,
+         поэтому границы стоят между секциями, а не у каждого поля:
+         десять рамок подряд читались бы как десять несвязанных блоков. */
+      .form-section {
+        display: flex;
+        flex-direction: column;
+        gap: 0.875rem;
+        padding: 1.25rem 1.125rem;
+      }
+
+      .form-section + .form-section {
+        border-top: 1px solid var(--line);
+      }
+
+      .form-section__title {
+        margin: 0;
+        font-size: 0.8125rem;
+        font-weight: 600;
+        line-height: 1.4;
+      }
+
+      /* Сетка полей в две колонки. Пары идут по порядку каталога и осмысленны
+         сами по себе: путь и ветка, два рабочих пространства, директория
+         документов и имя compose-проекта. Порядок чтения не меняется. */
+      .form-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.875rem 1.25rem;
+      }
+
+      /* Короткие значения не растягиваются на всю ширину карточки: два поля
+         времени по 30 rem и колонки ролей по 340 px. Шире — поля выглядят
+         пустыми, а подпись отрывается от своего флажка. */
+      .form-section > .time-block {
+        max-width: 30rem;
+      }
+
+      .form-section > .roles {
+        max-width: 44rem;
+      }
+
+      /* Машинные значения — моноширинным, как адрес репозитория в продукте:
+         путь, ветка, имя compose-проекта и токен читаются посимвольно. */
+      .field--machine .field__input {
+        font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+        font-size: 0.8125rem;
+      }
+
+      /* У лимита возврата короткое числовое поле — существующий `.field--cost`
+         продукта (12 rem, табличные цифры): новый класс не нужен. */
+
+      /* Блок уведомлений: при выключенном флажке полей нет вовсе, поэтому
+         зазор задаётся здесь, а не пустыми полями-заглушками. */
+      .notify {
+        display: flex;
+        flex-direction: column;
+        gap: 0.875rem;
+      }
+
+      /* Полоса кнопок страницы стоит внизу карточки: сохранение — последнее
+         действие страницы, а не первое (в окне кнопки тоже внизу). */
+      .form-foot {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+        padding: 0.875rem 1.125rem;
+        background-color: var(--chrome);
+        border-top: 1px solid var(--border);
+      }
+
+      .form-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 0.5rem;
+      }
+
+      /* Вид под названием в строке списка — мелкая служебная строка,
+         на том же кегле, что длительность смены. */
+      .row__kind {
+        margin: 0.125rem 0 0;
+        font-size: 0.75rem;
+        line-height: 1.3;
+        color: var(--muted);
+      }
+
+      /* «Нет расписания» — отсутствие данных, а не данные: тише значения,
+         которое есть. */
+      .dept-time__value--empty {
+        font-weight: 400;
+        color: var(--muted);
+      }
+
+      /* Выбор вида в окне создания: два варианта двумя строками, а не
+         выпадающим списком из двух пунктов — под каждым видно, что он даёт. */
+      .kind-options {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+      }
+
+      .kind-option {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        align-items: start;
+        gap: 0.125rem 0.625rem;
+        padding: 0.6875rem 0.75rem;
+        background-color: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 0.625rem;
+        cursor: pointer;
+      }
+
+      .kind-option:hover {
+        background-color: var(--shell);
+      }
+
+      .kind-option--selected {
+        border-color: var(--ink);
+        box-shadow: inset 0 0 0 1px var(--ink);
+      }
+
+      .kind-option input {
+        grid-row: 1;
+        grid-column: 1;
+        width: 0.9375rem;
+        height: 0.9375rem;
+        margin: 0.1875rem 0 0;
+        accent-color: var(--dark);
+      }
+
+      .kind-option__title {
+        grid-row: 1;
+        grid-column: 2;
+        font-size: 0.875rem;
+        font-weight: 500;
+        line-height: 1.4;
+      }
+
+      .kind-option__note {
+        grid-row: 2;
+        grid-column: 2;
+        font-size: 0.75rem;
+        line-height: 1.4;
+        color: var(--muted);
+      }
+
+      .kind-option:focus-within {
+        outline: 2px solid var(--ink);
+        outline-offset: 2px;
+      }
+
+      /* Отказ по виду помечает весь набор, а не отдельный вариант: сервер
+         отказывает по имени, вариантов у человека два. */
+      .kind-options[aria-invalid='true'] .kind-option {
+        border-color: var(--danger);
+      }
+
+      .kind-options[aria-invalid='true'] .kind-option--selected {
+        box-shadow: inset 0 0 0 1px var(--danger);
+      }
+
+      /* Поле с серверным отказом: красная рамка, без своих текстов. */
+      .field__input[aria-invalid='true'] {
+        border-color: var(--danger);
+      }
+
+      /* =========================================================
+         Адаптив новых блоков. Продуктовые правила остаются выше.
+         ========================================================= */
+
+      @media (max-width: 900px) {
+        /* На планшетной ширине две колонки полей ещё помещаются; здесь
+           только ячейки состояний, которые на 1440 идут в ряд. */
+        .state-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .frame__app--dialog .app {
+          min-height: 30rem;
+        }
+      }
+
+      @media (max-width: 600px) {
+        /* Одна колонка: пары «путь и ветка» рядом уже не читаются,
+           моноширинные значения не влезают в половину экрана. */
+        .form-grid {
+          grid-template-columns: minmax(0, 1fr);
+        }
+
+        /* Кнопки на всю ширину в стопку: цель в углу узкого экрана
+           нажимается мимо. */
+        .form-actions {
+          flex-direction: column;
+        }
+
+        .form-actions .btn {
+          width: 100%;
+        }
+
+        .form-foot {
+          padding: 0.875rem 1rem;
+        }
+
+        .form-section {
+          padding: 1.125rem 1rem;
+        }
+
+        /* Моноширинные значения на 375 обрезаются в поле: адрес репозитория
+           длиной 40 знаков при 13 px не влезает в 311 px строки. Кегль на шаг
+           меньше — ровно как у длинных чисел в таблице. Вводимое значение
+           по-прежнему читается целиком. */
+        .field--machine .field__input {
+          font-size: 0.75rem;
+        }
+      }
+
+      /* =========================================================
+         Лист макета: рамки, подписи кадров, полоса состояний.
+         Не часть продукта — фронтендер это не переносит.
+         ========================================================= */
+
+      .sheet-head {
+        max-width: 80rem;
+        margin: 0 auto 1.75rem;
+      }
+
+      /* Подписи листа лежат на канве, а не на белой панели: `--muted` даёт там
+         4.16:1 — меньше AA для 12 px. Поэтому служебный текст листа на шаг
+         темнее продуктового; внутрь кадров этот цвет не попадает. */
+      .sheet-kicker {
+        margin: 0 0 0.375rem;
+        font-size: 0.75rem;
+        color: #5f5d54;
+      }
+
+      .sheet-title {
+        margin: 0;
+        max-width: 48rem;
+        font-size: 1.375rem;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+        line-height: 1.3;
+      }
+
+      .sheet-sub {
+        margin: 0.5rem 0 0;
+        /* Около 72 знаков в строке: вступительный абзац читают, а не сканируют. */
+        max-width: 42rem;
+        font-size: 0.875rem;
+        line-height: 1.55;
+        color: #5f5d54;
+      }
+
+      .sheet-sub code,
+      .sheet-note code {
+        font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+        font-size: 0.8125rem;
+      }
+
+      .sheet {
+        display: flex;
+        flex-direction: column;
+        gap: 2.25rem;
+        max-width: 80rem;
+        margin: 0 auto;
+      }
+
+      .frame {
+        margin: 0;
+      }
+
+      .frame__cap {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 0.25rem 0.75rem;
+        margin: 0 0 0.625rem;
+        font-size: 0.8125rem;
+        line-height: 1.4;
+      }
+
+      .frame__name {
+        font-weight: 600;
+        color: var(--ink);
+      }
+
+      .frame__meta {
+        color: #5f5d54;
+      }
+
+      .frame__app {
+        position: relative;
+      }
+
+      .frame__app .app {
+        min-height: 0;
+      }
+
+      /* В кадре с окном оболочка и подложка лежат в одной ячейке сетки:
+         высоту кадра задаёт большее из двух, подложка накрывает оболочку
+         целиком и на 1440, и на 375, где окно выше оболочки. */
+      .frame__app--dialog {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      .frame__app--dialog .app,
+      .frame__app--dialog .overlay {
+        grid-area: 1 / 1;
+      }
+
+      .frame__app--dialog .app {
+        min-height: 36rem;
+      }
+
+      .frame__app--dialog .overlay {
+        position: static;
+      }
+
+      /* Полоса состояний: узкие ячейки, в каждой один элемент интерфейса
+         без оболочки — состояния читаются рядом, а не в семи кадрах.
+         Шесть ячеек в три колонки: два ряда без дыры в последнем. */
+      .state-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 1.5rem;
+        align-items: start;
+      }
+
+      .state-cell {
+        display: flex;
+        flex-direction: column;
+        gap: 0.625rem;
+        min-width: 0;
+      }
+
+      .state-cell__cap {
+        margin: 0;
+        font-size: 0.75rem;
+        line-height: 1.4;
+        color: #5f5d54;
+      }
+
+      .state-cell .dialog {
+        width: 100%;
+        max-height: none;
+      }
+
+      .state-cell .card {
+        width: 100%;
+      }
+
+      @media (max-width: 900px) {
+        .state-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .frame__app--dialog .app {
+          min-height: 30rem;
+        }
+      }
+
+      @media (max-width: 600px) {
+        .state-grid {
+          grid-template-columns: minmax(0, 1fr);
+        }
+
+        .frame__app--dialog .app {
+          min-height: 26rem;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .overlay,
+        .dialog {
+          animation: none;
+        }
+      }
+    </style>
+  </head>
+
+  <body>
+    <header class="sheet-head">
+      <p class="sheet-kicker">Макет постановки · issue #51 · метка needs-mockup</p>
+      <h1 class="sheet-title">
+        Отдел: вид из справочника, создание выбором и отдельная страница правки
+      </h1>
+      <p class="sheet-sub">
+        Свободное название отдела заменено видом из справочника, создание выбирает вид, правка
+        переехала с окна на отдельную страницу, и набор полей этой страницы задаёт вид. Кадры идут
+        по сценарию; токены и классы — из <code>app/frontend/src/index.css</code>,
+        <code>data-testid</code> — по контракту, новых цветов и гарнитур нет.
+      </p>
+    </header>
+
+    <main class="sheet">
+      <!-- ==================== КАДР 1: ОКНО, ВИД НЕ ВЫБРАН ==================== -->
+      <figure class="frame">
+        <figcaption class="frame__cap">
+          <span class="frame__name">Окно «Новый отдел»: вид не выбран</span>
+          <span class="frame__meta">
+            «Создать» неактивна — без вида отдел не заводится · за окном вкладка «Отделы»
+            страницы проекта
+          </span>
+        </figcaption>
+
+        <div class="frame__app frame__app--dialog">
+          <div class="app">
+            <aside class="sidebar">
+              <div class="brand">
+                <span class="brand__mark" aria-hidden="true">
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+                    <path d="M2.5 5.5 8 2.5l5.5 3L8 8.5z" />
+                    <path d="M2.5 8.5 8 11.5l5.5-3" />
+                  </svg>
+                </span>
+                <span>
+                  <p class="brand__name">Workflow</p>
+                  <p class="brand__sub">Отдел разработки</p>
+                </span>
+              </div>
+
+              <nav class="nav" aria-label="Разделы">
+                <p class="nav__label">Разделы</p>
+                <a class="nav__item" href="#" aria-current="page" data-testid="nav-projects">
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+                    <path d="M2 5.5A1.5 1.5 0 0 1 3.5 4h3l1.5 1.5h4A1.5 1.5 0 0 1 13.5 7v4.5A1.5 1.5 0 0 1 12 13H3.5A1.5 1.5 0 0 1 2 11.5z" />
+                  </svg>
+                  Проекты
+                  <span class="nav__count">2</span>
+                </a>
+              </nav>
+            </aside>
+
+            <div class="main">
+              <header class="topbar">
+                <p class="crumbs">
+                  Приложение
+                  <span class="crumbs__sep" aria-hidden="true">/</span>
+                  Проекты
+                  <span class="crumbs__sep" aria-hidden="true">/</span>
+                  <span class="crumbs__current">Workflow</span>
+                </p>
+                <button class="btn" type="button" data-testid="project-back">← К проектам</button>
+              </header>
+
+              <main class="content" data-testid="project-page">
+                <div class="page-head">
+                  <div class="project-head">
+                    <h1 class="page-head__title" data-testid="project-title">Workflow</h1>
+                    <p class="project-head__desc">
+                      Конвейер отдела разработки: проекты, задачи и отделы с их временем работы
+                      и набором ролей.
+                    </p>
+                    <p class="project-head__meta">
+                      <span class="project-repo">https://github.com/gidvantus/workflow</span>
+                      <span class="crumbs__sep" aria-hidden="true">·</span>
+                      <span>Обновлён 14 ноя 2026</span>
+                    </p>
+                  </div>
+                </div>
+
+                <div class="tabs" role="tablist" aria-label="Подразделы проекта">
+                  <button class="tab" type="button" role="tab" aria-selected="false" data-testid="project-tab-tasks">
+                    Задачи
+                  </button>
+                  <button class="tab" type="button" role="tab" aria-selected="true" data-testid="project-tab-departments">
+                    Отделы
+                  </button>
+                </div>
+
+                <section class="card" aria-label="Список отделов">
+                  <div class="card__head">
+                    <h2 class="card__title">Список отделов</h2>
+                    <div class="card__tools">
+                      <span class="card__meta">2 отдела</span>
+                      <button class="btn btn--dark" type="button" data-testid="department-create">
+                        Добавить отдел
+                      </button>
+                    </div>
+                  </div>
+
+                  <div class="table__head table__head--department" role="presentation">
+                    <span>Отдел</span>
+                    <span>Время работы</span>
+                    <span>Роли</span>
+                    <span>Обновлён</span>
+                    <span>Действия</span>
+                  </div>
+
+                  <ul class="table__body">
+                    <li class="row row--department" data-testid="department-item">
+                      <div class="row__main">
+                        <p class="row__name" data-testid="department-item-name">Разработка</p>
+                        <p class="row__kind" data-testid="department-item-kind">Разработка</p>
+                      </div>
+                      <div class="dept-time">
+                        <span class="dept-time__value" data-testid="department-item-time">13:00–04:00</span>
+                        <span class="dept-time__note">15 ч · через полночь</span>
+                      </div>
+                      <p class="row__roles" data-testid="department-item-roles">
+                        Аналитик, Разработчик (полный стек), Код-ревьюер, Тестировщик
+                      </p>
+                      <p class="row__date">12 ноя 2026</p>
+                      <div class="row__actions">
+                        <button class="kebab" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Действия с отделом Разработка">
+                          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                            <circle cx="3.5" cy="8" r="1.15" />
+                            <circle cx="8" cy="8" r="1.15" />
+                            <circle cx="12.5" cy="8" r="1.15" />
+                          </svg>
+                        </button>
+                      </div>
+                    </li>
+
+                    <li class="row row--department" data-testid="department-item">
+                      <div class="row__main">
+                        <p class="row__name" data-testid="department-item-name">Маркетинг</p>
+                        <p class="row__kind" data-testid="department-item-kind">Маркетинг</p>
+                      </div>
+                      <div class="dept-time">
+                        <span class="dept-time__value dept-time__value--empty" data-testid="department-item-time"
+                          >нет расписания</span
+                        >
+                        <span class="dept-time__note"></span>
+                      </div>
+                      <p class="row__roles" data-testid="department-item-roles">—</p>
+                      <p class="row__date">14 ноя 2026</p>
+                      <div class="row__actions">
+                        <button class="kebab" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Действия с отделом Маркетинг">
+                          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                            <circle cx="3.5" cy="8" r="1.15" />
+                            <circle cx="8" cy="8" r="1.15" />
+                            <circle cx="12.5" cy="8" r="1.15" />
+                          </svg>
+                        </button>
+                      </div>
+                    </li>
+                  </ul>
+                </section>
+              </main>
+
+              <footer class="footbar">
+                <p class="footbar__note">© 2026 Workflow</p>
+              </footer>
+            </div>
+          </div>
+
+          <div class="overlay">
+            <div
+              class="dialog"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="f1-title"
+              data-testid="department-create-dialog"
+            >
+              <div class="dialog__head">
+                <h2 class="dialog__title" id="f1-title">Новый отдел</h2>
+                <button class="dialog__close" type="button" aria-label="Закрыть окно">
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                    <path d="M2 2l8 8M10 2l-8 8" />
+                  </svg>
+                </button>
+              </div>
+
+              <p class="dialog__text">
+                Отдел заводится видом: название отдела станет названием вида, а набор полей
+                страницы вид и задаст.
+              </p>
+
+              <div class="field">
+                <span class="field__label" id="f1-kinds">Вид отдела</span>
+                <div class="kind-options" role="radiogroup" aria-labelledby="f1-kinds">
+                  <label class="kind-option">
+                    <input type="radio" name="f1-kind" data-testid="department-create-kind-development" />
+                    <span class="kind-option__title">Разработка</span>
+                    <span class="kind-option__note">
+                      Время работы, роли, шесть адресов отдела, лимит возврата и уведомления
+                    </span>
+                  </label>
+                  <label class="kind-option">
+                    <input type="radio" name="f1-kind" data-testid="department-create-kind-marketing" />
+                    <span class="kind-option__title">Маркетинг</span>
+                    <span class="kind-option__note">
+                      Репозиторий, ветка и два рабочих пространства
+                    </span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="dialog__actions">
+                <button class="btn" type="button" data-testid="department-create-cancel">Отмена</button>
+                <button class="btn btn--dark" type="button" data-testid="department-create-submit" disabled>
+                  Создать
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </figure>
+
+      <!-- ==================== КАДР 2: ВИД ВЫБРАН И ОТКАЗ ==================== -->
+      <figure class="frame">
+        <figcaption class="frame__cap">
+          <span class="frame__name">Окно «Новый отдел»: выбран «Разработка» и отказ</span>
+          <span class="frame__meta">
+            409 дословно: «Отдел с таким названием уже есть» · выбор помечен
+            <code>aria-invalid</code>, «Создать» остаётся доступной
+          </span>
+        </figcaption>
+
+        <div class="frame__app frame__app--dialog">
+          <div class="app">
+            <aside class="sidebar">
+              <div class="brand">
+                <span class="brand__mark" aria-hidden="true">
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+                    <path d="M2.5 5.5 8 2.5l5.5 3L8 8.5z" />
+                    <path d="M2.5 8.5 8 11.5l5.5-3" />
+                  </svg>
+                </span>
+                <span>
+                  <p class="brand__name">Workflow</p>
+                  <p class="brand__sub">Отдел разработки</p>
+                </span>
+              </div>
+
+              <nav class="nav" aria-label="Разделы">
+                <p class="nav__label">Разделы</p>
+                <a class="nav__item" href="#" aria-current="page" data-testid="nav-projects">
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+                    <path d="M2 5.5A1.5 1.5 0 0 1 3.5 4h3l1.5 1.5h4A1.5 1.5 0 0 1 13.5 7v4.5A1.5 1.5 0 0 1 12 13H3.5A1.5 1.5 0 0 1 2 11.5z" />
+                  </svg>
+                  Проекты
+                  <span class="nav__count">2</span>
+                </a>
+              </nav>
+            </aside>
+
+            <div class="main">
+              <header class="topbar">
+                <p class="crumbs">
+                  Приложение
+                  <span class="crumbs__sep" aria-hidden="true">/</span>
+                  Проекты
+                  <span class="crumbs__sep" aria-hidden="true">/</span>
+                  <span class="crumbs__current">Workflow</span>
+                </p>
+                <button class="btn" type="button" data-testid="project-back">← К проектам</button>
+              </header>
+
+              <main class="content" data-testid="project-page">
+                <div class="page-head">
+                  <div class="project-head">
+                    <h1 class="page-head__title" data-testid="project-title">Workflow</h1>
+                    <p class="project-head__desc">
+                      Конвейер отдела разработки: проекты, задачи и отделы с их временем работы
+                      и набором ролей.
+                    </p>
+                    <p class="project-head__meta">
+                      <span class="project-repo">https://github.com/gidvantus/workflow</span>
+                      <span class="crumbs__sep" aria-hidden="true">·</span>
+                      <span>Обновлён 14 ноя 2026</span>
+                    </p>
+                  </div>
+                </div>
+
+                <div class="tabs" role="tablist" aria-label="Подразделы проекта">
+                  <button class="tab" type="button" role="tab" aria-selected="false" data-testid="project-tab-tasks">
+                    Задачи
+                  </button>
+                  <button class="tab" type="button" role="tab" aria-selected="true" data-testid="project-tab-departments">
+                    Отделы
+                  </button>
+                </div>
+
+                <section class="card" aria-label="Список отделов">
+                  <div class="card__head">
+                    <h2 class="card__title">Список отделов</h2>
+                    <div class="card__tools">
+                      <span class="card__meta">1 отдел</span>
+                      <button class="btn btn--dark" type="button" data-testid="department-create">
+                        Добавить отдел
+                      </button>
+                    </div>
+                  </div>
+
+                  <div class="table__head table__head--department" role="presentation">
+                    <span>Отдел</span>
+                    <span>Время работы</span>
+                    <span>Роли</span>
+                    <span>Обновлён</span>
+                    <span>Действия</span>
+                  </div>
+
+                  <ul class="table__body">
+                    <li class="row row--department" data-testid="department-item">
+                      <div class="row__main">
+                        <p class="row__name" data-testid="department-item-name">Разработка</p>
+                        <p class="row__kind" data-testid="department-item-kind">Разработка</p>
+                      </div>
+                      <div class="dept-time">
+                        <span class="dept-time__value" data-testid="department-item-time">13:00–04:00</span>
+                        <span class="dept-time__note">15 ч · через полночь</span>
+                      </div>
+                      <p class="row__roles" data-testid="department-item-roles">
+                        Аналитик, Разработчик (полный стек), Код-ревьюер, Тестировщик
+                      </p>
+                      <p class="row__date">12 ноя 2026</p>
+                      <div class="row__actions">
+                        <button class="kebab" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Действия с отделом Разработка">
+                          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                            <circle cx="3.5" cy="8" r="1.15" />
+                            <circle cx="8" cy="8" r="1.15" />
+                            <circle cx="12.5" cy="8" r="1.15" />
+                          </svg>
+                        </button>
+                      </div>
+                    </li>
+                  </ul>
+                </section>
+              </main>
+
+              <footer class="footbar">
+                <p class="footbar__note">© 2026 Workflow</p>
+              </footer>
+            </div>
+          </div>
+
+          <div class="overlay">
+            <div
+              class="dialog"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="f2-title"
+              data-testid="department-create-dialog"
+            >
+              <div class="dialog__head">
+                <h2 class="dialog__title" id="f2-title">Новый отдел</h2>
+                <button class="dialog__close" type="button" aria-label="Закрыть окно">
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                    <path d="M2 2l8 8M10 2l-8 8" />
+                  </svg>
+                </button>
+              </div>
+
+              <p class="dialog__text">
+                Отдел заводится видом: название отдела станет названием вида, а набор полей
+                страницы вид и задаст.
+              </p>
+
+              <div class="field">
+                <span class="field__label" id="f2-kinds">Вид отдела</span>
+                <div class="kind-options" role="radiogroup" aria-labelledby="f2-kinds" aria-invalid="true">
+                  <label class="kind-option kind-option--selected">
+                    <input type="radio" name="f2-kind" checked data-testid="department-create-kind-development" />
+                    <span class="kind-option__title">Разработка</span>
+                    <span class="kind-option__note">
+                      Время работы, роли, шесть адресов отдела, лимит возврата и уведомления
+                    </span>
+                  </label>
+                  <label class="kind-option">
+                    <input type="radio" name="f2-kind" data-testid="department-create-kind-marketing" />
+                    <span class="kind-option__title">Маркетинг</span>
+                    <span class="kind-option__note">
+                      Репозиторий, ветка и два рабочих пространства
+                    </span>
+                  </label>
+                </div>
+              </div>
+
+              <p class="error" data-testid="department-create-error" role="alert">
+                Отдел с таким названием уже есть
+              </p>
+
+              <div class="dialog__actions">
+                <button class="btn" type="button" data-testid="department-create-cancel">Отмена</button>
+                <button class="btn btn--dark" type="button" data-testid="department-create-submit">
+                  Создать
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </figure>
+
+      <!-- ==================== КАДР 3: СТРАНИЦА «РАЗРАБОТКА» ==================== -->
+      <figure class="frame">
+        <figcaption class="frame__cap">
+          <span class="frame__name">Страница правки отдела «Разработка»</span>
+          <span class="frame__meta">
+            десять полей в порядке каталога вида · «Рабочее пространство человека» пусто — это
+            <code>null</code>, а не пустая строка
+          </span>
+        </figcaption>
+
+        <div class="frame__app">
+          <div class="app">
+            <aside class="sidebar">
+              <div class="brand">
+                <span class="brand__mark" aria-hidden="true">
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+                    <path d="M2.5 5.5 8 2.5l5.5 3L8 8.5z" />
+                    <path d="M2.5 8.5 8 11.5l5.5-3" />
+                  </svg>
+                </span>
+                <span>
+                  <p class="brand__name">Workflow</p>
+                  <p class="brand__sub">Отдел разработки</p>
+                </span>
+              </div>
+
+              <nav class="nav" aria-label="Разделы">
+                <p class="nav__label">Разделы</p>
+                <a class="nav__item" href="#" aria-current="page" data-testid="nav-projects">
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+                    <path d="M2 5.5A1.5 1.5 0 0 1 3.5 4h3l1.5 1.5h4A1.5 1.5 0 0 1 13.5 7v4.5A1.5 1.5 0 0 1 12 13H3.5A1.5 1.5 0 0 1 2 11.5z" />
+                  </svg>
+                  Проекты
+                  <span class="nav__count">2</span>
+                </a>
+              </nav>
+            </aside>
+
+            <div class="main">
+              <header class="topbar">
+                <p class="crumbs">
+                  Приложение
+                  <span class="crumbs__sep" aria-hidden="true">/</span>
+                  Проекты
+                  <span class="crumbs__sep" aria-hidden="true">/</span>
+                  Workflow
+                  <span class="crumbs__sep" aria-hidden="true">/</span>
+                  <span class="crumbs__current">Разработка</span>
+                </p>
+                <button class="btn" type="button" data-testid="department-page-back">← К проекту</button>
+              </header>
+
+              <main class="content" data-testid="department-page">
+                <div class="page-head">
+                  <div class="dept-head">
+                    <h1 class="page-head__title" data-testid="department-page-title">Разработка</h1>
+                    <p class="dept-head__meta">
+                      <span>Вид: <span data-testid="department-page-kind">Разработка</span></span>
+                      <span class="crumbs__sep" aria-hidden="true">·</span>
+                      <span>Обновлён 12 ноя 2026</span>
+                    </p>
+                  </div>
+                </div>
+
+                <section class="card" aria-label="Настройки отдела">
+                  <div class="form-section">
+                    <h2 class="form-section__title">Смена</h2>
+
+                    <div class="time-block">
+                      <div class="time-row">
+                        <div class="field">
+                          <label class="field__label" for="f3-start">Время работы с</label>
+                          <input class="field__input" id="f3-start" type="time" value="13:00" data-testid="department-field-start" />
+                        </div>
+                        <span class="time-row__dash" aria-hidden="true">—</span>
+                        <div class="field">
+                          <label class="field__label" for="f3-end">по</label>
+                          <input class="field__input" id="f3-end" type="time" value="04:00" data-testid="department-field-end" />
+                        </div>
+                      </div>
+                      <p class="field__hint">Если конец раньше начала, отдел работает через полночь.</p>
+                    </div>
+
+                    <div class="roles">
+                      <div class="roles__head">
+                        <span class="roles__title" id="f3-roles">Роли</span>
+                        <span class="chip">Отмечено 4 из 10</span>
+                      </div>
+                      <div class="roles__grid" role="group" aria-labelledby="f3-roles">
+                        <label class="checkbox">
+                          <input type="checkbox" checked data-testid="department-field-role-analyst" />
+                          <span>Аналитик</span>
+                        </label>
+                        <label class="checkbox">
+                          <input type="checkbox" checked data-testid="department-field-role-dev-fullstack" />
+                          <span>Разработчик (полный стек)</span>
+                        </label>
+                        <label class="checkbox">
+                          <input type="checkbox" data-testid="department-field-role-dev-backend" />
+                          <span>Бэкенд-разработчик</span>
+                        </label>
+                        <label class="checkbox">
+                          <input type="checkbox" data-testid="department-field-role-dev-frontend" />
+                          <span>Фронтенд-разработчик</span>
+                        </label>
+                        <label class="checkbox">
+                          <input type="checkbox" checked data-testid="department-field-role-code-review" />
+                          <span>Код-ревьюер</span>
+                        </label>
+                        <label class="checkbox">
+                          <input type="checkbox" checked data-testid="department-field-role-tester" />
+                          <span>Тестировщик</span>
+                        </label>
+                        <label class="checkbox">
+                          <input type="checkbox" data-testid="department-field-role-devops-delivery" />
+                          <span>DevOps-инженер</span>
+                        </label>
+                        <label class="checkbox">
+                          <input type="checkbox" data-testid="department-field-role-design" />
+                          <span>Дизайнер</span>
+                        </label>
+                        <label class="checkbox">
+                          <input type="checkbox" data-testid="department-field-role-security-review" />
+                          <span>Безопасник</span>
+                        </label>
+                        <label class="checkbox">
+                          <input type="checkbox" data-testid="department-field-role-jev" />
+                          <span>Jev (System One)</span>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="form-section">
+                    <h2 class="form-section__title">Где работает отдел</h2>
+
+                    <div class="form-grid">
+                      <div class="field field--machine">
+                        <label class="field__label" for="f3-repo">Путь репозитория</label>
+                        <input class="field__input" id="f3-repo" type="text" value="https://github.com/gidvantus/workflow" data-testid="department-field-repo" />
+                      </div>
+                      <div class="field field--machine">
+                        <label class="field__label" for="f3-base">Базовая ветка</label>
+                        <input class="field__input" id="f3-base" type="text" value="main" data-testid="department-field-base" />
+                      </div>
+                      <div class="field field--machine">
+                        <label class="field__label" for="f3-workspace">Рабочее пространство отдела</label>
+                        <input class="field__input" id="f3-workspace" type="text" value="D:\Agents\Workflow" data-testid="department-field-workspace" />
+                      </div>
+                      <div class="field field--machine">
+                        <label class="field__label" for="f3-human">Рабочее пространство человека</label>
+                        <input class="field__input" id="f3-human" type="text" value="" data-testid="department-field-human-workspace" />
+                      </div>
+                      <div class="field field--machine">
+                        <label class="field__label" for="f3-artifacts">Директория для сохранения документов</label>
+                        <input class="field__input" id="f3-artifacts" type="text" value="D:\Agents\Workflow-artifacts" data-testid="department-field-artifacts" />
+                      </div>
+                      <div class="field field--machine">
+                        <label class="field__label" for="f3-compose">Название проекта в Docker</label>
+                        <input class="field__input" id="f3-compose" type="text" value="workflow-agent" data-testid="department-field-compose" />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="form-section">
+                    <h2 class="form-section__title">Возврат и уведомления</h2>
+
+                    <div class="form-grid">
+                      <div class="field field--cost">
+                        <label class="field__label" for="f3-rework">Лимит возврата задачи</label>
+                        <input class="field__input" id="f3-rework" type="text" inputmode="numeric" value="3" data-testid="department-field-max-rework" />
+                        <span class="field__hint">Сколько раз задачу можно вернуть в работу. Пустое поле — 3.</span>
+                      </div>
+                    </div>
+
+                    <div class="notify">
+                      <label class="checkbox">
+                        <input type="checkbox" data-testid="department-field-notifications" />
+                        <span>Включить уведомления</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  <div class="form-foot">
+                    <div class="form-actions">
+                      <button class="btn" type="button" data-testid="department-edit-cancel">Отмена</button>
+                      <button class="btn btn--dark" type="button" data-testid="department-edit-submit">Сохранить</button>
+                    </div>
+                  </div>
+                </section>
+              </main>
+
+              <footer class="footbar">
+                <p class="footbar__note">© 2026 Workflow</p>
+              </footer>
+            </div>
+          </div>
+        </div>
+      </figure>
+
+      <!-- ==================== КАДР 4: УВЕДОМЛЕНИЯ И ОТКАЗ ==================== -->
+      <figure class="frame">
+        <figcaption class="frame__cap">
+          <span class="frame__name">Та же страница: уведомления включены, сохранение отклонено</span>
+          <span class="frame__meta">
+            два поля блока появились · отказ дословно у полосы кнопок, поле помечено
+            <code>aria-invalid</code> · токен в макете заведомо фальшивый
+          </span>
+        </figcaption>
+
+        <div class="frame__app">
+          <div class="app">
+            <aside class="sidebar">
+              <div class="brand">
+                <span class="brand__mark" aria-hidden="true">
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+                    <path d="M2.5 5.5 8 2.5l5.5 3L8 8.5z" />
+                    <path d="M2.5 8.5 8 11.5l5.5-3" />
+                  </svg>
+                </span>
+                <span>
+                  <p class="brand__name">Workflow</p>
+                  <p class="brand__sub">Отдел разработки</p>
+                </span>
+              </div>
+
+              <nav class="nav" aria-label="Разделы">
+                <p class="nav__label">Разделы</p>
+                <a class="nav__item" href="#" aria-current="page" data-testid="nav-projects">
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+                    <path d="M2 5.5A1.5 1.5 0 0 1 3.5 4h3l1.5 1.5h4A1.5 1.5 0 0 1 13.5 7v4.5A1.5 1.5 0 0 1 12 13H3.5A1.5 1.5 0 0 1 2 11.5z" />
+                  </svg>
+                  Проекты
+                  <span class="nav__count">2</span>
+                </a>
+              </nav>
+            </aside>
+
+            <div class="main">
+              <header class="topbar">
+                <p class="crumbs">
+                  Приложение
+                  <span class="crumbs__sep" aria-hidden="true">/</span>
+                  Проекты
+                  <span class="crumbs__sep" aria-hidden="true">/</span>
+                  Workflow
+                  <span class="crumbs__sep" aria-hidden="true">/</span>
+                  <span class="crumbs__current">Разработка</span>
+                </p>
+                <button class="btn" type="button" data-testid="department-page-back">← К проекту</button>
+              </header>
+
+              <main class="content" data-testid="department-page">
+                <div class="page-head">
+                  <div class="dept-head">
+                    <h1 class="page-head__title" data-testid="department-page-title">Разработка</h1>
+                    <p class="dept-head__meta">
+                      <span>Вид: <span data-testid="department-page-kind">Разработка</span></span>
+                      <span class="crumbs__sep" aria-hidden="true">·</span>
+                      <span>Обновлён 12 ноя 2026</span>
+                    </p>
+                  </div>
+                </div>
+
+                <section class="card" aria-label="Настройки отдела">
+                  <div class="form-section">
+                    <h2 class="form-section__title">Смена</h2>
+
+                    <div class="time-block">
+                      <div class="time-row">
+                        <div class="field">
+                          <label class="field__label" for="f4-start">Время работы с</label>
+                          <input class="field__input" id="f4-start" type="time" value="13:00" data-testid="department-field-start" />
+                        </div>
+                        <span class="time-row__dash" aria-hidden="true">—</span>
+                        <div class="field">
+                          <label class="field__label" for="f4-end">по</label>
+                          <input class="field__input" id="f4-end" type="time" value="04:00" data-testid="department-field-end" />
+                        </div>
+                      </div>
+                      <p class="field__hint">Если конец раньше начала, отдел работает через полночь.</p>
+                    </div>
+
+                    <div class="roles">
+                      <div class="roles__head">
+                        <span class="roles__title" id="f4-roles">Роли</span>
+                        <span class="chip">Отмечено 4 из 10</span>
+                      </div>
+                      <div class="roles__grid" role="group" aria-labelledby="f4-roles">
+                        <label class="checkbox">
+                          <input type="checkbox" checked data-testid="department-field-role-analyst" />
+                          <span>Аналитик</span>
+                        </label>
+                        <label class="checkbox">
+                          <input type="checkbox" checked data-testid="department-field-role-dev-fullstack" />
+                          <span>Разработчик (полный стек)</span>
+                        </label>
+                        <label class="checkbox">
+                          <input type="checkbox" data-testid="department-field-role-dev-backend" />
+                          <span>Бэкенд-разработчик</span>
+                        </label>
+                        <label class="checkbox">
+                          <input type="checkbox" data-testid="department-field-role-dev-frontend" />
+                          <span>Фронтенд-разработчик</span>
+                        </label>
+                        <label class="checkbox">
+                          <input type="checkbox" checked data-testid="department-field-role-code-review" />
+                          <span>Код-ревьюер</span>
+                        </label>
+                        <label class="checkbox">
+                          <input type="checkbox" checked data-testid="department-field-role-tester" />
+                          <span>Тестировщик</span>
+                        </label>
+                        <label class="checkbox">
+                          <input type="checkbox" data-testid="department-field-role-devops-delivery" />
+                          <span>DevOps-инженер</span>
+                        </label>
+                        <label class="checkbox">
+                          <input type="checkbox" data-testid="department-field-role-design" />
+                          <span>Дизайнер</span>
+                        </label>
+                        <label class="checkbox">
+                          <input type="checkbox" data-testid="department-field-role-security-review" />
+                          <span>Безопасник</span>
+                        </label>
+                        <label class="checkbox">
+                          <input type="checkbox" data-testid="department-field-role-jev" />
+                          <span>Jev (System One)</span>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="form-section">
+                    <h2 class="form-section__title">Где работает отдел</h2>
+
+                    <div class="form-grid">
+                      <div class="field field--machine">
+                        <label class="field__label" for="f4-repo">Путь репозитория</label>
+                        <input class="field__input" id="f4-repo" type="text" value="https://github.com/gidvantus/workflow" data-testid="department-field-repo" />
+                      </div>
+                      <div class="field field--machine">
+                        <label class="field__label" for="f4-base">Базовая ветка</label>
+                        <input class="field__input" id="f4-base" type="text" value="main" data-testid="department-field-base" />
+                      </div>
+                      <div class="field field--machine">
+                        <label class="field__label" for="f4-workspace">Рабочее пространство отдела</label>
+                        <input class="field__input" id="f4-workspace" type="text" value="D:\Agents\Workflow" data-testid="department-field-workspace" />
+                      </div>
+                      <div class="field field--machine">
+                        <label class="field__label" for="f4-human">Рабочее пространство человека</label>
+                        <input class="field__input" id="f4-human" type="text" value="" data-testid="department-field-human-workspace" />
+                      </div>
+                      <div class="field field--machine">
+                        <label class="field__label" for="f4-artifacts">Директория для сохранения документов</label>
+                        <input class="field__input" id="f4-artifacts" type="text" value="D:\Agents\Workflow-artifacts" data-testid="department-field-artifacts" />
+                      </div>
+                      <div class="field field--machine">
+                        <label class="field__label" for="f4-compose">Название проекта в Docker</label>
+                        <input class="field__input" id="f4-compose" type="text" value="workflow-agent" data-testid="department-field-compose" />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="form-section">
+                    <h2 class="form-section__title">Возврат и уведомления</h2>
+
+                    <div class="form-grid">
+                      <div class="field field--cost">
+                        <label class="field__label" for="f4-rework">Лимит возврата задачи</label>
+                        <input
+                          class="field__input"
+                          id="f4-rework"
+                          type="text"
+                          inputmode="numeric"
+                          value="120"
+                          aria-invalid="true"
+                          data-testid="department-field-max-rework"
+                        />
+                        <span class="field__hint">Сколько раз задачу можно вернуть в работу. Пустое поле — 3.</span>
+                      </div>
+                    </div>
+
+                    <div class="notify">
+                      <label class="checkbox">
+                        <input type="checkbox" checked data-testid="department-field-notifications" />
+                        <span>Включить уведомления</span>
+                      </label>
+
+                      <div class="form-grid">
+                        <div class="field field--machine">
+                          <label class="field__label" for="f4-token">API telegram бота</label>
+                          <input class="field__input" id="f4-token" type="text" value="1234567890:AAHf4keT0kenForM0ckup0000000000" data-testid="department-field-telegram-token" />
+                        </div>
+                        <div class="field field--machine">
+                          <label class="field__label" for="f4-chat">Ваш ID</label>
+                          <input class="field__input" id="f4-chat" type="text" inputmode="numeric" value="294292338" data-testid="department-field-telegram-chat" />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="form-foot">
+                    <p class="error" data-testid="department-edit-error" role="alert">
+                      Лимит возврата задачи указывается целым числом от 0 до 99
+                    </p>
+                    <div class="form-actions">
+                      <button class="btn" type="button" data-testid="department-edit-cancel">Отмена</button>
+                      <button class="btn btn--dark" type="button" data-testid="department-edit-submit">Сохранить</button>
+                    </div>
+                  </div>
+                </section>
+              </main>
+
+              <footer class="footbar">
+                <p class="footbar__note">© 2026 Workflow</p>
+              </footer>
+            </div>
+          </div>
+        </div>
+      </figure>
+
+      <!-- ==================== КАДР 5: СТРАНИЦА «МАРКЕТИНГ» ==================== -->
+      <figure class="frame">
+        <figcaption class="frame__cap">
+          <span class="frame__name">Страница правки отдела «Маркетинг»</span>
+          <span class="frame__meta">
+            вид даёт ровно четыре поля · времени, ролей, лимита возврата и уведомлений у него нет
+          </span>
+        </figcaption>
+
+        <div class="frame__app">
+          <div class="app">
+            <aside class="sidebar">
+              <div class="brand">
+                <span class="brand__mark" aria-hidden="true">
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+                    <path d="M2.5 5.5 8 2.5l5.5 3L8 8.5z" />
+                    <path d="M2.5 8.5 8 11.5l5.5-3" />
+                  </svg>
+                </span>
+                <span>
+                  <p class="brand__name">Workflow</p>
+                  <p class="brand__sub">Отдел разработки</p>
+                </span>
+              </div>
+
+              <nav class="nav" aria-label="Разделы">
+                <p class="nav__label">Разделы</p>
+                <a class="nav__item" href="#" aria-current="page" data-testid="nav-projects">
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+                    <path d="M2 5.5A1.5 1.5 0 0 1 3.5 4h3l1.5 1.5h4A1.5 1.5 0 0 1 13.5 7v4.5A1.5 1.5 0 0 1 12 13H3.5A1.5 1.5 0 0 1 2 11.5z" />
+                  </svg>
+                  Проекты
+                  <span class="nav__count">2</span>
+                </a>
+              </nav>
+            </aside>
+
+            <div class="main">
+              <header class="topbar">
+                <p class="crumbs">
+                  Приложение
+                  <span class="crumbs__sep" aria-hidden="true">/</span>
+                  Проекты
+                  <span class="crumbs__sep" aria-hidden="true">/</span>
+                  Workflow
+                  <span class="crumbs__sep" aria-hidden="true">/</span>
+                  <span class="crumbs__current">Маркетинг</span>
+                </p>
+                <button class="btn" type="button" data-testid="department-page-back">← К проекту</button>
+              </header>
+
+              <main class="content" data-testid="department-page">
+                <div class="page-head">
+                  <div class="dept-head">
+                    <h1 class="page-head__title" data-testid="department-page-title">Маркетинг</h1>
+                    <p class="dept-head__meta">
+                      <span>Вид: <span data-testid="department-page-kind">Маркетинг</span></span>
+                      <span class="crumbs__sep" aria-hidden="true">·</span>
+                      <span>Обновлён 14 ноя 2026</span>
+                    </p>
+                  </div>
+                </div>
+
+                <section class="card" aria-label="Настройки отдела">
+                  <div class="form-section">
+                    <h2 class="form-section__title">Где работает отдел</h2>
+
+                    <div class="form-grid">
+                      <div class="field field--machine">
+                        <label class="field__label" for="f5-repo">Путь репозитория</label>
+                        <input class="field__input" id="f5-repo" type="text" value="https://github.com/gidvantus/workflow" data-testid="department-field-repo" />
+                      </div>
+                      <div class="field field--machine">
+                        <label class="field__label" for="f5-base">Базовая ветка</label>
+                        <input class="field__input" id="f5-base" type="text" value="main" data-testid="department-field-base" />
+                      </div>
+                      <div class="field field--machine">
+                        <label class="field__label" for="f5-workspace">Рабочее пространство отдела</label>
+                        <input class="field__input" id="f5-workspace" type="text" value="D:\Agents\Marketing" data-testid="department-field-workspace" />
+                      </div>
+                      <div class="field field--machine">
+                        <label class="field__label" for="f5-human">Рабочее пространство человека</label>
+                        <input class="field__input" id="f5-human" type="text" value="D:\Development\VideCoding\Marketing" data-testid="department-field-human-workspace" />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="form-foot">
+                    <div class="form-actions">
+                      <button class="btn" type="button" data-testid="department-edit-cancel">Отмена</button>
+                      <button class="btn btn--dark" type="button" data-testid="department-edit-submit">Сохранить</button>
+                    </div>
+                  </div>
+                </section>
+              </main>
+
+              <footer class="footbar">
+                <p class="footbar__note">© 2026 Workflow</p>
+              </footer>
+            </div>
+          </div>
+        </div>
+      </figure>
+
+      <!-- ==================== КАДР 6: СПИСОК ОТДЕЛОВ ==================== -->
+      <figure class="frame">
+        <figcaption class="frame__cap">
+          <span class="frame__name">Строка списка отделов: вид, расписание, роли</span>
+          <span class="frame__meta">
+            три случая: расписание и роли · «нет расписания» и «—» · старое имя «Поддержка» с
+            видом «Разработка»
+          </span>
+        </figcaption>
+
+        <div class="frame__app">
+          <div class="app">
+            <aside class="sidebar">
+              <div class="brand">
+                <span class="brand__mark" aria-hidden="true">
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+                    <path d="M2.5 5.5 8 2.5l5.5 3L8 8.5z" />
+                    <path d="M2.5 8.5 8 11.5l5.5-3" />
+                  </svg>
+                </span>
+                <span>
+                  <p class="brand__name">Workflow</p>
+                  <p class="brand__sub">Отдел разработки</p>
+                </span>
+              </div>
+
+              <nav class="nav" aria-label="Разделы">
+                <p class="nav__label">Разделы</p>
+                <a class="nav__item" href="#" aria-current="page" data-testid="nav-projects">
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+                    <path d="M2 5.5A1.5 1.5 0 0 1 3.5 4h3l1.5 1.5h4A1.5 1.5 0 0 1 13.5 7v4.5A1.5 1.5 0 0 1 12 13H3.5A1.5 1.5 0 0 1 2 11.5z" />
+                  </svg>
+                  Проекты
+                  <span class="nav__count">2</span>
+                </a>
+              </nav>
+            </aside>
+
+            <div class="main">
+              <header class="topbar">
+                <p class="crumbs">
+                  Приложение
+                  <span class="crumbs__sep" aria-hidden="true">/</span>
+                  Проекты
+                  <span class="crumbs__sep" aria-hidden="true">/</span>
+                  <span class="crumbs__current">Workflow</span>
+                </p>
+                <button class="btn" type="button" data-testid="project-back">← К проектам</button>
+              </header>
+
+              <main class="content" data-testid="project-page">
+                <div class="page-head">
+                  <div class="project-head">
+                    <h1 class="page-head__title" data-testid="project-title">Workflow</h1>
+                    <p class="project-head__desc">
+                      Конвейер отдела разработки: проекты, задачи и отделы с их временем работы
+                      и набором ролей.
+                    </p>
+                    <p class="project-head__meta">
+                      <span class="project-repo">https://github.com/gidvantus/workflow</span>
+                      <span class="crumbs__sep" aria-hidden="true">·</span>
+                      <span>Обновлён 14 ноя 2026</span>
+                    </p>
+                  </div>
+                </div>
+
+                <div class="tabs" role="tablist" aria-label="Подразделы проекта">
+                  <button class="tab" type="button" role="tab" aria-selected="false" data-testid="project-tab-tasks">
+                    Задачи
+                  </button>
+                  <button class="tab" type="button" role="tab" aria-selected="true" data-testid="project-tab-departments">
+                    Отделы
+                  </button>
+                </div>
+
+                <section class="card" aria-label="Список отделов">
+                  <div class="card__head">
+                    <h2 class="card__title">Список отделов</h2>
+                    <div class="card__tools">
+                      <span class="card__meta">3 отдела</span>
+                      <button class="btn btn--dark" type="button" data-testid="department-create">
+                        Добавить отдел
+                      </button>
+                    </div>
+                  </div>
+
+                  <div class="table__head table__head--department" role="presentation">
+                    <span>Отдел</span>
+                    <span>Время работы</span>
+                    <span>Роли</span>
+                    <span>Обновлён</span>
+                    <span>Действия</span>
+                  </div>
+
+                  <ul class="table__body" data-testid="departments-list">
+                    <li class="row row--department" data-testid="department-item">
+                      <div class="row__main">
+                        <p class="row__name" data-testid="department-item-name">Разработка</p>
+                        <p class="row__kind" data-testid="department-item-kind">Разработка</p>
+                      </div>
+                      <div class="dept-time">
+                        <span class="dept-time__value" data-testid="department-item-time">13:00–04:00</span>
+                        <span class="dept-time__note">15 ч · через полночь</span>
+                      </div>
+                      <p class="row__roles" data-testid="department-item-roles">
+                        Аналитик, Разработчик (полный стек), Код-ревьюер, Тестировщик
+                      </p>
+                      <p class="row__date">12 ноя 2026</p>
+                      <div class="row__actions">
+                        <button class="kebab" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Действия с отделом Разработка">
+                          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                            <circle cx="3.5" cy="8" r="1.15" />
+                            <circle cx="8" cy="8" r="1.15" />
+                            <circle cx="12.5" cy="8" r="1.15" />
+                          </svg>
+                        </button>
+                      </div>
+                    </li>
+
+                    <li class="row row--department" data-testid="department-item">
+                      <div class="row__main">
+                        <p class="row__name" data-testid="department-item-name">Маркетинг</p>
+                        <p class="row__kind" data-testid="department-item-kind">Маркетинг</p>
+                      </div>
+                      <div class="dept-time">
+                        <span class="dept-time__value dept-time__value--empty" data-testid="department-item-time"
+                          >нет расписания</span
+                        >
+                        <span class="dept-time__note"></span>
+                      </div>
+                      <p class="row__roles" data-testid="department-item-roles">—</p>
+                      <p class="row__date">14 ноя 2026</p>
+                      <div class="row__actions">
+                        <button class="kebab" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Действия с отделом Маркетинг">
+                          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                            <circle cx="3.5" cy="8" r="1.15" />
+                            <circle cx="8" cy="8" r="1.15" />
+                            <circle cx="12.5" cy="8" r="1.15" />
+                          </svg>
+                        </button>
+                      </div>
+                    </li>
+
+                    <li class="row row--department" data-testid="department-item">
+                      <div class="row__main">
+                        <p class="row__name" data-testid="department-item-name">Поддержка</p>
+                        <p class="row__kind" data-testid="department-item-kind">Разработка</p>
+                      </div>
+                      <div class="dept-time">
+                        <span class="dept-time__value" data-testid="department-item-time">09:00–18:00</span>
+                        <span class="dept-time__note">9 ч</span>
+                      </div>
+                      <p class="row__roles" data-testid="department-item-roles">Тестировщик</p>
+                      <p class="row__date">3 ноя 2026</p>
+                      <div class="row__actions">
+                        <button class="kebab" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Действия с отделом Поддержка">
+                          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                            <circle cx="3.5" cy="8" r="1.15" />
+                            <circle cx="8" cy="8" r="1.15" />
+                            <circle cx="12.5" cy="8" r="1.15" />
+                          </svg>
+                        </button>
+                      </div>
+                    </li>
+                  </ul>
+                </section>
+              </main>
+
+              <footer class="footbar">
+                <p class="footbar__note">© 2026 Workflow</p>
+              </footer>
+            </div>
+          </div>
+        </div>
+      </figure>
+
+      <!-- ==================== КАДР 7: СОСТОЯНИЯ ==================== -->
+      <figure class="frame">
+        <figcaption class="frame__cap">
+          <span class="frame__name">Состояния: загрузка, отказы, пустой список и отправка</span>
+          <span class="frame__meta">
+            тексты — как их отдаёт сервер; своих формулировок у фронта нет · «Создать» и
+            «Сохранить» неактивны, пока нет данных или идёт запрос
+          </span>
+        </figcaption>
+
+        <div class="state-grid">
+          <!-- 7.1 окно: загрузка видов -->
+          <div class="state-cell">
+            <p class="state-cell__cap">Окно создания: справочник видов грузится</p>
+            <div class="dialog" role="dialog" aria-labelledby="f7a-title">
+              <div class="dialog__head">
+                <h2 class="dialog__title" id="f7a-title">Новый отдел</h2>
+                <button class="dialog__close" type="button" aria-label="Закрыть окно">
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                    <path d="M2 2l8 8M10 2l-8 8" />
+                  </svg>
+                </button>
+              </div>
+              <div class="field">
+                <span class="field__label">Вид отдела</span>
+                <p class="state__line" aria-live="polite">Загрузка видов…</p>
+              </div>
+              <div class="dialog__actions">
+                <button class="btn" type="button">Отмена</button>
+                <button class="btn btn--dark" type="button" disabled>Создать</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 7.2 окно: отказ справочника видов -->
+          <div class="state-cell">
+            <p class="state-cell__cap">Окно создания: справочник видов не ответил</p>
+            <div class="dialog" role="dialog" aria-labelledby="f7b-title">
+              <div class="dialog__head">
+                <h2 class="dialog__title" id="f7b-title">Новый отдел</h2>
+                <button class="dialog__close" type="button" aria-label="Закрыть окно">
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                    <path d="M2 2l8 8M10 2l-8 8" />
+                  </svg>
+                </button>
+              </div>
+              <div class="field">
+                <span class="field__label">Вид отдела</span>
+                <div class="state__error">
+                  <p class="error" data-testid="department-create-kinds-error" role="alert">
+                    Сервер не отвечает
+                  </p>
+                  <button class="btn" type="button" data-testid="department-create-kinds-retry">
+                    Повторить
+                  </button>
+                </div>
+              </div>
+              <div class="dialog__actions">
+                <button class="btn" type="button">Отмена</button>
+                <button class="btn btn--dark" type="button" disabled>Создать</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 7.3 страница: загрузка ролей -->
+          <div class="state-cell">
+            <p class="state-cell__cap">Страница: справочник ролей грузится</p>
+            <section class="card" aria-label="Настройки отдела">
+              <div class="form-section">
+                <h2 class="form-section__title">Смена</h2>
+                <div class="roles">
+                  <div class="roles__head">
+                    <span class="roles__title">Роли</span>
+                  </div>
+                  <p class="state__line" aria-live="polite">Загрузка ролей…</p>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <!-- 7.4 страница: отказ справочника ролей -->
+          <div class="state-cell">
+            <p class="state-cell__cap">Страница: справочник ролей не ответил</p>
+            <section class="card" aria-label="Настройки отдела">
+              <div class="form-section">
+                <h2 class="form-section__title">Смена</h2>
+                <div class="roles">
+                  <div class="roles__head">
+                    <span class="roles__title">Роли</span>
+                  </div>
+                  <div class="state__error">
+                    <p class="error" role="alert">Сервер не отвечает</p>
+                    <button class="btn" type="button">Повторить</button>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <!-- 7.5 сохранение -->
+          <div class="state-cell">
+            <p class="state-cell__cap">Сохранение: «Сохраняю…», кнопки неактивны</p>
+            <section class="card" aria-label="Настройки отдела">
+              <div class="form-section">
+                <div class="form-grid">
+                  <div class="field field--cost">
+                    <label class="field__label" for="f7-rework">Лимит возврата задачи</label>
+                    <input class="field__input" id="f7-rework" type="text" inputmode="numeric" value="3" />
+                  </div>
+                </div>
+              </div>
+              <div class="form-foot">
+                <div class="form-actions">
+                  <button class="btn" type="button" disabled>Отмена</button>
+                  <button class="btn btn--dark" type="button" disabled>Сохраняю…</button>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <!-- 7.6 список: пусто -->
+          <div class="state-cell">
+            <p class="state-cell__cap">Список: отделов нет</p>
+            <section class="card" aria-label="Список отделов">
+              <div class="card__head">
+                <h2 class="card__title">Список отделов</h2>
+                <div class="card__tools">
+                  <button class="btn btn--dark" type="button">Добавить отдел</button>
+                </div>
+              </div>
+              <div class="card__body">
+                <p class="state__line" data-testid="departments-empty">Пока нет отделов</p>
+                <p class="state__hint">
+                  Нажмите «Добавить отдел», выберите вид — и отдел появится в этом списке.
+                </p>
+              </div>
+            </section>
+          </div>
+        </div>
+      </figure>
+    </main>
+  </body>
+</html>
