@@ -1,0 +1,2473 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Макет · Журнал расходов проекта · issue #53</title>
+    <style>
+      /*
+       * МАКЕТ постановки issue #53: у проекта четыре цены за токены, журнал расходов
+       * и итог, который обязан совпадать в шапке карточки и в паспорте проекта.
+       *
+       * Стили ниже — не продукт: это копия токенов и компонентов
+       * app/frontend/src/index.css в одном файле, чтобы макет открывался двойным
+       * щелчком без сборки. Имена классов совпадают с продуктовыми; всё, что помечено
+       * «НОВОЕ», фронтендер переносит в index.css. Изменённые продуктовые правила
+       * помечены «ИЗМЕНЕНО» — их тоже надо поправить, иначе макет не сойдётся с кодом.
+       *
+       * Новых цветов, гарнитур, теней и радиусов нет: палитра — 17 токенов продукта.
+       * Гарнитура одна, system-ui; количества, дата и деньги набраны табличными цифрами.
+       */
+
+      /* ---------- токены продукта ---------- */
+      :root {
+        --canvas: #e8e6e0;
+        --chrome: #fcfbf8;
+        --rail: #edebe4;
+        --band: #f2f0ea;
+        --shell: #f7f6f3;
+        --panel: #ffffff;
+        --line: #ece9e2;
+        --border: #e4e1d9;
+        --ink: #17170f;
+        --muted: #6f6d64;
+        --muted-rail: #6b6a61;
+        --muted-2: #9c9a90;
+        --dark: #1b1b16;
+        --dark-hover: #2e2e26;
+        --green: #4a7a52;
+        --danger: #a63d2e;
+        --danger-soft: #fbeeea;
+
+        font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+        color: var(--ink);
+        background-color: var(--canvas);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        padding: 1.75rem;
+      }
+
+      /* ---------- оболочка приложения ---------- */
+
+      .app {
+        display: grid;
+        grid-template-columns: 15.5rem minmax(0, 1fr);
+        max-width: 80rem;
+        min-height: calc(100vh - 3.5rem);
+        margin: 0 auto;
+        background-color: var(--chrome);
+        border: 1px solid var(--border);
+        border-radius: 1.125rem;
+        box-shadow: 0 30px 60px -48px rgba(23, 23, 15, 0.55);
+        overflow: hidden;
+      }
+
+      /* ---------- левое меню ---------- */
+
+      .sidebar {
+        display: flex;
+        flex-direction: column;
+        gap: 1.75rem;
+        padding: 1.25rem 1rem 1rem;
+        background-color: var(--rail);
+        border-right: 1px solid var(--border);
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 0.625rem;
+        padding: 0.25rem 0.375rem;
+      }
+
+      .brand__mark {
+        display: grid;
+        place-items: center;
+        width: 2rem;
+        height: 2rem;
+        color: var(--shell);
+        background-color: var(--dark);
+        border-radius: 0.5rem;
+      }
+
+      .brand__name {
+        margin: 0;
+        font-size: 0.875rem;
+        font-weight: 600;
+        line-height: 1.25;
+      }
+
+      .brand__sub {
+        margin: 0;
+        font-size: 0.75rem;
+        color: var(--muted-rail);
+      }
+
+      .nav {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+      }
+
+      .nav__label {
+        margin: 0;
+        padding: 0 0.375rem;
+        font-size: 0.6875rem;
+        font-weight: 500;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted-rail);
+      }
+
+      .nav__item {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.5rem 0.625rem;
+        font-size: 0.875rem;
+        font-weight: 500;
+        color: var(--muted-rail);
+        text-decoration: none;
+        background-color: transparent;
+        border: 1px solid transparent;
+        border-radius: 0.5rem;
+      }
+
+      .nav__item:hover {
+        color: var(--ink);
+        background-color: rgba(255, 255, 255, 0.65);
+      }
+
+      .nav__item[aria-current='page'] {
+        color: var(--ink);
+        background-color: var(--panel);
+        border-color: var(--border);
+      }
+
+      .nav__item svg {
+        flex: none;
+      }
+
+      .nav__count {
+        margin-left: auto;
+        padding: 0.0625rem 0.375rem;
+        font-size: 0.6875rem;
+        font-weight: 500;
+        color: var(--muted);
+        background-color: var(--band);
+        border: 1px solid var(--border);
+        border-radius: 999px;
+      }
+
+      /* ---------- шапка ---------- */
+
+      .topbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem 1rem;
+        padding: 0.875rem 1.5rem;
+        background-color: var(--chrome);
+        border-bottom: 1px solid var(--border);
+      }
+
+      .crumbs {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.5rem;
+        margin: 0;
+        font-size: 0.8125rem;
+        color: var(--muted);
+      }
+
+      .crumbs__sep {
+        color: var(--muted-2);
+      }
+
+      .crumbs__current {
+        color: var(--ink);
+        font-weight: 500;
+      }
+
+      /* ---------- страница проекта: паспорт и подразделы ---------- */
+
+      .project-head {
+        display: flex;
+        flex-direction: column;
+        gap: 0.375rem;
+        min-width: 0;
+      }
+
+      .project-head__desc {
+        margin: 0;
+        max-width: 68ch;
+        font-size: 0.9375rem;
+        line-height: 1.55;
+        color: var(--ink);
+      }
+
+      .project-head__meta {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 0.25rem 0.5rem;
+        margin: 0.125rem 0 0;
+        font-size: 0.8125rem;
+        color: var(--muted);
+      }
+
+      .project-repo {
+        font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+        font-size: 0.75rem;
+        color: var(--muted);
+      }
+
+      /*
+       * НОВОЕ. Расходы в паспорте проекта: подпись наследует тихий цвет строки,
+       * значение — основной, табличными цифрами. Рядом с «Обновлён» сумма стоит тем же
+       * кеглем: это такая же служебная строка паспорта, а не метрика и не дашборд.
+       */
+      .project-spend {
+        color: var(--muted);
+      }
+
+      .project-spend__value {
+        color: var(--ink);
+        font-weight: 500;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .tabs {
+        display: flex;
+        gap: 0.25rem;
+        min-width: 0;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .tab {
+        position: relative;
+        margin-bottom: -1px;
+        padding: 0.4375rem 0.75rem 0.5rem;
+        font: inherit;
+        font-size: 0.8125rem;
+        font-weight: 500;
+        line-height: 1.3;
+        color: var(--muted);
+        background-color: transparent;
+        border: 0;
+        border-bottom: 2px solid transparent;
+        cursor: pointer;
+      }
+
+      .tab:hover {
+        color: var(--ink);
+      }
+
+      .tab[aria-selected='true'] {
+        color: var(--ink);
+        border-bottom-color: var(--ink);
+      }
+
+      /* ---------- кнопки ---------- */
+
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.375rem;
+        padding: 0.4375rem 0.75rem;
+        font: inherit;
+        font-size: 0.8125rem;
+        font-weight: 500;
+        line-height: 1.25;
+        color: var(--ink);
+        background-color: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 0.5rem;
+        cursor: pointer;
+      }
+
+      .btn:hover {
+        background-color: var(--shell);
+      }
+
+      .btn--dark {
+        padding: 0.5rem 0.9375rem;
+        color: var(--shell);
+        background-color: var(--dark);
+        border-color: var(--dark);
+      }
+
+      .btn--dark:hover {
+        background-color: var(--dark-hover);
+        border-color: var(--dark-hover);
+      }
+
+      .btn:disabled {
+        cursor: not-allowed;
+        opacity: 0.45;
+      }
+
+      .btn:focus-visible,
+      .nav__item:focus-visible,
+      .field__input:focus-visible,
+      .field__textarea:focus-visible,
+      .dialog__close:focus-visible,
+      .tab:focus-visible {
+        outline: 2px solid var(--ink);
+        outline-offset: 2px;
+      }
+
+      /* ---------- содержимое ---------- */
+
+      .main {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+      }
+
+      .content {
+        display: flex;
+        flex-direction: column;
+        gap: 1.25rem;
+        padding: 1.5rem;
+      }
+
+      .page-head {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 1rem;
+      }
+
+      .page-head__title {
+        margin: 0;
+        font-size: 1.5rem;
+        font-weight: 600;
+        letter-spacing: -0.015em;
+        line-height: 1.25;
+      }
+
+      .page-head__sub {
+        margin: 0.25rem 0 0;
+        font-size: 0.875rem;
+        color: var(--muted);
+      }
+
+      /* ---------- карточка ---------- */
+
+      .card {
+        display: flex;
+        flex-direction: column;
+        background-color: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 0.875rem;
+        overflow: hidden;
+      }
+
+      .card__head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        padding: 0.875rem 1.125rem;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .card__title {
+        margin: 0;
+        font-size: 0.875rem;
+        font-weight: 600;
+      }
+
+      .card__meta {
+        font-size: 0.8125rem;
+        color: var(--muted);
+      }
+
+      .card__tools {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+      }
+
+      .card__body {
+        padding: 1.5rem 1.125rem;
+      }
+
+      .table__head,
+      .row {
+        display: grid;
+        grid-template-columns: minmax(0, 2.3fr) minmax(0, 1.2fr) 7.5rem 5.5rem;
+        gap: 1.25rem;
+        align-items: center;
+        padding: 0.625rem 1.125rem;
+      }
+
+      .table__head {
+        font-size: 0.6875rem;
+        font-weight: 500;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #6b6a61;
+        background-color: var(--band);
+        border-bottom: 1px solid var(--line);
+      }
+
+      .table__head span:last-child {
+        text-align: right;
+      }
+
+      .table__body {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .row {
+        padding-top: 0.875rem;
+        padding-bottom: 0.875rem;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .row:last-child {
+        border-bottom: 0;
+      }
+
+      .row:hover {
+        background-color: #fbfaf7;
+      }
+
+      .row__main {
+        min-width: 0;
+      }
+
+      .row__name {
+        margin: 0;
+        font-size: 0.875rem;
+        font-weight: 600;
+        line-height: 1.4;
+      }
+
+      .row__desc {
+        margin: 0.125rem 0 0;
+        font-size: 0.8125rem;
+        line-height: 1.45;
+        color: var(--muted);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .row__repo,
+      .row__date {
+        margin: 0;
+        min-width: 0;
+        font-size: 0.8125rem;
+        color: var(--muted);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .row__repo {
+        font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+        font-size: 0.75rem;
+      }
+
+      .row__actions {
+        position: relative;
+        display: flex;
+        justify-content: flex-end;
+        gap: 0.25rem;
+      }
+
+      .kebab {
+        display: grid;
+        place-items: center;
+        width: 1.75rem;
+        height: 1.75rem;
+        padding: 0;
+        color: var(--muted);
+        background-color: transparent;
+        border: 1px solid transparent;
+        border-radius: 0.375rem;
+        cursor: pointer;
+      }
+
+      .kebab:hover,
+      .kebab[aria-expanded='true'] {
+        color: var(--ink);
+        background-color: var(--shell);
+        border-color: var(--border);
+      }
+
+      /* ---------- состояния списка ---------- */
+
+      .state__line {
+        margin: 0;
+        font-size: 0.875rem;
+      }
+
+      .state__hint {
+        margin: 0.375rem 0 0;
+        font-size: 0.8125rem;
+        line-height: 1.5;
+        color: var(--muted);
+      }
+
+      .state__error {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.625rem 1rem;
+      }
+
+      .error {
+        margin: 0;
+        font-size: 0.8125rem;
+        line-height: 1.45;
+        color: var(--danger);
+      }
+
+      /* ---------- состояние сервиса ---------- */
+
+      .service {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem 1rem;
+        padding: 0.875rem 1.125rem;
+        background-color: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 0.875rem;
+      }
+
+      .service__label {
+        margin: 0;
+        font-size: 0.75rem;
+        color: var(--muted);
+      }
+
+      .service__line {
+        display: flex;
+        align-items: center;
+        gap: 0.4375rem;
+        margin: 0.1875rem 0 0;
+        font-size: 0.8125rem;
+        color: var(--ink);
+      }
+
+      .status__dot {
+        width: 0.4375rem;
+        height: 0.4375rem;
+        background-color: var(--green);
+        border-radius: 50%;
+      }
+
+      .status__text {
+        white-space: nowrap;
+      }
+
+      /* ---------- подвал ---------- */
+
+      .footbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem 1.5rem;
+        margin-top: auto;
+        padding: 0.875rem 1.5rem;
+        font-size: 0.75rem;
+        color: var(--muted);
+        border-top: 1px solid var(--border);
+      }
+
+      .footbar__note {
+        margin: 0;
+      }
+
+      /* ---------- диалоги ---------- */
+
+      .overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 10;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1.5rem;
+        background-color: rgba(23, 23, 15, 0.45);
+        animation: overlay-in 120ms ease-out;
+      }
+
+      .dialog {
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+        width: min(28rem, 100%);
+        max-height: calc(100vh - 3rem);
+        overflow-y: auto;
+        padding: 1.25rem;
+        background-color: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 0.875rem;
+        box-shadow: 0 24px 48px -30px rgba(23, 23, 15, 0.45);
+        animation: dialog-in 120ms ease-out;
+      }
+
+      .dialog--wide {
+        width: min(34rem, 100%);
+      }
+
+      .dialog:focus-visible {
+        outline: 2px solid var(--ink);
+        outline-offset: 2px;
+      }
+
+      .dialog__head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 0.75rem;
+      }
+
+      .dialog__title {
+        margin: 0;
+        font-size: 1rem;
+        font-weight: 600;
+        line-height: 1.35;
+      }
+
+      .dialog__close {
+        display: grid;
+        place-items: center;
+        width: 1.5rem;
+        height: 1.5rem;
+        padding: 0;
+        color: var(--muted);
+        background-color: transparent;
+        border: 0;
+        border-radius: 0.375rem;
+        cursor: pointer;
+      }
+
+      .dialog__close:hover {
+        color: var(--ink);
+        background-color: var(--shell);
+      }
+
+      .dialog__close:disabled {
+        cursor: not-allowed;
+        opacity: 0.45;
+      }
+
+      .dialog__form {
+        display: flex;
+        flex-direction: column;
+        gap: 0.875rem;
+      }
+
+      .dialog__actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 0.5rem;
+      }
+
+      .field {
+        display: flex;
+        flex-direction: column;
+        gap: 0.3125rem;
+      }
+
+      .field__label {
+        font-size: 0.75rem;
+        font-weight: 500;
+        color: var(--muted);
+      }
+
+      .field__input,
+      .field__textarea {
+        width: 100%;
+        padding: 0.5rem 0.625rem;
+        font: inherit;
+        font-size: 0.875rem;
+        line-height: 1.4;
+        color: var(--ink);
+        background-color: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 0.5rem;
+      }
+
+      .field__textarea {
+        min-height: 4.25rem;
+        resize: vertical;
+      }
+
+      .field__input[aria-invalid='true'],
+      .field__textarea[aria-invalid='true'] {
+        border-color: var(--danger);
+      }
+
+      .field__hint {
+        font-size: 0.75rem;
+        color: var(--muted);
+      }
+
+      /* ---------- НОВОЕ: количества токенов в окне записи ---------- */
+
+      /*
+       * Группа из четырёх чисел: подпись группы и сетка 2×2 из продуктового .form-grid.
+       * Числа — табличными цифрами и влево, как поле стоимости в форме задачи: введённое
+       * значение сверяют с тем же числом на экране, и разряды должны стоять столбиком.
+       */
+      .dialog__group {
+        min-width: 0;
+        margin: 0;
+        padding: 0;
+        border: 0;
+      }
+
+      .dialog__group > legend {
+        padding: 0;
+        margin-bottom: 0.4375rem;
+      }
+
+      .form-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.875rem 1.25rem;
+      }
+
+      .field--tokens .field__input {
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* ---------- НОВОЕ: секция цен в окне проекта ---------- */
+
+      /*
+       * Четыре цены — отдельная секция окна проекта: у неё своя подпись и своя подсказка
+       * про единицу измерения, поэтому она отделена тихой линией, а не отбивкой.
+       * Порядок полей — вход, выход, кэш-чтение, кэш-запись: он совпадает с порядком
+       * количеств в окне записи и порядком в ответе API.
+       */
+      .dialog__section {
+        display: flex;
+        flex-direction: column;
+        gap: 0.625rem;
+        margin-top: 0.125rem;
+        padding-top: 0.875rem;
+        border-top: 1px solid var(--line);
+      }
+
+      .dialog__section-title {
+        margin: 0;
+        font-size: 0.8125rem;
+        font-weight: 600;
+        line-height: 1.4;
+      }
+
+      .field--price .field__input {
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* ---------- НОВОЕ: журнал расходов ---------- */
+
+      /*
+       * Итог журнала — единственное громкое число экрана: 17 px, 600, табличные цифры.
+       * Стоит в шапке карточки рядом со счётчиком записей, а не в отдельном блоке метрик:
+       * у страницы проекта нет дашборда, у неё есть паспорт и карточка раздела.
+       */
+      .expenses-total {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        /* Меньше воздуха до тёмной кнопки — и «10,53 ₽» читается как часть кнопки. */
+        margin-right: 0.375rem;
+        gap: 0;
+        line-height: 1.15;
+      }
+
+      .expenses-total__label {
+        font-size: 0.6875rem;
+        color: var(--muted);
+      }
+
+      .expenses-total__value {
+        font-size: 1.25rem;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
+
+      /*
+       * Строка записи — три поля: дата, расшифровка токенов, сумма. Шапки колонок нет,
+       * как у списка задач: подписи «Дата» и «Сумма» к шести строкам ничего не добавляют,
+       * сумму называет знак ₽. Дата — единственная подпись записи, поэтому она основного
+       * цвета; расшифровка токенов тише — это пояснение к сумме, а не вторая колонка данных.
+       */
+      .expense-row {
+        display: grid;
+        grid-template-columns: 6.75rem minmax(0, 1fr) 8.5rem;
+        grid-template-areas: 'date tokens amount';
+        align-items: baseline;
+        gap: 0.25rem 1.25rem;
+        padding: 0.6875rem 1.125rem;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .expense-row:last-child {
+        border-bottom: 0;
+      }
+
+      .expense-row:hover {
+        background-color: #fbfaf7;
+      }
+
+      .expense-row__date {
+        grid-area: date;
+        margin: 0;
+        font-size: 0.8125rem;
+        font-weight: 500;
+        line-height: 1.4;
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* Пары «подпись — число» в строку с переносом: на 1440 расшифровка занимает одну
+         строку, на узком экране уходит под дату и не режет числа. */
+      .expense-row__tokens {
+        grid-area: tokens;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.125rem 1rem;
+        margin: 0;
+        min-width: 0;
+      }
+
+      .tok {
+        display: inline-flex;
+        align-items: baseline;
+        gap: 0.3125rem;
+        white-space: nowrap;
+      }
+
+      .tok__label {
+        font-size: 0.75rem;
+        line-height: 1.4;
+        color: var(--muted);
+      }
+
+      .tok__value {
+        font-size: 0.8125rem;
+        font-weight: 500;
+        line-height: 1.4;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .expense-row__amount {
+        grid-area: amount;
+        margin: 0;
+        font-size: 0.8125rem;
+        font-weight: 500;
+        line-height: 1.4;
+        text-align: right;
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+      }
+
+      @keyframes overlay-in {
+        from {
+          opacity: 0;
+        }
+      }
+
+      @keyframes dialog-in {
+        from {
+          opacity: 0;
+          transform: translateY(0.5rem);
+        }
+      }
+
+      /* ==================== оформление листа макета ==================== */
+
+      .sheet {
+        display: flex;
+        flex-direction: column;
+        gap: 2rem;
+        max-width: 80rem;
+        margin: 0 auto;
+      }
+
+      .sheet__head {
+        display: flex;
+        flex-direction: column;
+        gap: 0.625rem;
+        padding-bottom: 1.5rem;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .sheet__title {
+        margin: 0;
+        font-size: 1.75rem;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+        line-height: 1.2;
+      }
+
+      .sheet__lead {
+        margin: 0;
+        max-width: 76ch;
+        font-size: 0.9375rem;
+        line-height: 1.6;
+        color: var(--ink);
+      }
+
+      .sheet__meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.25rem 0.75rem;
+        margin: 0;
+        font-size: 0.8125rem;
+        color: var(--muted);
+      }
+
+      .sheet__meta code {
+        font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+        font-size: 0.75rem;
+      }
+
+      .frame {
+        display: flex;
+        flex-direction: column;
+        gap: 0.875rem;
+        margin: 0;
+      }
+
+      /* Кадры стоят друг под другом, поэтому карточка приложения не тянется на высоту
+         окна; оверлей кадра — absolute, иначе диалог кадра накрыл бы весь лист. */
+      .frame .app {
+        position: relative;
+        width: 100%;
+        min-height: 0;
+      }
+
+      .frame .overlay {
+        position: absolute;
+      }
+
+      /* Подпись кадра — в две строки: имя, под ним объяснение. В строку они не встают:
+         имя занимает треть ширины, и объяснение сжималось бы в узкую колонку. */
+      .frame__cap {
+        display: flex;
+        flex-direction: column;
+        gap: 0.375rem;
+        padding-bottom: 0.625rem;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .frame__name {
+        font-size: 0.9375rem;
+        font-weight: 600;
+      }
+
+      .frame__meta {
+        max-width: 92ch;
+        font-size: 0.8125rem;
+        line-height: 1.5;
+        color: var(--muted);
+      }
+
+      /* Состояния блоков: карточка или окно продукта под подписью на холсте. */
+      .states {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 1.5rem;
+        align-items: start;
+      }
+
+      .state {
+        display: flex;
+        flex-direction: column;
+        gap: 0.625rem;
+      }
+
+      .state__cap {
+        margin: 0;
+        font-size: 0.8125rem;
+        line-height: 1.5;
+        color: var(--muted);
+      }
+
+      .state__cap strong {
+        font-weight: 600;
+        color: var(--ink);
+      }
+
+      .state--wide {
+        grid-column: 1 / -1;
+      }
+
+      /* Окно без затемнения: на листе макета состояние окна показывается само по себе,
+         тень уже говорит, что это окно над экраном. */
+      .state .dialog {
+        width: min(28rem, 100%);
+        margin: 0 auto;
+      }
+
+      .state .dialog--wide {
+        width: min(34rem, 100%);
+      }
+
+      /* ---------- ≤ 900 px: меню полосой, строка записи в две линии ---------- */
+
+      @media (max-width: 900px) {
+        .app {
+          grid-template-columns: minmax(0, 1fr);
+        }
+
+        .sidebar {
+          flex-direction: row;
+          align-items: center;
+          gap: 1rem;
+          padding: 0.75rem 1rem;
+          border-right: 0;
+          border-bottom: 1px solid var(--border);
+        }
+
+        .nav {
+          flex-direction: row;
+          flex-wrap: wrap;
+          align-items: center;
+        }
+
+        .nav__item {
+          white-space: nowrap;
+        }
+
+        .nav__count {
+          flex: none;
+        }
+
+        .nav__label {
+          display: none;
+        }
+
+        .topbar {
+          padding: 0.75rem 1rem;
+        }
+
+        .content {
+          padding: 1rem;
+        }
+
+        .table__head {
+          display: none;
+        }
+
+        .row {
+          grid-template-columns: minmax(0, 1fr);
+          gap: 0.5rem;
+          align-items: start;
+          padding: 0.875rem 1rem;
+        }
+
+        .row__actions {
+          justify-content: flex-start;
+          margin-left: -0.4375rem;
+        }
+
+        .row__desc {
+          white-space: normal;
+          overflow: visible;
+        }
+
+        .page-head__title {
+          font-size: 1.375rem;
+        }
+
+        /* Строка записи в две линии: дата и сумма на первой, расшифровка токенов под ними
+           во всю ширину. Сумма остаётся у правого края — она ищется глазом по столбцу. */
+        .expense-row {
+          grid-template-columns: minmax(0, 1fr) auto;
+          grid-template-areas:
+            'date amount'
+            'tokens tokens';
+          gap: 0.1875rem 1rem;
+          padding: 0.75rem 1rem;
+        }
+
+        .states {
+          grid-template-columns: minmax(0, 1fr);
+        }
+      }
+
+      /* ---------- ≤ 600 px: одна колонка ---------- */
+
+      @media (max-width: 600px) {
+        body {
+          padding: 0.75rem;
+        }
+
+        .app {
+          border-radius: 0.875rem;
+        }
+
+        .sidebar {
+          flex-wrap: wrap;
+          gap: 0.5rem 0.75rem;
+        }
+
+        .brand__sub {
+          display: none;
+        }
+
+        .service {
+          flex-direction: column;
+          align-items: stretch;
+          gap: 0.625rem;
+          padding: 0.875rem 1rem;
+        }
+
+        .service .btn {
+          width: 100%;
+        }
+
+        .page-head {
+          align-items: flex-start;
+        }
+
+        /* Паспорт на телефоне переносится, и точка-разделитель оставалась бы висеть в
+           конце строки. Убираем её и разводим пункты отбивкой. */
+        .project-head__meta {
+          column-gap: 0.75rem;
+          row-gap: 0.125rem;
+        }
+
+        .project-head__meta .crumbs__sep {
+          display: none;
+        }
+
+        /* Шапка карточки на телефоне: заголовок и итог делят строку, «Добавить запись»
+           встаёт под ними во всю ширину. Итог прижат вправо — на одном месте с суммой
+           строк, которые он складывает. */
+        .card__head {
+          flex-wrap: wrap;
+          gap: 0.625rem 0.75rem;
+          padding: 0.75rem 1rem;
+        }
+
+        .card__tools {
+          width: 100%;
+          flex-wrap: wrap;
+          justify-content: space-between;
+          gap: 0.5rem 0.75rem;
+        }
+
+        .card__tools .btn--dark {
+          width: 100%;
+        }
+
+        .card__body {
+          padding: 1.25rem 1rem;
+        }
+
+        /* Четыре числа в окне записи остаются в две колонки: «1 500 000» влезает в половину
+           строки, а одна колонка растянула бы окно на четыре прокрутки. */
+        .form-grid {
+          gap: 0.75rem 1rem;
+        }
+
+        .dialog__actions {
+          flex-direction: column;
+        }
+
+        .dialog__actions .btn {
+          width: 100%;
+        }
+
+        .footbar {
+          flex-direction: column;
+          align-items: flex-start;
+          padding: 0.75rem 1rem;
+        }
+      }
+
+      /* ---------- ≤ 480 px ---------- */
+
+      @media (max-width: 480px) {
+        .topbar .btn {
+          width: 100%;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .overlay,
+        .dialog {
+          animation: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="sheet">
+      <header class="sheet__head">
+        <h1 class="sheet__title">Журнал расходов проекта</h1>
+        <p class="sheet__lead">
+          У проекта четыре цены за токены, страница проекта получает третью вкладку
+          «Расходы», а итог появляется в двух местах сразу: в шапке карточки журнала и в
+          паспорте проекта. Суммы считает только сервер — в макете они уже результатом,
+          фронт ничего не перемножает и не округляет, он переставляет строку в вид
+          «0,41 ₽».
+        </p>
+        <p class="sheet__meta">
+          <span>issue #53 · макет постановки</span>
+          <span>ветка <code>feature/53-expenses-journal</code></span>
+          <span>токены и классы — <code>app/frontend/src/index.css</code></span>
+          <span>кадры 1440 и 375</span>
+        </p>
+      </header>
+
+      <!-- ==================== КАДР 1: ВКЛАДКА «РАСХОДЫ» ==================== -->
+      <figure class="frame">
+        <figcaption class="frame__cap">
+          <span class="frame__name">1 · Вкладка «Расходы»: журнал проекта</span>
+          <span class="frame__meta">
+            Дата — единственная подпись строки, шапки колонок нет, как у списка задач.
+            Нулевые количества не печатаются: строка показывает только то, за что
+            заплатили. Первые две записи — сценарий приёмки из постановки: цена входа
+            0,27 ₽ за 1 млн, 1 500 000 токенов → 0,41 ₽, вторая запись → 0,10 ₽, вместе
+            0,51 ₽. Сумма шести строк — 10,53 ₽ — сходится с итогом карточки и паспорта.
+          </span>
+        </figcaption>
+
+        <div class="app">
+          <aside class="sidebar">
+            <div class="brand">
+              <span class="brand__mark" aria-hidden="true">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+                  <path d="M2.5 5.5 8 2.5l5.5 3L8 8.5z" />
+                  <path d="M2.5 8.5 8 11.5l5.5-3" />
+                </svg>
+              </span>
+              <span>
+                <p class="brand__name">Workflow</p>
+                <p class="brand__sub">Отдел разработки</p>
+              </span>
+            </div>
+
+            <nav class="nav" aria-label="Разделы">
+              <p class="nav__label">Разделы</p>
+              <a class="nav__item" href="#" aria-current="page" onclick="return false">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+                  <path d="M2 5.5A1.5 1.5 0 0 1 3.5 4h3l1.5 1.5h4A1.5 1.5 0 0 1 13.5 7v4.5A1.5 1.5 0 0 1 12 13H3.5A1.5 1.5 0 0 1 2 11.5z" />
+                </svg>
+                Проекты
+                <span class="nav__count">6</span>
+              </a>
+            </nav>
+          </aside>
+
+          <div class="main">
+            <header class="topbar">
+              <p class="crumbs">
+                Приложение
+                <span class="crumbs__sep" aria-hidden="true">/</span>
+                Проекты
+                <span class="crumbs__sep" aria-hidden="true">/</span>
+                <span class="crumbs__current">Workflow</span>
+              </p>
+              <button class="btn" type="button">← К проектам</button>
+            </header>
+
+            <main class="content">
+              <div class="page-head">
+                <div class="project-head">
+                  <h1 class="page-head__title">Workflow</h1>
+                  <p class="project-head__desc">
+                    Отдел разработки надстройки: конвейер задач, отделы с ролями и
+                    расписанием, отчёты смен.
+                  </p>
+                  <p class="project-head__meta">
+                    <span class="project-repo">https://github.com/gidvantus/workflow</span>
+                    <span class="crumbs__sep" aria-hidden="true">·</span>
+                    <span class="project-spend"
+                      >Расходы
+                      <span class="project-spend__value" data-testid="project-total">10,53 ₽</span></span
+                    >
+                    <span class="crumbs__sep" aria-hidden="true">·</span>
+                    <span>Обновлён 19 ноя 2026</span>
+                  </p>
+                </div>
+              </div>
+
+              <div class="tabs" role="tablist" aria-label="Подразделы проекта">
+                <button class="tab" type="button" role="tab" aria-selected="false">
+                  Задачи
+                </button>
+                <button class="tab" type="button" role="tab" aria-selected="false">
+                  Отделы
+                </button>
+                <button
+                  class="tab"
+                  type="button"
+                  role="tab"
+                  aria-selected="true"
+                  aria-controls="expenses-panel"
+                  data-testid="project-tab-expenses"
+                >
+                  Расходы
+                </button>
+              </div>
+
+              <section
+                class="card"
+                id="expenses-panel"
+                role="tabpanel"
+                aria-label="Журнал расходов проекта"
+                data-testid="expenses-card"
+              >
+                <div class="card__head">
+                  <h2 class="card__title">Расходы проекта</h2>
+                  <div class="card__tools">
+                    <span class="card__meta" data-testid="expenses-count">6 записей</span>
+                    <div class="expenses-total">
+                      <span class="expenses-total__label">Итого</span>
+                      <span class="expenses-total__value" data-testid="expenses-total">10,53 ₽</span>
+                    </div>
+                    <button class="btn btn--dark" type="button" data-testid="expense-create">
+                      Добавить запись
+                    </button>
+                  </div>
+                </div>
+
+                <ul class="table__body" data-testid="expenses-list">
+                  <li class="expense-row" data-testid="expense-item">
+                    <p class="expense-row__date" data-testid="expense-item-date">19 ноя 2026</p>
+                    <p class="expense-row__tokens" data-testid="expense-item-tokens">
+                      <span class="tok"><span class="tok__label">вход</span><span class="tok__value">1 500 000</span></span>
+                    </p>
+                    <p class="expense-row__amount" data-testid="expense-item-amount">0,41 ₽</p>
+                  </li>
+
+                  <li class="expense-row" data-testid="expense-item">
+                    <p class="expense-row__date" data-testid="expense-item-date">19 ноя 2026</p>
+                    <p class="expense-row__tokens" data-testid="expense-item-tokens">
+                      <span class="tok"><span class="tok__label">кэш-чтение</span><span class="tok__value">1 400 000</span></span>
+                    </p>
+                    <p class="expense-row__amount" data-testid="expense-item-amount">0,10 ₽</p>
+                  </li>
+
+                  <li class="expense-row" data-testid="expense-item">
+                    <p class="expense-row__date" data-testid="expense-item-date">18 ноя 2026</p>
+                    <p class="expense-row__tokens" data-testid="expense-item-tokens">
+                      <span class="tok"><span class="tok__label">вход</span><span class="tok__value">2 480 000</span></span>
+                      <span class="tok"><span class="tok__label">выход</span><span class="tok__value">610 000</span></span>
+                      <span class="tok"><span class="tok__label">кэш-чтение</span><span class="tok__value">3 100 000</span></span>
+                      <span class="tok"><span class="tok__label">кэш-запись</span><span class="tok__value">240 000</span></span>
+                    </p>
+                    <p class="expense-row__amount" data-testid="expense-item-amount">1,64 ₽</p>
+                  </li>
+
+                  <li class="expense-row" data-testid="expense-item">
+                    <p class="expense-row__date" data-testid="expense-item-date">17 ноя 2026</p>
+                    <p class="expense-row__tokens" data-testid="expense-item-tokens">
+                      <span class="tok"><span class="tok__label">вход</span><span class="tok__value">980 000</span></span>
+                      <span class="tok"><span class="tok__label">выход</span><span class="tok__value">145 000</span></span>
+                      <span class="tok"><span class="tok__label">кэш-запись</span><span class="tok__value">62 000</span></span>
+                    </p>
+                    <p class="expense-row__amount" data-testid="expense-item-amount">0,45 ₽</p>
+                  </li>
+
+                  <li class="expense-row" data-testid="expense-item">
+                    <p class="expense-row__date" data-testid="expense-item-date">16 ноя 2026</p>
+                    <p class="expense-row__tokens" data-testid="expense-item-tokens">
+                      <span class="tok"><span class="tok__label">вход</span><span class="tok__value">4 120 000</span></span>
+                      <span class="tok"><span class="tok__label">выход</span><span class="tok__value">1 040 000</span></span>
+                      <span class="tok"><span class="tok__label">кэш-чтение</span><span class="tok__value">8 600 000</span></span>
+                      <span class="tok"><span class="tok__label">кэш-запись</span><span class="tok__value">190 000</span></span>
+                    </p>
+                    <p class="expense-row__amount" data-testid="expense-item-amount">2,92 ₽</p>
+                  </li>
+
+                  <li class="expense-row" data-testid="expense-item">
+                    <p class="expense-row__date" data-testid="expense-item-date">14 ноя 2026</p>
+                    <p class="expense-row__tokens" data-testid="expense-item-tokens">
+                      <span class="tok"><span class="tok__label">вход</span><span class="tok__value">6 750 000</span></span>
+                      <span class="tok"><span class="tok__label">выход</span><span class="tok__value">1 980 000</span></span>
+                      <span class="tok"><span class="tok__label">кэш-чтение</span><span class="tok__value">12 400 000</span></span>
+                      <span class="tok"><span class="tok__label">кэш-запись</span><span class="tok__value">410 000</span></span>
+                    </p>
+                    <p class="expense-row__amount" data-testid="expense-item-amount">5,01 ₽</p>
+                  </li>
+                </ul>
+              </section>
+            </main>
+
+            <footer class="footbar">
+              <p class="footbar__note">© 2026 Workflow</p>
+            </footer>
+          </div>
+        </div>
+      </figure>
+
+      <!-- ==================== КАДР 2: ОКНО ЗАПИСИ ==================== -->
+      <figure class="frame">
+        <figcaption class="frame__cap">
+          <span class="frame__name">2 · Окно записи над журналом</span>
+          <span class="frame__meta">
+            В окне нет суммы: четыре количества и дата — всё, что отправляет человек.
+            Подсказка одной строкой говорит, кто считает деньги, — иначе пустое место под
+            полями читается как незаполненное поле «Сумма».
+          </span>
+        </figcaption>
+
+        <div class="app">
+          <aside class="sidebar">
+            <div class="brand">
+              <span class="brand__mark" aria-hidden="true">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+                  <path d="M2.5 5.5 8 2.5l5.5 3L8 8.5z" />
+                  <path d="M2.5 8.5 8 11.5l5.5-3" />
+                </svg>
+              </span>
+              <span>
+                <p class="brand__name">Workflow</p>
+                <p class="brand__sub">Отдел разработки</p>
+              </span>
+            </div>
+
+            <nav class="nav" aria-label="Разделы">
+              <p class="nav__label">Разделы</p>
+              <a class="nav__item" href="#" aria-current="page" onclick="return false">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+                  <path d="M2 5.5A1.5 1.5 0 0 1 3.5 4h3l1.5 1.5h4A1.5 1.5 0 0 1 13.5 7v4.5A1.5 1.5 0 0 1 12 13H3.5A1.5 1.5 0 0 1 2 11.5z" />
+                </svg>
+                Проекты
+                <span class="nav__count">6</span>
+              </a>
+            </nav>
+          </aside>
+
+          <div class="main">
+            <header class="topbar">
+              <p class="crumbs">
+                Приложение
+                <span class="crumbs__sep" aria-hidden="true">/</span>
+                Проекты
+                <span class="crumbs__sep" aria-hidden="true">/</span>
+                <span class="crumbs__current">Workflow</span>
+              </p>
+              <button class="btn" type="button">← К проектам</button>
+            </header>
+
+            <main class="content">
+              <div class="page-head">
+                <div class="project-head">
+                  <h1 class="page-head__title">Workflow</h1>
+                  <p class="project-head__desc">
+                    Отдел разработки надстройки: конвейер задач, отделы с ролями и
+                    расписанием, отчёты смен.
+                  </p>
+                  <p class="project-head__meta">
+                    <span class="project-repo">https://github.com/gidvantus/workflow</span>
+                    <span class="crumbs__sep" aria-hidden="true">·</span>
+                    <span class="project-spend"
+                      >Расходы
+                      <span class="project-spend__value">10,53 ₽</span></span
+                    >
+                    <span class="crumbs__sep" aria-hidden="true">·</span>
+                    <span>Обновлён 19 ноя 2026</span>
+                  </p>
+                </div>
+              </div>
+
+              <div class="tabs" role="tablist" aria-label="Подразделы проекта">
+                <button class="tab" type="button" role="tab" aria-selected="false">
+                  Задачи
+                </button>
+                <button class="tab" type="button" role="tab" aria-selected="false">
+                  Отделы
+                </button>
+                <button class="tab" type="button" role="tab" aria-selected="true">
+                  Расходы
+                </button>
+              </div>
+
+              <section class="card" aria-label="Журнал расходов проекта">
+                <div class="card__head">
+                  <h2 class="card__title">Расходы проекта</h2>
+                  <div class="card__tools">
+                    <span class="card__meta">6 записей</span>
+                    <div class="expenses-total">
+                      <span class="expenses-total__label">Итого</span>
+                      <span class="expenses-total__value">10,53 ₽</span>
+                    </div>
+                    <button class="btn btn--dark" type="button">Добавить запись</button>
+                  </div>
+                </div>
+
+                <ul class="table__body">
+                  <li class="expense-row">
+                    <p class="expense-row__date">19 ноя 2026</p>
+                    <p class="expense-row__tokens">
+                      <span class="tok"><span class="tok__label">вход</span><span class="tok__value">1 500 000</span></span>
+                    </p>
+                    <p class="expense-row__amount">0,41 ₽</p>
+                  </li>
+                  <li class="expense-row">
+                    <p class="expense-row__date">19 ноя 2026</p>
+                    <p class="expense-row__tokens">
+                      <span class="tok"><span class="tok__label">кэш-чтение</span><span class="tok__value">1 400 000</span></span>
+                    </p>
+                    <p class="expense-row__amount">0,10 ₽</p>
+                  </li>
+                  <li class="expense-row">
+                    <p class="expense-row__date">18 ноя 2026</p>
+                    <p class="expense-row__tokens">
+                      <span class="tok"><span class="tok__label">вход</span><span class="tok__value">2 480 000</span></span>
+                      <span class="tok"><span class="tok__label">выход</span><span class="tok__value">610 000</span></span>
+                      <span class="tok"><span class="tok__label">кэш-чтение</span><span class="tok__value">3 100 000</span></span>
+                      <span class="tok"><span class="tok__label">кэш-запись</span><span class="tok__value">240 000</span></span>
+                    </p>
+                    <p class="expense-row__amount">1,64 ₽</p>
+                  </li>
+                  <li class="expense-row">
+                    <p class="expense-row__date">17 ноя 2026</p>
+                    <p class="expense-row__tokens">
+                      <span class="tok"><span class="tok__label">вход</span><span class="tok__value">980 000</span></span>
+                      <span class="tok"><span class="tok__label">выход</span><span class="tok__value">145 000</span></span>
+                      <span class="tok"><span class="tok__label">кэш-запись</span><span class="tok__value">62 000</span></span>
+                    </p>
+                    <p class="expense-row__amount">0,45 ₽</p>
+                  </li>
+                  <li class="expense-row">
+                    <p class="expense-row__date">16 ноя 2026</p>
+                    <p class="expense-row__tokens">
+                      <span class="tok"><span class="tok__label">вход</span><span class="tok__value">4 120 000</span></span>
+                      <span class="tok"><span class="tok__label">выход</span><span class="tok__value">1 040 000</span></span>
+                      <span class="tok"><span class="tok__label">кэш-чтение</span><span class="tok__value">8 600 000</span></span>
+                      <span class="tok"><span class="tok__label">кэш-запись</span><span class="tok__value">190 000</span></span>
+                    </p>
+                    <p class="expense-row__amount">2,92 ₽</p>
+                  </li>
+                  <li class="expense-row">
+                    <p class="expense-row__date">14 ноя 2026</p>
+                    <p class="expense-row__tokens">
+                      <span class="tok"><span class="tok__label">вход</span><span class="tok__value">6 750 000</span></span>
+                      <span class="tok"><span class="tok__label">выход</span><span class="tok__value">1 980 000</span></span>
+                      <span class="tok"><span class="tok__label">кэш-чтение</span><span class="tok__value">12 400 000</span></span>
+                      <span class="tok"><span class="tok__label">кэш-запись</span><span class="tok__value">410 000</span></span>
+                    </p>
+                    <p class="expense-row__amount">5,01 ₽</p>
+                  </li>
+                </ul>
+              </section>
+            </main>
+
+            <footer class="footbar">
+              <p class="footbar__note">© 2026 Workflow</p>
+            </footer>
+
+            <div class="overlay">
+              <div class="dialog" role="dialog" aria-modal="true" aria-label="Новая запись">
+                <div class="dialog__head">
+                  <h2 class="dialog__title">Новая запись</h2>
+                  <button class="dialog__close" type="button" aria-label="Закрыть">
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+                      <path d="M3 3l8 8M11 3l-8 8" />
+                    </svg>
+                  </button>
+                </div>
+
+                <form class="dialog__form" data-testid="expense-form">
+                  <div class="field">
+                    <label class="field__label" for="expense-date">Дата</label>
+                    <input
+                      class="field__input"
+                      id="expense-date"
+                      type="date"
+                      value="2026-11-19"
+                      data-testid="expense-form-date"
+                    />
+                  </div>
+
+                  <fieldset class="dialog__group">
+                    <legend class="field__label">Количество токенов</legend>
+                    <div class="form-grid">
+                      <div class="field field--tokens">
+                        <label class="field__label" for="expense-in">Вход</label>
+                        <input
+                          class="field__input"
+                          id="expense-in"
+                          type="number"
+                          inputmode="numeric"
+                          min="0"
+                          step="1"
+                          placeholder="0"
+                          value="1500000"
+                          data-testid="expense-form-tokens-input"
+                        />
+                      </div>
+                      <div class="field field--tokens">
+                        <label class="field__label" for="expense-out">Выход</label>
+                        <input
+                          class="field__input"
+                          id="expense-out"
+                          type="number"
+                          inputmode="numeric"
+                          min="0"
+                          step="1"
+                          placeholder="0"
+                          data-testid="expense-form-tokens-output"
+                        />
+                      </div>
+                      <div class="field field--tokens">
+                        <label class="field__label" for="expense-cache-read">Кэш-чтение</label>
+                        <input
+                          class="field__input"
+                          id="expense-cache-read"
+                          type="number"
+                          inputmode="numeric"
+                          min="0"
+                          step="1"
+                          placeholder="0"
+                          data-testid="expense-form-tokens-cache-read"
+                        />
+                      </div>
+                      <div class="field field--tokens">
+                        <label class="field__label" for="expense-cache-write">Кэш-запись</label>
+                        <input
+                          class="field__input"
+                          id="expense-cache-write"
+                          type="number"
+                          inputmode="numeric"
+                          min="0"
+                          step="1"
+                          placeholder="0"
+                          data-testid="expense-form-tokens-cache-write"
+                        />
+                      </div>
+                    </div>
+                  </fieldset>
+
+                  <p class="field__hint">Сумму посчитает сервер по ценам проекта.</p>
+                </form>
+
+                <div class="dialog__actions">
+                  <button class="btn" type="button" data-testid="expense-form-cancel">
+                    Отмена
+                  </button>
+                  <button class="btn btn--dark" type="button" data-testid="expense-form-submit">
+                    Сохранить
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </figure>
+
+      <!-- ==================== КАДР 3: СОСТОЯНИЯ ОКНА ЗАПИСИ ==================== -->
+      <figure class="frame">
+        <figcaption class="frame__cap">
+          <span class="frame__name">3 · Окно записи в состояниях</span>
+          <span class="frame__meta">
+            Тексты отказов — серверные, дословно; своих формулировок в окне нет. Отказ
+            стоит между полями и кнопками, у самой кнопки: человек читает его там, где
+            нажимает. Под отказом «Цены проекта не заполнены» — единственная строка,
+            которую пишет фронт: где эти цены задаются.
+          </span>
+        </figcaption>
+
+        <div class="states">
+          <div class="state">
+            <p class="state__cap">
+              <strong>3.1 · Открыли окно.</strong> Дата подставлена сегодняшняя, четыре
+              количества пустые — пустое поле уходит как ноль. «Сохранить» доступно:
+              проверок на фронте нет.
+            </p>
+            <div class="dialog" role="dialog" aria-modal="true" aria-label="Новая запись">
+              <div class="dialog__head">
+                <h2 class="dialog__title">Новая запись</h2>
+                <button class="dialog__close" type="button" aria-label="Закрыть">
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+                    <path d="M3 3l8 8M11 3l-8 8" />
+                  </svg>
+                </button>
+              </div>
+              <div class="dialog__form">
+                <div class="field">
+                  <span class="field__label">Дата</span>
+                  <input class="field__input" type="date" value="2026-11-19" />
+                </div>
+                <fieldset class="dialog__group">
+                  <legend class="field__label">Количество токенов</legend>
+                  <div class="form-grid">
+                    <div class="field field--tokens">
+                      <span class="field__label">Вход</span>
+                      <input class="field__input" type="number" inputmode="numeric" placeholder="0" />
+                    </div>
+                    <div class="field field--tokens">
+                      <span class="field__label">Выход</span>
+                      <input class="field__input" type="number" inputmode="numeric" placeholder="0" />
+                    </div>
+                    <div class="field field--tokens">
+                      <span class="field__label">Кэш-чтение</span>
+                      <input class="field__input" type="number" inputmode="numeric" placeholder="0" />
+                    </div>
+                    <div class="field field--tokens">
+                      <span class="field__label">Кэш-запись</span>
+                      <input class="field__input" type="number" inputmode="numeric" placeholder="0" />
+                    </div>
+                  </div>
+                </fieldset>
+                <p class="field__hint">Сумму посчитает сервер по ценам проекта.</p>
+              </div>
+              <div class="dialog__actions">
+                <button class="btn" type="button">Отмена</button>
+                <button class="btn btn--dark" type="button">Сохранить</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="state">
+            <p class="state__cap">
+              <strong>3.2 · Отправили.</strong> «Сохраняю…», все кнопки неактивны, окно не
+              закрывается: иначе исход сохранения не увидеть.
+            </p>
+            <div class="dialog" role="dialog" aria-modal="true" aria-label="Новая запись">
+              <div class="dialog__head">
+                <h2 class="dialog__title">Новая запись</h2>
+                <button class="dialog__close" type="button" aria-label="Закрыть" disabled>
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+                    <path d="M3 3l8 8M11 3l-8 8" />
+                  </svg>
+                </button>
+              </div>
+              <div class="dialog__form">
+                <div class="field">
+                  <span class="field__label">Дата</span>
+                  <input class="field__input" type="date" value="2026-11-18" disabled />
+                </div>
+                <fieldset class="dialog__group">
+                  <legend class="field__label">Количество токенов</legend>
+                  <div class="form-grid">
+                    <div class="field field--tokens">
+                      <span class="field__label">Вход</span>
+                      <input class="field__input" type="number" value="2480000" disabled />
+                    </div>
+                    <div class="field field--tokens">
+                      <span class="field__label">Выход</span>
+                      <input class="field__input" type="number" value="610000" disabled />
+                    </div>
+                    <div class="field field--tokens">
+                      <span class="field__label">Кэш-чтение</span>
+                      <input class="field__input" type="number" value="3100000" disabled />
+                    </div>
+                    <div class="field field--tokens">
+                      <span class="field__label">Кэш-запись</span>
+                      <input class="field__input" type="number" value="240000" disabled />
+                    </div>
+                  </div>
+                </fieldset>
+                <p class="field__hint">Сумму посчитает сервер по ценам проекта.</p>
+              </div>
+              <div class="dialog__actions">
+                <button class="btn" type="button" disabled>Отмена</button>
+                <button class="btn btn--dark" type="button" disabled>Сохраняю…</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="state">
+            <p class="state__cap">
+              <strong>3.3 · Отказ по количествам.</strong> Все четыре поля нули или пустые:
+              «Укажите хотя бы одно количество токенов». Дробь, минус или число больше 10¹²
+              дают другой текст — «Количество токенов указывается целым неотрицательным
+              числом», — но стоят в том же месте.
+            </p>
+            <div class="dialog" role="dialog" aria-modal="true" aria-label="Новая запись">
+              <div class="dialog__head">
+                <h2 class="dialog__title">Новая запись</h2>
+                <button class="dialog__close" type="button" aria-label="Закрыть">
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+                    <path d="M3 3l8 8M11 3l-8 8" />
+                  </svg>
+                </button>
+              </div>
+              <div class="dialog__form">
+                <div class="field">
+                  <span class="field__label">Дата</span>
+                  <input class="field__input" type="date" value="2026-11-19" />
+                </div>
+                <fieldset class="dialog__group">
+                  <legend class="field__label">Количество токенов</legend>
+                  <div class="form-grid">
+                    <div class="field field--tokens">
+                      <span class="field__label">Вход</span>
+                      <input class="field__input" type="number" value="0" aria-invalid="true" />
+                    </div>
+                    <div class="field field--tokens">
+                      <span class="field__label">Выход</span>
+                      <input class="field__input" type="number" value="0" aria-invalid="true" />
+                    </div>
+                    <div class="field field--tokens">
+                      <span class="field__label">Кэш-чтение</span>
+                      <input class="field__input" type="number" placeholder="0" aria-invalid="true" />
+                    </div>
+                    <div class="field field--tokens">
+                      <span class="field__label">Кэш-запись</span>
+                      <input class="field__input" type="number" placeholder="0" aria-invalid="true" />
+                    </div>
+                  </div>
+                </fieldset>
+                <p class="field__hint">Сумму посчитает сервер по ценам проекта.</p>
+              </div>
+              <p class="error" role="alert" data-testid="expense-form-error">
+                Укажите хотя бы одно количество токенов
+              </p>
+              <div class="dialog__actions">
+                <button class="btn" type="button">Отмена</button>
+                <button class="btn btn--dark" type="button">Сохранить</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="state">
+            <p class="state__cap">
+              <strong>3.4 · Отказ: цены не заданы.</strong> Все четыре цены проекта нули.
+              Отказ серверный, дословный; строка под ним — фронтовая и говорит, куда идти:
+              окно цен живёт в списке проектов, на странице проекта формы правки нет.
+            </p>
+            <div class="dialog" role="dialog" aria-modal="true" aria-label="Новая запись">
+              <div class="dialog__head">
+                <h2 class="dialog__title">Новая запись</h2>
+                <button class="dialog__close" type="button" aria-label="Закрыть">
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+                    <path d="M3 3l8 8M11 3l-8 8" />
+                  </svg>
+                </button>
+              </div>
+              <div class="dialog__form">
+                <div class="field">
+                  <span class="field__label">Дата</span>
+                  <input class="field__input" type="date" value="2026-11-19" />
+                </div>
+                <fieldset class="dialog__group">
+                  <legend class="field__label">Количество токенов</legend>
+                  <div class="form-grid">
+                    <div class="field field--tokens">
+                      <span class="field__label">Вход</span>
+                      <input class="field__input" type="number" value="1500000" />
+                    </div>
+                    <div class="field field--tokens">
+                      <span class="field__label">Выход</span>
+                      <input class="field__input" type="number" placeholder="0" />
+                    </div>
+                    <div class="field field--tokens">
+                      <span class="field__label">Кэш-чтение</span>
+                      <input class="field__input" type="number" placeholder="0" />
+                    </div>
+                    <div class="field field--tokens">
+                      <span class="field__label">Кэш-запись</span>
+                      <input class="field__input" type="number" placeholder="0" />
+                    </div>
+                  </div>
+                </fieldset>
+                <p class="field__hint">Сумму посчитает сервер по ценам проекта.</p>
+              </div>
+              <p class="error" role="alert" data-testid="expense-form-error">
+                Цены проекта не заполнены
+              </p>
+              <p class="field__hint">
+                Цены задаются в окне проекта на экране «Проекты».
+              </p>
+              <div class="dialog__actions">
+                <button class="btn" type="button">Отмена</button>
+                <button class="btn btn--dark" type="button">Сохранить</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </figure>
+
+      <!-- ==================== КАДР 4: ЦЕНЫ В ОКНЕ ПРОЕКТА ==================== -->
+      <figure class="frame">
+        <figcaption class="frame__cap">
+          <span class="frame__name">4 · Четыре цены в окне «Изменить проект»</span>
+          <span class="frame__meta">
+            Форма проекта живёт в списке проектов — на странице проекта её нет, поэтому
+            кадр снят здесь. Поля цен идут отдельной секцией после полей проекта: у них
+            другая единица измерения, и подсказка про 1 млн токенов стоит одна на четверых.
+            Отказ по цене красит только своё поле.
+          </span>
+        </figcaption>
+
+        <div class="app">
+          <aside class="sidebar">
+            <div class="brand">
+              <span class="brand__mark" aria-hidden="true">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+                  <path d="M2.5 5.5 8 2.5l5.5 3L8 8.5z" />
+                  <path d="M2.5 8.5 8 11.5l5.5-3" />
+                </svg>
+              </span>
+              <span>
+                <p class="brand__name">Workflow</p>
+                <p class="brand__sub">Отдел разработки</p>
+              </span>
+            </div>
+
+            <nav class="nav" aria-label="Разделы">
+              <p class="nav__label">Разделы</p>
+              <a class="nav__item" href="#" aria-current="page" onclick="return false">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+                  <path d="M2 5.5A1.5 1.5 0 0 1 3.5 4h3l1.5 1.5h4A1.5 1.5 0 0 1 13.5 7v4.5A1.5 1.5 0 0 1 12 13H3.5A1.5 1.5 0 0 1 2 11.5z" />
+                </svg>
+                Проекты
+                <span class="nav__count">6</span>
+              </a>
+            </nav>
+          </aside>
+
+          <div class="main">
+            <header class="topbar">
+              <p class="crumbs">
+                Приложение
+                <span class="crumbs__sep" aria-hidden="true">/</span>
+                <span class="crumbs__current">Проекты</span>
+              </p>
+            </header>
+
+            <main class="content">
+              <div class="page-head">
+                <div>
+                  <h1 class="page-head__title">Проекты</h1>
+                  <p class="page-head__sub">Все проекты отдела</p>
+                </div>
+                <button class="btn btn--dark" type="button">Добавить проект</button>
+              </div>
+
+              <section class="card" aria-label="Список проектов">
+                <div class="card__head">
+                  <h2 class="card__title">Список проектов</h2>
+                  <span class="card__meta">6 проектов</span>
+                </div>
+
+                <div class="table__head" role="presentation">
+                  <span>Название</span>
+                  <span>Репозиторий</span>
+                  <span>Обновлён</span>
+                  <span>Действия</span>
+                </div>
+
+                <ul class="table__body">
+                  <li class="row">
+                    <div class="row__main">
+                      <p class="row__name">Workflow</p>
+                      <p class="row__desc">
+                        Отдел разработки надстройки: конвейер задач, отделы с ролями и
+                        расписанием, отчёты смен.
+                      </p>
+                    </div>
+                    <p class="row__repo">https://github.com/gidvantus/workflow</p>
+                    <p class="row__date">19 ноя 2026</p>
+                    <div class="row__actions">
+                      <button class="kebab" type="button" aria-label="Действия с проектом Workflow" aria-haspopup="menu" aria-expanded="false">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                          <circle cx="3.5" cy="8" r="1.15" />
+                          <circle cx="8" cy="8" r="1.15" />
+                          <circle cx="12.5" cy="8" r="1.15" />
+                        </svg>
+                      </button>
+                    </div>
+                  </li>
+
+                  <li class="row">
+                    <div class="row__main">
+                      <p class="row__name">Вахта</p>
+                      <p class="row__desc">
+                        Смены, вахтовые графики и табели: backend на Django, frontend на Vue.
+                      </p>
+                    </div>
+                    <p class="row__repo">https://github.com/gidvantus/vahta</p>
+                    <p class="row__date">12 ноя 2026</p>
+                    <div class="row__actions">
+                      <button class="kebab" type="button" aria-label="Действия с проектом Вахта" aria-haspopup="menu" aria-expanded="false">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                          <circle cx="3.5" cy="8" r="1.15" />
+                          <circle cx="8" cy="8" r="1.15" />
+                          <circle cx="12.5" cy="8" r="1.15" />
+                        </svg>
+                      </button>
+                    </div>
+                  </li>
+
+                  <li class="row">
+                    <div class="row__main">
+                      <p class="row__name">CloudPass</p>
+                      <p class="row__desc">
+                        Пропускной режим: карточки сотрудников, точки доступа, журнал проходов.
+                      </p>
+                    </div>
+                    <p class="row__repo">https://github.com/gidvantus/cloudpass</p>
+                    <p class="row__date">05 ноя 2026</p>
+                    <div class="row__actions">
+                      <button class="kebab" type="button" aria-label="Действия с проектом CloudPass" aria-haspopup="menu" aria-expanded="false">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                          <circle cx="3.5" cy="8" r="1.15" />
+                          <circle cx="8" cy="8" r="1.15" />
+                          <circle cx="12.5" cy="8" r="1.15" />
+                        </svg>
+                      </button>
+                    </div>
+                  </li>
+
+                  <li class="row">
+                    <div class="row__main">
+                      <p class="row__name">Brain</p>
+                      <p class="row__desc">Личная база знаний: заметки, теги, поиск.</p>
+                    </div>
+                    <p class="row__repo">https://github.com/gidvantus/mybrain</p>
+                    <p class="row__date">28 окт 2026</p>
+                    <div class="row__actions">
+                      <button class="kebab" type="button" aria-label="Действия с проектом Brain" aria-haspopup="menu" aria-expanded="false">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                          <circle cx="3.5" cy="8" r="1.15" />
+                          <circle cx="8" cy="8" r="1.15" />
+                          <circle cx="12.5" cy="8" r="1.15" />
+                        </svg>
+                      </button>
+                    </div>
+                  </li>
+
+                  <li class="row">
+                    <div class="row__main">
+                      <p class="row__name">Склад</p>
+                      <p class="row__desc">
+                        Учёт остатков и отгрузок: приход, списание, инвентаризация.
+                      </p>
+                    </div>
+                    <p class="row__repo">https://github.com/gidvantus/sklad</p>
+                    <p class="row__date">21 окт 2026</p>
+                    <div class="row__actions">
+                      <button class="kebab" type="button" aria-label="Действия с проектом Склад" aria-haspopup="menu" aria-expanded="false">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                          <circle cx="3.5" cy="8" r="1.15" />
+                          <circle cx="8" cy="8" r="1.15" />
+                          <circle cx="12.5" cy="8" r="1.15" />
+                        </svg>
+                      </button>
+                    </div>
+                  </li>
+
+                  <li class="row">
+                    <div class="row__main">
+                      <p class="row__name">Портал</p>
+                      <p class="row__desc">
+                        Внутренний портал отдела: регламенты, шаблоны, календарь смен.
+                      </p>
+                    </div>
+                    <p class="row__repo">https://github.com/gidvantus/portal</p>
+                    <p class="row__date">14 окт 2026</p>
+                    <div class="row__actions">
+                      <button class="kebab" type="button" aria-label="Действия с проектом Портал" aria-haspopup="menu" aria-expanded="false">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                          <circle cx="3.5" cy="8" r="1.15" />
+                          <circle cx="8" cy="8" r="1.15" />
+                          <circle cx="12.5" cy="8" r="1.15" />
+                        </svg>
+                      </button>
+                    </div>
+                  </li>
+                </ul>
+              </section>
+
+              <section class="service" aria-label="Состояние сервиса">
+                <div>
+                  <p class="service__label">Состояние сервиса</p>
+                  <p class="service__line">
+                    <span class="status__dot" aria-hidden="true"></span>
+                    <span class="status__text">API: ok · БД: ok</span>
+                  </p>
+                </div>
+                <button class="btn" type="button">Проверить</button>
+              </section>
+            </main>
+
+            <footer class="footbar">
+              <p class="footbar__note">© 2026 Workflow</p>
+            </footer>
+
+            <div class="overlay">
+              <div class="dialog dialog--wide" role="dialog" aria-modal="true" aria-label="Изменить проект">
+                <div class="dialog__head">
+                  <h2 class="dialog__title">Изменить проект</h2>
+                  <button class="dialog__close" type="button" aria-label="Закрыть">
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+                      <path d="M3 3l8 8M11 3l-8 8" />
+                    </svg>
+                  </button>
+                </div>
+
+                <div class="dialog__form">
+                  <div class="field">
+                    <span class="field__label">Название</span>
+                    <input class="field__input" type="text" value="Workflow" />
+                  </div>
+                  <div class="field">
+                    <span class="field__label">Описание</span>
+                    <textarea class="field__textarea" rows="3">Отдел разработки надстройки: конвейер задач, отделы с ролями и расписанием, отчёты смен.</textarea>
+                  </div>
+                  <div class="field">
+                    <span class="field__label">Адрес репозитория</span>
+                    <input class="field__input" type="text" value="https://github.com/gidvantus/workflow" />
+                    <span class="field__hint">Ссылка или вид owner/repo</span>
+                  </div>
+
+                  <div class="dialog__section">
+                    <h3 class="dialog__section-title">Цены за токены</h3>
+                    <p class="field__hint">В рублях за 1 млн токенов</p>
+                    <div class="form-grid">
+                      <div class="field field--price">
+                        <label class="field__label" for="price-in">Вход</label>
+                        <input
+                          class="field__input"
+                          id="price-in"
+                          type="text"
+                          inputmode="decimal"
+                          value="0,27"
+                          data-testid="project-form-price-input"
+                        />
+                      </div>
+                      <div class="field field--price">
+                        <label class="field__label" for="price-out">Выход</label>
+                        <input
+                          class="field__input"
+                          id="price-out"
+                          type="text"
+                          inputmode="decimal"
+                          value="1,10"
+                          data-testid="project-form-price-output"
+                        />
+                      </div>
+                      <div class="field field--price">
+                        <label class="field__label" for="price-cache-read">Кэш-чтение</label>
+                        <input
+                          class="field__input"
+                          id="price-cache-read"
+                          type="text"
+                          inputmode="decimal"
+                          value="0,07"
+                          data-testid="project-form-price-cache-read"
+                        />
+                      </div>
+                      <div class="field field--price">
+                        <label class="field__label" for="price-cache-write">Кэш-запись</label>
+                        <input
+                          class="field__input"
+                          id="price-cache-write"
+                          type="text"
+                          inputmode="decimal"
+                          value="0,34"
+                          data-testid="project-form-price-cache-write"
+                        />
+                      </div>
+                    </div>
+                    <p class="field__hint">
+                      Ноль — «не тарифицируется». Цены применяются к новым записям; суммы,
+                      уже записанные в журнал, не пересчитываются.
+                    </p>
+                  </div>
+                </div>
+
+                <div class="dialog__actions">
+                  <button class="btn" type="button">Отмена</button>
+                  <button class="btn btn--dark" type="button">Сохранить</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </figure>
+
+      <!-- ==================== КАДР 5: ОТКАЗ ПО ЦЕНЕ ==================== -->
+      <figure class="frame">
+        <figcaption class="frame__cap">
+          <span class="frame__name">5 · Отказ по цене в окне проекта</span>
+          <span class="frame__meta">
+            Поле подсвечено, текст серверный. Второй отказ этой ручки — «Цена указывается
+            числом, например 0.27» — выглядит так же; запятая допустима и на сервере
+            заменяется точкой. Хвостовые нули из ответа («0.270000») в поле не печатаются:
+            человек видит «0,27» и отправляет обратно «0,27».
+          </span>
+        </figcaption>
+
+        <div class="states">
+          <div class="state">
+            <p class="state__cap">
+              <strong>5.1 · Отрицательная цена.</strong> Отказ приходит на поле «Выход» и
+              красит только его: «Цена не может быть отрицательной». Остальные три поля
+              остаются обычными и сохраняют то, что в них было.
+            </p>
+            <div class="dialog dialog--wide" role="dialog" aria-modal="true" aria-label="Изменить проект">
+              <div class="dialog__head">
+                <h2 class="dialog__title">Изменить проект</h2>
+                <button class="dialog__close" type="button" aria-label="Закрыть">
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+                    <path d="M3 3l8 8M11 3l-8 8" />
+                  </svg>
+                </button>
+              </div>
+
+              <div class="dialog__form">
+                <div class="field">
+                  <span class="field__label">Название</span>
+                  <input class="field__input" type="text" value="Workflow" />
+                </div>
+                <div class="field">
+                  <span class="field__label">Описание</span>
+                  <textarea class="field__textarea" rows="2">Отдел разработки надстройки: конвейер задач, отделы с ролями и расписанием, отчёты смен.</textarea>
+                </div>
+                <div class="field">
+                  <span class="field__label">Адрес репозитория</span>
+                  <input class="field__input" type="text" value="https://github.com/gidvantus/workflow" />
+                  <span class="field__hint">Ссылка или вид owner/repo</span>
+                </div>
+
+                <div class="dialog__section">
+                  <h3 class="dialog__section-title">Цены за токены</h3>
+                  <p class="field__hint">В рублях за 1 млн токенов</p>
+                  <div class="form-grid">
+                    <div class="field field--price">
+                      <span class="field__label">Вход</span>
+                      <input class="field__input" type="text" value="0,27" />
+                    </div>
+                    <div class="field field--price">
+                      <span class="field__label">Выход</span>
+                      <input class="field__input" type="text" value="-1,10" aria-invalid="true" />
+                    </div>
+                    <div class="field field--price">
+                      <span class="field__label">Кэш-чтение</span>
+                      <input class="field__input" type="text" value="0,07" />
+                    </div>
+                    <div class="field field--price">
+                      <span class="field__label">Кэш-запись</span>
+                      <input class="field__input" type="text" value="0,34" />
+                    </div>
+                  </div>
+                  <p class="field__hint">
+                    Ноль — «не тарифицируется». Цены применяются к новым записям; суммы,
+                    уже записанные в журнал, не пересчитываются.
+                  </p>
+                </div>
+              </div>
+
+              <p class="error" role="alert">Цена не может быть отрицательной</p>
+              <div class="dialog__actions">
+                <button class="btn" type="button">Отмена</button>
+                <button class="btn btn--dark" type="button">Сохранить</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="state">
+            <p class="state__cap">
+              <strong>5.2 · Проект без цен.</strong> Четыре нуля — допустимое состояние
+              («не тарифицируется»), поэтому сохранение проходит. Но запись в журнал после
+              этого получит отказ «Цены проекта не заполнены». Поле с нулём не
+              подсвечивается: это не ошибка ввода.
+            </p>
+            <div class="dialog dialog--wide" role="dialog" aria-modal="true" aria-label="Изменить проект">
+              <div class="dialog__head">
+                <h2 class="dialog__title">Изменить проект</h2>
+                <button class="dialog__close" type="button" aria-label="Закрыть">
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+                    <path d="M3 3l8 8M11 3l-8 8" />
+                  </svg>
+                </button>
+              </div>
+
+              <div class="dialog__form">
+                <div class="field">
+                  <span class="field__label">Название</span>
+                  <input class="field__input" type="text" value="Brain" />
+                </div>
+                <div class="field">
+                  <span class="field__label">Описание</span>
+                  <textarea class="field__textarea" rows="2">Личная база знаний: заметки, теги, поиск.</textarea>
+                </div>
+                <div class="field">
+                  <span class="field__label">Адрес репозитория</span>
+                  <input class="field__input" type="text" value="https://github.com/gidvantus/mybrain" />
+                  <span class="field__hint">Ссылка или вид owner/repo</span>
+                </div>
+
+                <div class="dialog__section">
+                  <h3 class="dialog__section-title">Цены за токены</h3>
+                  <p class="field__hint">В рублях за 1 млн токенов</p>
+                  <div class="form-grid">
+                    <div class="field field--price">
+                      <span class="field__label">Вход</span>
+                      <input class="field__input" type="text" value="0" />
+                    </div>
+                    <div class="field field--price">
+                      <span class="field__label">Выход</span>
+                      <input class="field__input" type="text" value="0" />
+                    </div>
+                    <div class="field field--price">
+                      <span class="field__label">Кэш-чтение</span>
+                      <input class="field__input" type="text" value="0" />
+                    </div>
+                    <div class="field field--price">
+                      <span class="field__label">Кэш-запись</span>
+                      <input class="field__input" type="text" value="0" />
+                    </div>
+                  </div>
+                  <p class="field__hint">
+                    Ноль — «не тарифицируется». Цены применяются к новым записям; суммы,
+                    уже записанные в журнал, не пересчитываются.
+                  </p>
+                </div>
+              </div>
+
+              <div class="dialog__actions">
+                <button class="btn" type="button">Отмена</button>
+                <button class="btn btn--dark" type="button">Сохранить</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </figure>
+
+      <!-- ==================== КАДР 6: СОСТОЯНИЯ ВКЛАДКИ ==================== -->
+      <figure class="frame">
+        <figcaption class="frame__cap">
+          <span class="frame__name">6 · Состояния вкладки «Расходы»</span>
+          <span class="frame__meta">
+            Пока журнал не прочитан, в паспорте нет ни числа, ни слова «Расходы»: пустая
+            подпись «Расходы —» читалась бы как ноль. По той же причине в шапке карточки
+            нет счётчика и итога. Пустой журнал — это ноль, и он показывается нулём.
+          </span>
+        </figcaption>
+
+        <div class="states">
+          <div class="state">
+            <p class="state__cap">
+              <strong>6.1 · Загрузка.</strong> Паспорт без строки расходов, в карточке
+              «Загрузка…»; счётчика и итога нет.
+            </p>
+            <p class="project-head__meta">
+              <span class="project-repo">https://github.com/gidvantus/workflow</span>
+              <span class="crumbs__sep" aria-hidden="true">·</span>
+              <span>Обновлён 19 ноя 2026</span>
+            </p>
+            <div class="card" aria-label="Журнал расходов проекта">
+              <div class="card__head">
+                <h2 class="card__title">Расходы проекта</h2>
+                <div class="card__tools">
+                  <button class="btn btn--dark" type="button">Добавить запись</button>
+                </div>
+              </div>
+              <div class="card__body">
+                <p class="state__line" aria-live="polite" data-testid="expenses-state">Загрузка…</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="state">
+            <p class="state__cap">
+              <strong>6.2 · Пустой журнал.</strong> «Пока нет записей», подсказка и итог
+              «0,00 ₽» — настоящий ноль, а не отсутствие данных.
+            </p>
+            <p class="project-head__meta">
+              <span class="project-repo">https://github.com/gidvantus/workflow</span>
+              <span class="crumbs__sep" aria-hidden="true">·</span>
+              <span class="project-spend"
+                >Расходы <span class="project-spend__value">0,00 ₽</span></span
+              >
+              <span class="crumbs__sep" aria-hidden="true">·</span>
+              <span>Обновлён 19 ноя 2026</span>
+            </p>
+            <div class="card" aria-label="Журнал расходов проекта">
+              <div class="card__head">
+                <h2 class="card__title">Расходы проекта</h2>
+                <div class="card__tools">
+                  <span class="card__meta">0 записей</span>
+                  <div class="expenses-total">
+                    <span class="expenses-total__label">Итого</span>
+                    <span class="expenses-total__value">0,00 ₽</span>
+                  </div>
+                  <button class="btn btn--dark" type="button">Добавить запись</button>
+                </div>
+              </div>
+              <div class="card__body">
+                <div data-testid="expenses-empty">
+                  <p class="state__line">Пока нет записей</p>
+                  <p class="state__hint">
+                    Нажмите «Добавить запись» — она появится здесь, а сумма уйдёт в итог.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="state">
+            <p class="state__cap">
+              <strong>6.3 · Сервер не отвечает.</strong> Свой текст фронта из `http.ts`,
+              рядом «Повторить». Итога и счётчика нет — данных не было.
+            </p>
+            <div class="card" aria-label="Журнал расходов проекта">
+              <div class="card__head">
+                <h2 class="card__title">Расходы проекта</h2>
+                <div class="card__tools">
+                  <button class="btn btn--dark" type="button">Добавить запись</button>
+                </div>
+              </div>
+              <div class="card__body">
+                <div class="state__error" data-testid="expenses-error">
+                  <p class="error" role="alert">Сервер не отвечает</p>
+                  <button class="btn" type="button" data-testid="expenses-retry">Повторить</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="state">
+            <p class="state__cap">
+              <strong>6.4 · Проект удалили в другой вкладке.</strong> Тот же `404` и тот же
+              текст, что у задач и отделов: «Проект не найден» — без своих формулировок.
+            </p>
+            <div class="card" aria-label="Журнал расходов проекта">
+              <div class="card__head">
+                <h2 class="card__title">Расходы проекта</h2>
+                <div class="card__tools">
+                  <button class="btn btn--dark" type="button">Добавить запись</button>
+                </div>
+              </div>
+              <div class="card__body">
+                <div class="state__error" data-testid="expenses-error">
+                  <p class="error" role="alert">Проект не найден</p>
+                  <button class="btn" type="button" data-testid="expenses-retry">Повторить</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </figure>
+    </div>
+  </body>
+</html>
