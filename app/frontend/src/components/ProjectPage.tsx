@@ -13,9 +13,10 @@
  *
  * Вкладка «Отделы» — единственный вход в отделы: отдельного пункта меню и отдельного
  * экрана больше нет. Оба списка читаются при открытии страницы, показывается только
- * выбранный; переключение вкладки запросов не повторяет. Создание, правка и удаление
- * отдела — диалоги этой страницы: после сохранения список отделов перечитывается,
- * оптимистичных обновлений нет.
+ * выбранный; переключение вкладки запросов не повторяет. Создание и удаление отдела —
+ * диалоги этой страницы, правка — отдельная страница (`DepartmentPage`): полей у отдела
+ * десять плюс уведомления, в окно они не влезают. После сохранения список отделов
+ * перечитывается, оптимистичных обновлений нет.
  */
 
 import { useCallback, useEffect, useId, useState } from 'react';
@@ -25,8 +26,9 @@ import { ApiError, UNREACHABLE_TEXT } from '../api/http';
 import type { Project } from '../api/projects';
 import { listTasks, type Task } from '../api/tasks';
 import ConfirmDialog from './ConfirmDialog';
-import DepartmentFormDialog from './DepartmentFormDialog';
+import DepartmentCreateDialog from './DepartmentCreateDialog';
 import DepartmentList from './DepartmentList';
+import DepartmentPage from './DepartmentPage';
 import TaskFormDialog from './TaskFormDialog';
 import TaskList from './TaskList';
 
@@ -74,10 +76,12 @@ type DepartmentsState =
   | { status: 'ready'; departments: Department[] }
   | { status: 'error'; errorText: string };
 
-/** Открытое окно отдела: форма создания, форма правки или подтверждение удаления. */
+/**
+ * Открытое окно отдела: создание выбором вида или подтверждение удаления. Правка окном
+ * не открывается — она живёт отдельной страницей (`editor`).
+ */
 type DepartmentDialogState =
   | { kind: 'create' }
-  | { kind: 'edit'; department: Department }
   | { kind: 'delete'; department: Department }
   | null;
 
@@ -94,6 +98,11 @@ export default function ProjectPage({ project, onBack }: ProjectPageProps): JSX.
   const [departments, setDepartments] = useState<DepartmentsState>({ status: 'loading' });
   const [taskFormOpen, setTaskFormOpen] = useState(false);
   const [departmentDialog, setDepartmentDialog] = useState<DepartmentDialogState>(null);
+  /**
+   * Открытая страница правки отдела. Как и страница проекта, она занимает содержимое
+   * раздела целиком: крошки, шапка и вкладки проекта ей не нужны.
+   */
+  const [editor, setEditor] = useState<Department | null>(null);
 
   /** Список задач всегда читается с сервера: после создания экран его перечитывает. */
   const loadTasks = useCallback(async (): Promise<void> => {
@@ -139,14 +148,32 @@ export default function ProjectPage({ project, onBack }: ProjectPageProps): JSX.
     void loadTasks();
   }
 
-  /** Сохранение или удаление отдела прошло — окно закрыто, список отделов перечитан. */
+  /**
+   * Сохранение, создание или удаление отдела прошло — окно и страница закрыты, список
+   * отделов перечитан с сервера.
+   */
   function handleDepartmentSaved(): void {
     setDepartmentDialog(null);
+    setEditor(null);
     void loadDepartments();
   }
 
   const tasksPanelId = `${tabsId}-panel-tasks`;
   const departmentsPanelId = `${tabsId}-panel-departments`;
+
+  // Правка отдела — отдельная страница вместо содержимого проекта: так же, как
+  // `ProjectsPage` показывает `ProjectPage`. Возврат из неё состояние вкладки не трогает —
+  // после сохранения открытой остаётся та же вкладка «Отделы».
+  if (editor !== null) {
+    return (
+      <DepartmentPage
+        project={project}
+        department={editor}
+        onBack={() => setEditor(null)}
+        onSaved={handleDepartmentSaved}
+      />
+    );
+  }
 
   return (
     <>
@@ -248,7 +275,7 @@ export default function ProjectPage({ project, onBack }: ProjectPageProps): JSX.
             errorText={departments.status === 'error' ? departments.errorText : null}
             onRetry={() => void loadDepartments()}
             onCreate={() => setDepartmentDialog({ kind: 'create' })}
-            onEdit={(department) => setDepartmentDialog({ kind: 'edit', department })}
+            onEdit={(department) => setEditor(department)}
             onDelete={(department) => setDepartmentDialog({ kind: 'delete', department })}
           />
         </div>
@@ -263,18 +290,8 @@ export default function ProjectPage({ project, onBack }: ProjectPageProps): JSX.
       )}
 
       {departmentDialog !== null && departmentDialog.kind === 'create' && (
-        <DepartmentFormDialog
-          mode="create"
+        <DepartmentCreateDialog
           projectId={project.id}
-          onClose={() => setDepartmentDialog(null)}
-          onSaved={handleDepartmentSaved}
-        />
-      )}
-      {departmentDialog !== null && departmentDialog.kind === 'edit' && (
-        <DepartmentFormDialog
-          mode="edit"
-          projectId={project.id}
-          department={departmentDialog.department}
           onClose={() => setDepartmentDialog(null)}
           onSaved={handleDepartmentSaved}
         />
