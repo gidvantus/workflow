@@ -2,23 +2,20 @@
 
 Живая PostgreSQL тестам не нужна: `get_db` подменяется на SQLite в памяти, таблицы
 создаются из метаданных моделей. Индекс `uq_projects_name_alive` живёт и в SQLite,
-поэтому поведение совпадает со стендом.
+поэтому поведение совпадает со стендом. База в памяти и клиент живут в `conftest.py` —
+один общий движок на все ручки, чтобы не держать копию фикстуры в каждом модуле.
 """
 
-from collections.abc import Iterator
 from datetime import datetime
 from typing import Any
 
 import pytest
 from fastapi import HTTPException, status
 from fastapi.testclient import TestClient
-from sqlalchemy import Engine, create_engine, select, update
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import StaticPool
 
-from app import main
 from app.api import projects as api
-from app.db import Base, get_db
 from app.models.project import Project
 
 PROJECT: dict[str, str] = {
@@ -26,42 +23,6 @@ PROJECT: dict[str, str] = {
     "description": "Отдел разработки",
     "repo_url": "gidvantus/workflow",
 }
-
-
-@pytest.fixture(name="session_factory")
-def session_factory_fixture() -> Iterator[sessionmaker[Session]]:
-    """Движок на одну in-memory базу: все сессии видят одно и то же соединение."""
-    engine: Engine = create_engine(
-        "sqlite+pysqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(engine)
-    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
-    try:
-        yield factory
-    finally:
-        Base.metadata.drop_all(engine)
-        engine.dispose()
-
-
-@pytest.fixture(name="client")
-def client_fixture(session_factory: sessionmaker[Session]) -> Iterator[TestClient]:
-    """Клиент поверх подменённой зависимости: приложение не ходит в настоящую базу."""
-
-    def override_get_db() -> Iterator[Session]:
-        session = session_factory()
-        try:
-            yield session
-        finally:
-            session.close()
-
-    main.app.dependency_overrides[get_db] = override_get_db
-    try:
-        with TestClient(main.app) as test_client:
-            yield test_client
-    finally:
-        main.app.dependency_overrides.clear()
 
 
 def _create(client: TestClient, **overrides: str) -> dict[str, Any]:

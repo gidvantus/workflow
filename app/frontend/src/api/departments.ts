@@ -1,14 +1,22 @@
 /**
- * Клиент API отделов проекта и справочника ролей.
+ * Клиент API отделов проекта, справочников видов и ролей.
  *
  * Отдел живёт внутри проекта: список и создание идут вложенным путём
  * `/api/projects/{project_id}/departments`, проект задаётся **путём**, а не телом
  * запроса. Правка и удаление адресуются самому отделу плоским
  * `/api/departments/{department_id}` — плоских `GET` и `POST` больше нет.
  *
- * Справочник ролей читается с сервера и только с сервера: кодов и названий ролей
- * фронт не зашивает — их отдаёт `GET /api/roles`. Время приходит строкой `"ЧЧ:ММ"`
- * без секунд, поэтому подставляется в `<input type="time">` без переформатирования.
+ * Создание выбирает только вид: `POST` принимает `{kind_id}` и ничего больше, имя отдела
+ * становится названием вида. Остальные поля страницы правки приезжают пустыми и
+ * заполняются `PATCH`-ем.
+ *
+ * `fields` — какие блоки рисует страница правки и в каком порядке. Это часть контракта,
+ * а не константа фронта: подписи и контролы живут здесь, но состав и порядок задаёт вид.
+ * Поэтому же справочник видов читается с сервера, как и справочник ролей.
+ *
+ * Время приходит строкой `"ЧЧ:ММ"` без секунд и уходит обратно так же, поэтому
+ * подставляется в `<input type="time">` без переформатирования. `null` во времени и
+ * `""` в строковых полях значат «не заполнено».
  *
  * Тексты отказов — часть контракта: сервер присылает их в `detail`, и они показываются
  * пользователю дословно.
@@ -30,7 +38,23 @@ export type Role = {
   title: string;
 };
 
-/** Отдел в том виде, в каком его отдаёт `GET /api/projects/{project_id}/departments`. */
+/** Вид отдела в том виде, в каком он приходит объектом `kind` внутри отдела. */
+export type DepartmentKindRef = {
+  id: number;
+  code: string;
+  title: string;
+};
+
+/** Вид отдела из справочника `GET /api/department-kinds`. */
+export type DepartmentKind = DepartmentKindRef & {
+  /**
+   * Ключи блоков страницы правки в порядке показа. Незнакомый ключ (третий вид,
+   * заведённый новой ревизией) фронт не рисует и экран не роняет.
+   */
+  fields: string[];
+};
+
+/** Отдел в том виде, в каком его отдают ручки списка, создания и правки. */
 export type Department = {
   id: number;
   /**
@@ -39,25 +63,58 @@ export type Department = {
    * разбор ответа был бы строже контракта.
    */
   project_id: number | null;
+  /** Имя отдела: на момент создания равно названию вида, отдельно не редактируется. */
   name: string;
-  /** Время работы «с» в виде `"ЧЧ:ММ"`, без секунд. */
-  start_time: string;
+  kind: DepartmentKindRef;
+  /** Набор блоков страницы правки — тот же, что у вида отдела. */
+  fields: string[];
+  /** Время работы «с» в виде `"ЧЧ:ММ"`; `null` — расписания нет. */
+  start_time: string | null;
   /** Время работы «по»; меньше `start_time` — переход через полночь, это норма. */
-  end_time: string;
+  end_time: string | null;
   roles: Role[];
+  /** Восемь строковых полей страницы правки: `null` — не заполнено. */
+  repo_path: string | null;
+  base_branch: string | null;
+  workspace: string | null;
+  human_workspace: string | null;
+  artifacts_dir: string | null;
+  compose_project: string | null;
+  telegram_token: string | null;
+  telegram_chat_id: string | null;
+  /** Лимит возврата задачи: `0` — «возвращать нельзя», умолчание — `3`. */
+  max_rework: number;
+  notifications_enabled: boolean;
   created_at: string;
   updated_at: string;
 };
 
-/** Тело создания и правки: `POST` требует все четыре поля, `PATCH` принимает подмножество. */
-export type DepartmentInput = {
-  name: string;
-  start_time: string;
-  end_time: string;
-  role_ids: number[];
+/**
+ * Тело `PATCH /api/departments/{id}`: любое непустое подмножество отрисованных полей.
+ * `name` здесь нет — имя не редактируется, `kind` — вид у существующего отдела не меняется.
+ *
+ * `max_rework` объявлен объединением, потому что поле на экране — текст: страница отправляет
+ * строку цифр, а сервер приводит её к `int` (ограничение `0..99` — его, и отказ приходит его
+ * текстом). Число контрактом тоже допустимо, поэтому оно остаётся в типе.
+ */
+export type DepartmentPatch = {
+  start_time?: string | null;
+  end_time?: string | null;
+  role_ids?: number[];
+  repo_path?: string | null;
+  base_branch?: string | null;
+  workspace?: string | null;
+  human_workspace?: string | null;
+  artifacts_dir?: string | null;
+  compose_project?: string | null;
+  telegram_token?: string | null;
+  telegram_chat_id?: string | null;
+  max_rework?: number | string | null;
+  notifications_enabled?: boolean | null;
 };
 
 const ROLES_URL = '/api/roles';
+const KINDS_URL = '/api/department-kinds';
 /** Плоский путь отдела: по нему ходят только `PATCH` и `DELETE`. */
 const DEPARTMENTS_URL = '/api/departments';
 
@@ -78,40 +135,136 @@ function readRole(payload: unknown): Role | null {
   return { id, code, title };
 }
 
-/** Разбор отдела; роли проверяются по одной, порядок оставляем серверный (по `id`). */
-function readDepartment(payload: unknown): Department | null {
-  if (!isRecord(payload)) {
+/** Разбор вида: объект `kind` внутри отдела и строка справочника устроены одинаково. */
+function readKindRef(payload: unknown): DepartmentKindRef | null {
+  return readRole(payload);
+}
+
+/** Набор ролей: порядок оставляем серверный (по `id`), мусор в любом элементе — отказ. */
+function readRoles(payload: unknown): Role[] | null {
+  if (!Array.isArray(payload)) {
     return null;
   }
-  const { id, project_id, name, start_time, end_time, roles, created_at, updated_at } =
-    payload;
-  if (
-    typeof id !== 'number' ||
-    (project_id !== null && typeof project_id !== 'number') ||
-    typeof name !== 'string' ||
-    typeof start_time !== 'string' ||
-    typeof end_time !== 'string' ||
-    typeof created_at !== 'string' ||
-    typeof updated_at !== 'string' ||
-    !Array.isArray(roles)
-  ) {
-    return null;
-  }
-  const parsedRoles: Role[] = [];
-  for (const item of roles) {
+  const roles: Role[] = [];
+  for (const item of payload) {
     const role = readRole(item);
     if (role === null) {
       return null;
     }
-    parsedRoles.push(role);
+    roles.push(role);
   }
+  return roles;
+}
+
+/**
+ * Строковое поле, которое может быть незаполненным: `null` остаётся `null`, строка —
+ * строкой, всё остальное (включая отсутствующий ключ) — `undefined`, то есть «не по
+ * контракту». Так одно правило проверяет и время, и восемь строк страницы правки.
+ */
+function readOptionalText(value: unknown): string | null | undefined {
+  if (value === null) {
+    return null;
+  }
+  return typeof value === 'string' ? value : undefined;
+}
+
+/** Набор ключей полей: строки в серверном порядке, неизвестные ключи не отбрасываются. */
+function readFields(payload: unknown): string[] | null {
+  if (!Array.isArray(payload)) {
+    return null;
+  }
+  const fields: string[] = [];
+  for (const item of payload) {
+    if (typeof item !== 'string') {
+      return null;
+    }
+    fields.push(item);
+  }
+  return fields;
+}
+
+/**
+ * Разбор отдела. Строковые поля страницы правки проверяются одним правилом: строка или
+ * `null`, поэтому список полей растёт без правки разбора.
+ */
+function readDepartment(payload: unknown): Department | null {
+  if (!isRecord(payload)) {
+    return null;
+  }
+  const {
+    id,
+    project_id,
+    name,
+    kind,
+    fields,
+    start_time,
+    end_time,
+    roles,
+    created_at,
+    updated_at,
+  } = payload;
+
+  const maxRework = payload.max_rework;
+  const notificationsEnabled = payload.notifications_enabled;
+  const repoPath = readOptionalText(payload.repo_path);
+  const baseBranch = readOptionalText(payload.base_branch);
+  const workspace = readOptionalText(payload.workspace);
+  const humanWorkspace = readOptionalText(payload.human_workspace);
+  const artifactsDir = readOptionalText(payload.artifacts_dir);
+  const composeProject = readOptionalText(payload.compose_project);
+  const telegramToken = readOptionalText(payload.telegram_token);
+  const telegramChatId = readOptionalText(payload.telegram_chat_id);
+  const startTime = readOptionalText(start_time);
+  const endTime = readOptionalText(end_time);
+
+  if (
+    typeof id !== 'number' ||
+    (project_id !== null && typeof project_id !== 'number') ||
+    typeof name !== 'string' ||
+    typeof created_at !== 'string' ||
+    typeof updated_at !== 'string' ||
+    typeof maxRework !== 'number' ||
+    typeof notificationsEnabled !== 'boolean' ||
+    repoPath === undefined ||
+    baseBranch === undefined ||
+    workspace === undefined ||
+    humanWorkspace === undefined ||
+    artifactsDir === undefined ||
+    composeProject === undefined ||
+    telegramToken === undefined ||
+    telegramChatId === undefined ||
+    startTime === undefined ||
+    endTime === undefined
+  ) {
+    return null;
+  }
+
+  const parsedKind = readKindRef(kind);
+  const parsedFields = readFields(fields);
+  const parsedRoles = readRoles(roles);
+  if (parsedKind === null || parsedFields === null || parsedRoles === null) {
+    return null;
+  }
+
   return {
     id,
     project_id,
     name,
-    start_time,
-    end_time,
+    kind: parsedKind,
+    fields: parsedFields,
+    start_time: startTime,
+    end_time: endTime,
     roles: parsedRoles,
+    repo_path: repoPath,
+    base_branch: baseBranch,
+    workspace,
+    human_workspace: humanWorkspace,
+    artifacts_dir: artifactsDir,
+    compose_project: composeProject,
+    telegram_token: telegramToken,
+    telegram_chat_id: telegramChatId,
+    max_rework: maxRework,
+    notifications_enabled: notificationsEnabled,
     created_at,
     updated_at,
   };
@@ -132,19 +285,36 @@ export async function listRoles(): Promise<Role[]> {
   if (!response.ok) {
     throw new ApiError(await readDetail(response));
   }
+  const roles = readRoles(await readJson(response));
+  if (roles === null) {
+    throw new ApiError(UNREACHABLE_TEXT);
+  }
+  return roles;
+}
+
+/**
+ * `GET /api/department-kinds` — справочник видов, порядок задаёт сервер (по `id`).
+ * Справочник только читается: новый вид — новая ревизия, а не ручка.
+ */
+export async function listDepartmentKinds(): Promise<DepartmentKind[]> {
+  const response = await send(KINDS_URL, { method: 'GET' });
+  if (!response.ok) {
+    throw new ApiError(await readDetail(response));
+  }
   const payload = await readJson(response);
   if (!Array.isArray(payload)) {
     throw new ApiError(UNREACHABLE_TEXT);
   }
-  const roles: Role[] = [];
+  const kinds: DepartmentKind[] = [];
   for (const item of payload) {
-    const role = readRole(item);
-    if (role === null) {
+    const kind = readKindRef(item);
+    const fields = isRecord(item) ? readFields(item.fields) : null;
+    if (kind === null || fields === null) {
       throw new ApiError(UNREACHABLE_TEXT);
     }
-    roles.push(role);
+    kinds.push({ ...kind, fields });
   }
-  return roles;
+  return kinds;
 }
 
 /**
@@ -173,16 +343,17 @@ export async function listDepartments(projectId: number): Promise<Department[]> 
 }
 
 /**
- * `POST /api/projects/{project_id}/departments` — `201` и созданный отдел; в ответе
- * `project_id` равен id проекта из пути. Тело проекта не содержит.
+ * `POST /api/projects/{project_id}/departments` — `201` и созданный отдел; тело — только
+ * `kind_id`. `project_id` в ответе равен id проекта из пути, второго отдела того же вида
+ * в проекте быть не может: имя занято, сервер отвечает `409`.
  */
 export async function createDepartment(
   projectId: number,
-  input: DepartmentInput,
+  kindId: number,
 ): Promise<Department> {
   const response = await send(projectDepartmentsUrl(projectId), {
     method: 'POST',
-    body: JSON.stringify(input),
+    body: JSON.stringify({ kind_id: kindId } satisfies { kind_id: number }),
   });
   if (!response.ok) {
     throw new ApiError(await readDetail(response));
@@ -193,11 +364,11 @@ export async function createDepartment(
 /** `PATCH /api/departments/{id}` — `200` и обновлённый отдел; `role_ids` заменяет набор целиком. */
 export async function updateDepartment(
   id: number,
-  input: DepartmentInput,
+  patch: DepartmentPatch,
 ): Promise<Department> {
   const response = await send(`${DEPARTMENTS_URL}/${id}`, {
     method: 'PATCH',
-    body: JSON.stringify(input),
+    body: JSON.stringify(patch),
   });
   if (!response.ok) {
     throw new ApiError(await readDetail(response));
