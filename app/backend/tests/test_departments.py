@@ -42,6 +42,11 @@ MARKETING_KIND_ID = 2
 # Тело создания: ровно один вид, ни имени, ни времени, ни ролей.
 DEPARTMENT: dict[str, Any] = {"kind_id": DEVELOPMENT_KIND_ID}
 
+# Telegram-значения в тестах вымышленные: настоящие токен и id чата живут только
+# в реестре проектов отдела и в репозиторий не попадают никогда.
+TELEGRAM_TOKEN = "123456789:AAHfakeTokenForDepartmentTests"
+TELEGRAM_CHAT_ID = "123456789"
+
 # Поля страницы правки: имя, образец значения, предел длины, текст отказа на длину.
 TEXT_FIELD_CASES: list[tuple[str, str, int, str]] = [
     ("repo_path", "gidvantus/workflow", 500, api.REPO_PATH_TOO_LONG),
@@ -50,8 +55,8 @@ TEXT_FIELD_CASES: list[tuple[str, str, int, str]] = [
     ("human_workspace", "D:\\Development\\VideCoding\\Workflow", 500, api.HUMAN_WORKSPACE_TOO_LONG),
     ("artifacts_dir", "D:\\Agents\\Workflow-artifacts", 500, api.ARTIFACTS_DIR_TOO_LONG),
     ("compose_project", "workflow-agent", 200, api.COMPOSE_PROJECT_TOO_LONG),
-    ("telegram_token", "9036504541:AAHWwieDEgLEliRUvT", 200, api.TELEGRAM_TOKEN_TOO_LONG),
-    ("telegram_chat_id", "294292338", 64, api.TELEGRAM_CHAT_ID_TOO_LONG),
+    ("telegram_token", TELEGRAM_TOKEN, 200, api.TELEGRAM_TOKEN_TOO_LONG),
+    ("telegram_chat_id", TELEGRAM_CHAT_ID, 64, api.TELEGRAM_CHAT_ID_TOO_LONG),
 ]
 TEXT_FIELDS = [field for field, _value, _max, _detail in TEXT_FIELD_CASES]
 
@@ -512,8 +517,8 @@ def test_patch_notifications_toggle_keeps_telegram_values(
         _department_url(created["id"]),
         json={
             "notifications_enabled": True,
-            "telegram_token": "9036504541:AAHWwieDEgLEliRUvT",
-            "telegram_chat_id": "294292338",
+            "telegram_token": TELEGRAM_TOKEN,
+            "telegram_chat_id": TELEGRAM_CHAT_ID,
         },
     )
 
@@ -523,8 +528,8 @@ def test_patch_notifications_toggle_keeps_telegram_values(
     assert enabled.json()["notifications_enabled"] is True
     assert disabled.status_code == status.HTTP_200_OK
     assert disabled.json()["notifications_enabled"] is False
-    assert disabled.json()["telegram_token"] == "9036504541:AAHWwieDEgLEliRUvT"
-    assert disabled.json()["telegram_chat_id"] == "294292338"
+    assert disabled.json()["telegram_token"] == TELEGRAM_TOKEN
+    assert disabled.json()["telegram_chat_id"] == TELEGRAM_CHAT_ID
 
 
 def test_patch_notifications_null_does_not_change(

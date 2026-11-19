@@ -7,6 +7,9 @@
 фикстура — теми же каталогами `DEFAULT_ROLES` и `DEFAULT_DEPARTMENT_KINDS`, что и ревизии
 `0003_departments` и `0006_department_kinds`: без сида таблицы `roles` и
 `department_kinds` пусты, и создание отдела падает на «нет такого вида».
+
+Фикстуры общие для всех модулей, поэтому копий движка в них нет. Исключение —
+`test_health.py`: у него свой клиент без базы, ручке здоровья база не нужна.
 """
 
 from collections.abc import Iterator
