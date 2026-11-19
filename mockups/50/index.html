@@ -8,13 +8,19 @@
       /*
        * МАКЕТ постановки issue #50: у отдела не одна пара «с/по», а список окон.
        *
-       * Стили ниже не являются продуктом: это копия токенов и компонентов
+       * Стили ниже — не продукт: это копия токенов и компонентов
        * app/frontend/src/index.css в одном файле, чтобы макет открывался двойным
-       * щелчком без сборки. Имена классов совпадают с продуктовыми; всё, что
-       * помечено «НОВОЕ», фронтендер переносит в index.css.
+       * щелчком без сборки. Имена классов совпадают с продуктовыми; всё, что помечено
+       * «НОВОЕ», фронтендер переносит в index.css. Изменённые продуктовые правила
+       * помечены «ИЗМЕНЕНО» — их тоже надо поправить, иначе макет не сойдётся с кодом.
        *
-       * Новых цветов, гарнитур, теней и радиусов нет: палитра — 17 токенов
-       * продукта. Гарнитура одна — system-ui. Время набрано табличными цифрами.
+       * Новых цветов, гарнитур, теней и радиусов нет: палитра — 17 токенов продукта.
+       * Гарнитура одна, system-ui; время набрано табличными цифрами.
+       *
+       * Сценарий после #51: отдел заводится видом в окне «Новый отдел» (времени там
+       * нет), а все поля, включая окна работы, живут на странице правки отдела.
+       * Поэтому время работы в макете — блок «Смена» страницы правки и ячейка списка,
+       * а не форма создания.
        */
 
       /* ---------- токены продукта ---------- */
@@ -52,20 +58,6 @@
         padding: 1.75rem;
       }
 
-      /* Текст для скринридера: подписи «начало»/«конец» у каждого окна видны
-         не глазами, а голосом — иначе шесть полей времени безымянны. */
-      .sr-only {
-        position: absolute;
-        width: 1px;
-        height: 1px;
-        margin: -1px;
-        padding: 0;
-        overflow: hidden;
-        clip: rect(0 0 0 0);
-        white-space: nowrap;
-        border: 0;
-      }
-
       /* ---------- оболочка приложения ---------- */
 
       .app {
@@ -80,6 +72,8 @@
         box-shadow: 0 30px 60px -48px rgba(23, 23, 15, 0.55);
         overflow: hidden;
       }
+
+      /* ---------- левое меню ---------- */
 
       .sidebar {
         display: flex;
@@ -191,6 +185,7 @@
 
       .crumbs {
         display: flex;
+        flex-wrap: wrap;
         align-items: center;
         gap: 0.5rem;
         margin: 0;
@@ -207,7 +202,7 @@
         font-weight: 500;
       }
 
-      /* ---------- страница проекта ---------- */
+      /* ---------- страница проекта: паспорт и подразделы ---------- */
 
       .project-head {
         display: flex;
@@ -262,6 +257,10 @@
         cursor: pointer;
       }
 
+      .tab:hover {
+        color: var(--ink);
+      }
+
       .tab[aria-selected='true'] {
         color: var(--ink);
         border-bottom-color: var(--ink);
@@ -311,8 +310,6 @@
       .nav__item:focus-visible,
       .field__input:focus-visible,
       .kebab:focus-visible,
-      .dialog__close:focus-visible,
-      .checkbox input:focus-visible,
       .tab:focus-visible {
         outline: 2px solid var(--ink);
         outline-offset: 2px;
@@ -331,6 +328,22 @@
         flex-direction: column;
         gap: 1.25rem;
         padding: 1.5rem;
+      }
+
+      .page-head {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 1rem;
+      }
+
+      .page-head__title {
+        margin: 0;
+        font-size: 1.5rem;
+        font-weight: 600;
+        letter-spacing: -0.015em;
+        line-height: 1.25;
       }
 
       /* ---------- карточка списка ---------- */
@@ -413,6 +426,10 @@
         border-bottom: 0;
       }
 
+      .row:hover {
+        background-color: #fbfaf7;
+      }
+
       .row__main {
         min-width: 0;
       }
@@ -461,49 +478,11 @@
         border-color: var(--border);
       }
 
-      .menu {
-        position: absolute;
-        top: calc(100% + 0.25rem);
-        right: 0;
-        z-index: 3;
-        display: flex;
-        flex-direction: column;
-        min-width: 8rem;
-        padding: 0.25rem;
-        background-color: var(--panel);
-        border: 1px solid var(--border);
-        border-radius: 0.625rem;
-        box-shadow: 0 18px 32px -18px rgba(23, 23, 15, 0.35);
-      }
-
-      .row:last-child .menu {
-        top: auto;
-        bottom: calc(100% + 0.25rem);
-      }
-
-      .menu__item {
-        padding: 0.4375rem 0.5rem;
-        font: inherit;
-        font-size: 0.8125rem;
-        font-weight: 500;
-        text-align: left;
-        color: var(--ink);
-        background-color: transparent;
-        border: 0;
-        border-radius: 0.375rem;
-        cursor: pointer;
-      }
-
-      .menu__item:hover {
-        background-color: var(--shell);
-      }
-
-      .menu__item--delete {
-        color: var(--danger);
-      }
-
-      .menu__item--delete:hover {
-        background-color: var(--danger-soft);
+      /* НОВОЕ. В макете есть только неактивный крестик — состояние отправки.
+         Правило повторяет `.btn:disabled`: та же непрозрачность, тот же курсор. */
+      .kebab:disabled {
+        cursor: not-allowed;
+        opacity: 0.45;
       }
 
       /* ---------- состояния списка ---------- */
@@ -534,140 +513,109 @@
         color: var(--danger);
       }
 
-      /* ---------- подвал ---------- */
+      /* ---------- раздел «Отделы» ---------- */
 
-      .footbar {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        justify-content: space-between;
-        gap: 0.5rem 1.5rem;
-        margin-top: auto;
-        padding: 0.875rem 1.5rem;
-        font-size: 0.75rem;
-        color: var(--muted);
-        border-top: 1px solid var(--border);
+      /* Сетка строки не меняется: колонка времени остаётся 8.5 rem. Окна идут друг под
+         другом, а не через запятую, поэтому расширять её не нужно. */
+      .table__head--department,
+      .row--department {
+        grid-template-columns:
+          minmax(0, 1.15fr) 8.5rem minmax(0, 2.4fr) 7.5rem
+          5.5rem;
       }
 
-      .footbar__note {
-        margin: 0;
-      }
-
-      /* ---------- диалоги ---------- */
-
-      .overlay {
-        position: fixed;
-        inset: 0;
-        z-index: 10;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        padding: 1.5rem;
-        background-color: rgba(23, 23, 15, 0.45);
-      }
-
-      .dialog {
+      .dept-time {
         display: flex;
         flex-direction: column;
-        gap: 1rem;
-        width: min(28rem, 100%);
-        max-height: calc(100vh - 3rem);
-        overflow-y: auto;
-        padding: 1.25rem;
-        background-color: var(--panel);
-        border: 1px solid var(--border);
-        border-radius: 0.875rem;
-        box-shadow: 0 24px 48px -30px rgba(23, 23, 15, 0.45);
-      }
-
-      .dialog--wide {
-        width: min(34rem, 100%);
-      }
-
-      .dialog__head {
-        display: flex;
-        align-items: flex-start;
-        justify-content: space-between;
-        gap: 0.75rem;
-      }
-
-      .dialog__title {
-        margin: 0;
-        font-size: 1rem;
-        font-weight: 600;
-        line-height: 1.35;
-      }
-
-      .dialog__close {
-        display: grid;
-        place-items: center;
-        width: 1.5rem;
-        height: 1.5rem;
-        padding: 0;
-        color: var(--muted);
-        background-color: transparent;
-        border: 0;
-        border-radius: 0.375rem;
-        cursor: pointer;
-      }
-
-      .dialog__close:hover {
-        color: var(--ink);
-        background-color: var(--shell);
-      }
-
-      .dialog__close:disabled {
-        cursor: not-allowed;
-        opacity: 0.45;
-      }
-
-      .dialog__form {
-        display: flex;
-        flex-direction: column;
-        gap: 0.875rem;
-      }
-
-      .field {
-        display: flex;
-        flex-direction: column;
-        gap: 0.3125rem;
+        gap: 0.125rem;
         min-width: 0;
       }
 
-      .field__label {
-        font-size: 0.75rem;
+      /* ИЗМЕНЕНО: было `white-space: nowrap`. Теперь в значении несколько окон, и
+         перенос разрешён между ними — внутри окна его держит `.dept-time__window`. */
+      .dept-time__value {
+        font-size: 0.8125rem;
         font-weight: 500;
+        line-height: 1.3;
+        color: var(--ink);
+        font-variant-numeric: tabular-nums;
+        white-space: normal;
+      }
+
+      /* НОВОЕ. Окно занимает свою строку: разряды `13:00` и `07:00` встают друг под
+         другом, и набор читается как расписание. Запятая остаётся концом предыдущей
+         строки, строка никогда не начинается со знака. */
+      .dept-time__window {
+        display: block;
+        white-space: nowrap;
+      }
+
+      .dept-time__note {
+        font-size: 0.75rem;
+        line-height: 1.3;
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+      }
+
+      .dept-time__value--empty {
+        font-weight: 400;
         color: var(--muted);
       }
 
-      .field__input {
-        width: 100%;
-        padding: 0.5rem 0.625rem;
-        font: inherit;
-        font-size: 0.875rem;
-        line-height: 1.4;
-        color: var(--ink);
-        background-color: var(--panel);
-        border: 1px solid var(--border);
-        border-radius: 0.5rem;
-      }
-
-      .field__input[aria-invalid='true'] {
-        border-color: var(--danger);
-      }
-
-      .field__hint {
-        margin: 0;
+      .row__kind {
+        margin: 0.125rem 0 0;
         font-size: 0.75rem;
+        line-height: 1.3;
+        color: var(--muted);
+      }
+
+      .row__roles {
+        margin: 0;
+        min-width: 0;
+        font-size: 0.8125rem;
         line-height: 1.45;
         color: var(--muted);
       }
 
-      .dialog__actions {
+      /* ---------- блок «Время работы» ---------- */
+
+      .time-block {
         display: flex;
-        justify-content: flex-end;
+        flex-direction: column;
+        gap: 0.375rem;
+      }
+
+      /* НОВОЕ. Список окон: ряд = начало, тире, конец, крестик. Последняя колонка
+         `auto`, а не 1.75 rem: у единственного окна кнопки удаления нет, и пустой
+         колонки в ряду не остаётся. */
+      .windows {
+        display: flex;
+        flex-direction: column;
         gap: 0.5rem;
       }
+
+      .window-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 0.5rem;
+      }
+
+      /* Тире между полями. В продуктовом `.time-row__dash` есть отступ снизу под
+         подписи полей; в ряду окон подписей нет, поэтому правило своё. */
+      .window-row__dash {
+        font-size: 0.875rem;
+        color: var(--muted-2);
+      }
+
+      /* НОВОЕ. «Добавить окно» — обычная `.btn`, но не на всю ширину колонки: в
+         flex-колонке кнопка растянулась бы. */
+      .windows__add {
+        align-self: flex-start;
+        margin-top: 0.125rem;
+      }
+
+      /* ---------- роли ---------- */
 
       .roles {
         display: flex;
@@ -704,9 +652,6 @@
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 0.4375rem 0.875rem;
-        margin: 0;
-        padding: 0;
-        border: 0;
       }
 
       .checkbox {
@@ -726,148 +671,141 @@
         accent-color: var(--dark);
       }
 
-      /* =========================================================
-         НОВОЕ для задачи #50 — это и есть предмет макета.
-         Новых токенов нет: только доли, те же радиусы и те же цвета.
-         ========================================================= */
+      /* ---------- страница правки отдела ---------- */
 
-      /* Пять колонок прежние, время шире на 1 rem: два окна встают друг под
-         другом без переноса внутри окна. Колонка ролей — по-прежнему самая
-         широкая и терпит сужение. */
-      .table__head--department,
-      .row--department {
-        grid-template-columns:
-          minmax(0, 1.15fr) 9.5rem minmax(0, 2.4fr) 7.5rem
-          5.5rem;
-      }
-
-      /* Время работы — по-прежнему главный герой раздела: значение табличными
-         цифрами, под ним одна служебная строка. Раньше значение было одной
-         строкой с `nowrap`; теперь это набор окон, и перенос разрешён. */
-      .dept-time {
-        display: flex;
-        flex-direction: column;
-        gap: 0.125rem;
-        min-width: 0;
-      }
-
-      .dept-time__value {
-        font-size: 0.8125rem;
-        font-weight: 500;
-        line-height: 1.35;
-        color: var(--ink);
-        font-variant-numeric: tabular-nums;
-      }
-
-      /* Каждое окно — своя строка: разряды встают друг под другом, и набор
-         читается как расписание, а не как строка, оборванная на «07:00–».
-         Запятая остаётся концом предыдущей строки, поэтому строка никогда не
-         начинается со знака препинания. */
-      .dept-time__window {
-        display: block;
-        white-space: nowrap;
-      }
-
-      .dept-time__note {
-        font-size: 0.75rem;
-        line-height: 1.3;
-        color: var(--muted);
-        font-variant-numeric: tabular-nums;
-      }
-
-      /* Роли в строке — текст через запятую, а не чипы: это контракт
-         department-item-roles. */
-      .row__roles {
-        margin: 0;
-        min-width: 0;
-        font-size: 0.8125rem;
-        line-height: 1.45;
-        color: var(--muted);
-      }
-
-      /* Список окон в форме: та же сетка «поле — тире — поле», что была у одной
-         пары, плюс крестик удаления в четвёртой колонке. У единственного окна
-         крестика нет, поэтому четвёртой колонки в этой строке тоже нет. */
-      .time-block {
-        display: flex;
-        flex-direction: column;
-        gap: 0.5rem;
-      }
-
-      .windows {
+      .dept-head {
         display: flex;
         flex-direction: column;
         gap: 0.375rem;
+        min-width: 0;
       }
 
-      .window-row {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto;
-        align-items: end;
-        gap: 0.5rem;
-      }
-
-      .window-row--single {
-        grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-      }
-
-      .window-row__dash {
-        padding-bottom: 0.5rem;
-        font-size: 0.875rem;
-        color: var(--muted-2);
-      }
-
-      /* Крестик удаления — тот же .kebab, что в строке списка: 1.75 rem,
-         прозрачная рамка, подсветка на наведении. Новый размер не заводим. */
-      .window-row__remove {
-        align-self: end;
-      }
-
-      /* «Добавить окно» стоит под списком и слева: оно пополняет список над
-         собой, а не заканчивает форму. */
-      .time-block__foot {
+      .dept-head__meta {
         display: flex;
         flex-wrap: wrap;
-        align-items: center;
+        align-items: baseline;
+        gap: 0.25rem 0.5rem;
+        margin: 0.125rem 0 0;
+        font-size: 0.8125rem;
+        color: var(--muted);
+      }
+
+      .form-section {
+        display: flex;
+        flex-direction: column;
+        gap: 0.875rem;
+        padding: 1.25rem 1.125rem;
+      }
+
+      .form-section + .form-section {
+        border-top: 1px solid var(--line);
+      }
+
+      .form-section__title {
+        margin: 0;
+        font-size: 0.8125rem;
+        font-weight: 600;
+        line-height: 1.4;
+      }
+
+      .form-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.875rem 1.25rem;
+      }
+
+      .form-section > .time-block {
+        max-width: 30rem;
+      }
+
+      .form-section > .roles {
+        max-width: 44rem;
+      }
+
+      .field--machine .field__input {
+        font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+        font-size: 0.8125rem;
+      }
+
+      .notify {
+        display: flex;
+        flex-direction: column;
+        gap: 0.875rem;
+      }
+
+      .form-foot {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+        padding: 0.875rem 1.125rem;
+        background-color: var(--chrome);
+        border-top: 1px solid var(--border);
+      }
+
+      .form-actions {
+        display: flex;
+        justify-content: flex-end;
         gap: 0.5rem;
       }
 
-      /* =========================================================
-         Лист макета: рамки, подписи кадров. Не часть продукта.
-         ========================================================= */
-
-      .sheet-head {
-        max-width: 80rem;
-        margin: 0 auto 1.75rem;
+      .field {
+        display: flex;
+        flex-direction: column;
+        gap: 0.3125rem;
       }
 
-      .sheet-kicker {
-        margin: 0 0 0.375rem;
+      .field__label {
+        font-size: 0.75rem;
+        font-weight: 500;
+        color: var(--muted);
+      }
+
+      .field__input {
+        width: 100%;
+        padding: 0.5rem 0.625rem;
+        font: inherit;
+        font-size: 0.875rem;
+        line-height: 1.4;
+        color: var(--ink);
+        background-color: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 0.5rem;
+      }
+
+      .field__input[aria-invalid='true'] {
+        border-color: var(--danger);
+      }
+
+      .field__hint {
         font-size: 0.75rem;
         color: var(--muted);
       }
 
-      .sheet-title {
-        margin: 0;
-        max-width: 48rem;
-        font-size: 1.375rem;
-        font-weight: 600;
-        letter-spacing: -0.01em;
-        line-height: 1.3;
+      .field--cost .field__input {
+        max-width: 12rem;
+        font-variant-numeric: tabular-nums;
       }
 
-      .sheet-sub {
-        margin: 0.5rem 0 0;
-        max-width: 48rem;
-        font-size: 0.875rem;
-        line-height: 1.55;
+      /* ---------- подвал ---------- */
+
+      .footbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem 1.5rem;
+        margin-top: auto;
+        padding: 0.875rem 1.5rem;
+        font-size: 0.75rem;
         color: var(--muted);
+        border-top: 1px solid var(--border);
       }
 
-      .sheet-sub code {
-        font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
-        font-size: 0.8125rem;
+      .footbar__note {
+        margin: 0;
       }
+
+      /* ==================== лист макета ==================== */
 
       .sheet {
         display: flex;
@@ -877,90 +815,108 @@
         margin: 0 auto;
       }
 
-      .frame {
+      .sheet__head {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+      }
+
+      .sheet__title {
         margin: 0;
+        font-size: 1.375rem;
+        font-weight: 600;
+        letter-spacing: -0.015em;
+        line-height: 1.3;
+      }
+
+      .sheet__lead {
+        margin: 0;
+        max-width: 74ch;
+        font-size: 0.9375rem;
+        line-height: 1.6;
+      }
+
+      .sheet__meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.25rem 0.75rem;
+        margin: 0;
+        font-size: 0.8125rem;
+        color: var(--muted);
+      }
+
+      .sheet__meta code {
+        font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+        font-size: 0.75rem;
+      }
+
+      .frame {
+        display: flex;
+        flex-direction: column;
+        gap: 0.875rem;
+        margin: 0;
+      }
+
+      /* В макете кадры стоят друг под другом, поэтому карточка приложения не тянется
+         на высоту окна: иначе под коротким содержимым кадра остаётся пустое поле,
+         а при съёмке во всю высоту листа `100vh` ещё и разъезжается. */
+      .frame .app {
+        min-height: 0;
       }
 
       .frame__cap {
         display: flex;
         flex-wrap: wrap;
         align-items: baseline;
-        gap: 0.25rem 0.75rem;
-        margin: 0 0 0.625rem;
-        font-size: 0.8125rem;
-        line-height: 1.4;
+        gap: 0.25rem 1rem;
+        padding-bottom: 0.625rem;
+        border-bottom: 1px solid var(--border);
       }
 
       .frame__name {
+        font-size: 0.9375rem;
+        font-weight: 600;
+      }
+
+      .frame__meta {
+        max-width: 58ch;
+        font-size: 0.8125rem;
+        line-height: 1.5;
+        color: var(--muted);
+      }
+
+      /* Состояния одного блока: карточка продукта под подписью листа. Подпись стоит
+         на холсте, а не внутри карточки, — её не спутаешь с интерфейсом. */
+      .states {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 1.25rem 1.5rem;
+        align-items: start;
+      }
+
+      .state {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+      }
+
+      .state__cap {
+        margin: 0;
+        font-size: 0.8125rem;
+        line-height: 1.5;
+        color: var(--muted);
+      }
+
+      .state__cap strong {
         font-weight: 600;
         color: var(--ink);
       }
 
-      .frame__meta {
-        color: var(--muted);
+      .state--wide {
+        grid-column: 1 / -1;
       }
 
-      .frame__app {
-        position: relative;
-      }
-
-      .frame__app .app {
-        min-height: 0;
-      }
-
-      /* В кадре с окном оболочка и подложка лежат в одной ячейке сетки:
-         высоту кадра задаёт большее из двух, подложка накрывает оболочку
-         целиком и на 1440, и на 375, где окно выше оболочки. */
-      .frame__app--dialog {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr);
-      }
-
-      .frame__app--dialog .app,
-      .frame__app--dialog .overlay {
-        grid-area: 1 / 1;
-      }
-
-      .frame__app--dialog .app {
-        min-height: 36rem;
-      }
-
-      .frame__app--dialog .overlay {
-        position: static;
-      }
-
-      .frame__dialogs {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 1.5rem;
-        align-items: start;
-      }
-
-      .frame__dialogs--three {
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-      }
-
-      .frame__dialog {
-        position: relative;
-        display: flex;
-        min-height: 0;
-      }
-
-      /* В кадре с окном подложка не абсолютная: кадр растёт по окну,
-         окно не обрезается. */
-      .frame__dialog .overlay {
-        position: static;
-        flex: 1;
-        align-items: flex-start;
-        border-radius: 0.875rem;
-        overflow: hidden;
-      }
-
-      .frame__dialog .dialog {
-        max-height: none;
-      }
-
-      /* ---------- адаптив: как в продукте ---------- */
+      /* ---------- ≤ 900 px ---------- */
 
       @media (max-width: 900px) {
         .app {
@@ -1019,19 +975,26 @@
           margin-left: -0.4375rem;
         }
 
-        .menu {
-          top: auto;
-          right: 0;
-          bottom: calc(100% + 0.25rem);
-          left: 0;
-          min-width: 0;
+        .page-head__title {
+          font-size: 1.375rem;
         }
 
-        .frame__dialogs,
-        .frame__dialogs--three {
+        /* НОВОЕ. В строке списка на узком экране у времени вся ширина, и окна встают
+           одной строкой через запятую: три столбика по 13 px — лишняя высота. */
+        .dept-time__window {
+          display: inline;
+        }
+
+        .states {
           grid-template-columns: minmax(0, 1fr);
         }
+
+        .state--wide {
+          grid-column: auto;
+        }
       }
+
+      /* ---------- ≤ 600 px ---------- */
 
       @media (max-width: 600px) {
         body {
@@ -1039,6 +1002,7 @@
         }
 
         .app {
+          min-height: calc(100vh - 1.5rem);
           border-radius: 0.875rem;
         }
 
@@ -1049,6 +1013,14 @@
 
         .brand__sub {
           display: none;
+        }
+
+        .page-head {
+          align-items: flex-start;
+        }
+
+        .page-head .btn--dark {
+          width: 100%;
         }
 
         .card__head {
@@ -1066,16 +1038,36 @@
           justify-content: space-between;
         }
 
-        .overlay {
-          padding: 0.75rem;
+        .roles__grid {
+          grid-template-columns: minmax(0, 1fr);
         }
 
-        .dialog--wide {
+        .form-grid {
+          grid-template-columns: minmax(0, 1fr);
+        }
+
+        .form-actions {
+          flex-direction: column;
+        }
+
+        .form-actions .btn {
           width: 100%;
         }
 
-        .roles__grid {
-          grid-template-columns: minmax(0, 1fr);
+        .form-foot {
+          padding: 0.875rem 1rem;
+        }
+
+        .form-section {
+          padding: 1.125rem 1rem;
+        }
+
+        .field--machine .field__input {
+          font-size: 0.75rem;
+        }
+
+        .field--cost .field__input {
+          max-width: none;
         }
 
         .footbar {
@@ -1085,1095 +1077,872 @@
         }
       }
 
-      /* На 375 ряд не ломается и не уезжает в две строки: тире и крестик
-         остаются в своей строке. Поле времени сжимается до ~7 rem — это
-         предел, на котором «ЧЧ:ММ» ещё читается; ниже 400 px ряд остаётся
-         прежним, а не превращается в столбик с висящим крестиком.
-         Проверено скриншотом на 375. */
+      /* ---------- ≤ 480 px ---------- */
 
-      @media (prefers-reduced-motion: reduce) {
-        .overlay,
-        .dialog {
-          animation: none;
+      @media (max-width: 480px) {
+        .topbar .btn {
+          width: 100%;
         }
       }
     </style>
   </head>
-
   <body>
-    <header class="sheet-head">
-      <p class="sheet-kicker">Макет постановки · issue #50 · метка needs-mockup</p>
-      <h1 class="sheet-title">
-        Отдел: несколько окон времени работы вместо одной пары «с/по»
-      </h1>
-      <p class="sheet-sub">
-        Время отдела было одной парой — стало списком от одного до шести окон. Кадры идут в
-        порядке сценария: строка списка, форма с одним окном, форма с тремя, предел в шесть,
-        отправка и отказ, состояния списка. Классы и токены — из
-        <code>app/frontend/src/index.css</code>, <code>data-testid</code> проставлены по
-        контракту. Новых цветов, гарнитур и зависимостей в макете нет.
-      </p>
-    </header>
+    <div class="sheet">
+      <header class="sheet__head">
+        <h1 class="sheet__title">Несколько окон времени работы отдела</h1>
+        <p class="sheet__lead">
+          У отдела вместо одной пары «начало — конец» список окон: от одного до шести,
+          суммарная длительность и все окна — в строке списка. Кадры показывают, где окна
+          живут после #51: время работы — это поле страницы правки отдела, а не окна
+          создания, которое теперь состоит из выбора вида.
+        </p>
+        <p class="sheet__meta">
+          <span>issue #50 · макет постановки</span>
+          <span>ветка <code>feature/50-department-windows</code></span>
+          <span>токены и классы — <code>app/frontend/src/index.css</code></span>
+          <span>кадры 1440 и 375</span>
+        </p>
+      </header>
 
-    <main class="sheet">
-      <!-- ==================== КАДР 1: СПИСОК ==================== -->
+      <!-- ==================== КАДР 1: СПИСОК ОТДЕЛОВ ==================== -->
       <figure class="frame">
         <figcaption class="frame__cap">
-          <span class="frame__name">Список отделов на странице проекта</span>
+          <span class="frame__name">1 · Список отделов: все окна и сумма</span>
           <span class="frame__meta">
-            4 отдела: одно, два и три окна · у «Разработки» первое окно идёт через полночь ·
-            «⋯» последней строки раскрыто
+            Окна стоят по одному в строке, длительность под ними — сумма всех окон.
+            Колонка времени прежняя, 8.5 rem: расширять её не понадобилось. У «Релизов»
+            шесть окон — предел: строка самая высокая, но сетка и дата на месте.
           </span>
         </figcaption>
 
-        <div class="frame__app">
-          <div class="app">
-            <aside class="sidebar">
-              <div class="brand">
-                <span class="brand__mark" aria-hidden="true">
-                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
-                    <path d="M2.5 5.5 8 2.5l5.5 3L8 8.5z" />
-                    <path d="M2.5 8.5 8 11.5l5.5-3" />
-                  </svg>
-                </span>
-                <span>
-                  <p class="brand__name">Workflow</p>
-                  <p class="brand__sub">Отдел разработки</p>
-                </span>
-              </div>
-
-              <nav class="nav" aria-label="Разделы">
-                <p class="nav__label">Разделы</p>
-                <a class="nav__item" href="#" aria-current="page" data-testid="nav-projects">
-                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
-                    <path d="M2 5.5A1.5 1.5 0 0 1 3.5 4h3l1.5 1.5h4A1.5 1.5 0 0 1 13.5 7v4.5A1.5 1.5 0 0 1 12 13H3.5A1.5 1.5 0 0 1 2 11.5z" />
-                  </svg>
-                  Проекты
-                  <span class="nav__count">2</span>
-                </a>
-              </nav>
-            </aside>
-
-            <div class="main">
-              <header class="topbar">
-                <p class="crumbs">
-                  Приложение
-                  <span class="crumbs__sep" aria-hidden="true">/</span>
-                  Проекты
-                  <span class="crumbs__sep" aria-hidden="true">/</span>
-                  <span class="crumbs__current">Workflow</span>
-                </p>
-                <button class="btn" type="button" data-testid="project-back">← К проектам</button>
-              </header>
-
-              <main class="content" data-testid="project-page">
-                <div class="page-head">
-                  <div class="project-head">
-                    <h1 class="page-head__title" data-testid="project-title">Workflow</h1>
-                    <p class="project-head__desc">
-                      Конвейер отдела разработки: проекты, задачи и отделы с их временем работы
-                      и набором ролей.
-                    </p>
-                    <p class="project-head__meta">
-                      <span class="project-repo">https://github.com/gidvantus/workflow</span>
-                      <span class="crumbs__sep" aria-hidden="true">·</span>
-                      <span>Обновлён 6 ноя 2026</span>
-                    </p>
-                  </div>
-                </div>
-
-                <div class="tabs" role="tablist" aria-label="Подразделы проекта">
-                  <button class="tab" type="button" role="tab" aria-selected="false" data-testid="project-tab-tasks">
-                    Задачи
-                  </button>
-                  <button class="tab" type="button" role="tab" aria-selected="true" data-testid="project-tab-departments">
-                    Отделы
-                  </button>
-                </div>
-
-                <section class="card" aria-labelledby="dept-list-title">
-                  <div class="card__head">
-                    <h2 class="card__title" id="dept-list-title">Список отделов</h2>
-                    <div class="card__tools">
-                      <span class="card__meta">4 отдела</span>
-                      <button class="btn btn--dark" type="button" data-testid="department-create">
-                        Добавить отдел
-                      </button>
-                    </div>
-                  </div>
-
-                  <div class="table__head table__head--department" role="presentation">
-                    <span>Отдел</span>
-                    <span>Время работы</span>
-                    <span>Роли</span>
-                    <span>Обновлён</span>
-                    <span>Действия</span>
-                  </div>
-
-                  <ul class="table__body" data-testid="departments-list">
-                    <!-- одно окно, через полночь -->
-                    <li class="row row--department" data-testid="department-item">
-                      <div class="row__main">
-                        <p class="row__name" data-testid="department-item-name">Аналитика и дизайн</p>
-                      </div>
-                      <div class="dept-time">
-                        <span class="dept-time__value" data-testid="department-item-time"
-                          ><span class="dept-time__window">09:00–18:00</span></span
-                        >
-                        <span class="dept-time__note">9 ч</span>
-                      </div>
-                      <p class="row__roles" data-testid="department-item-roles">Аналитик, Дизайнер</p>
-                      <p class="row__date">4 ноя 2026</p>
-                      <div class="row__actions">
-                        <button class="kebab" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Действия с отделом Аналитика и дизайн">
-                          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-                            <circle cx="3.5" cy="8" r="1.15" />
-                            <circle cx="8" cy="8" r="1.15" />
-                            <circle cx="12.5" cy="8" r="1.15" />
-                          </svg>
-                        </button>
-                      </div>
-                    </li>
-
-                    <!-- два окна, одно через полночь -->
-                    <li class="row row--department" data-testid="department-item">
-                      <div class="row__main">
-                        <p class="row__name" data-testid="department-item-name">Разработка</p>
-                      </div>
-                      <div class="dept-time">
-                        <span class="dept-time__value" data-testid="department-item-time"
-                          ><span class="dept-time__window">13:00–04:00, </span
-                          ><span class="dept-time__window">07:00–09:00</span></span
-                        >
-                        <span class="dept-time__note">17 ч · через полночь</span>
-                      </div>
-                      <p class="row__roles" data-testid="department-item-roles">
-                        Разработчик (полный стек), Бэкенд-разработчик, Фронтенд-разработчик,
-                        Тестировщик
-                      </p>
-                      <p class="row__date">5 ноя 2026</p>
-                      <div class="row__actions">
-                        <button class="kebab" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Действия с отделом Разработка">
-                          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-                            <circle cx="3.5" cy="8" r="1.15" />
-                            <circle cx="8" cy="8" r="1.15" />
-                            <circle cx="12.5" cy="8" r="1.15" />
-                          </svg>
-                        </button>
-                      </div>
-                    </li>
-
-                    <!-- два окна внутри суток -->
-                    <li class="row row--department" data-testid="department-item">
-                      <div class="row__main">
-                        <p class="row__name" data-testid="department-item-name">Выпуск и надёжность</p>
-                      </div>
-                      <div class="dept-time">
-                        <span class="dept-time__value" data-testid="department-item-time"
-                          ><span class="dept-time__window">10:00–14:00, </span
-                          ><span class="dept-time__window">17:00–21:00</span></span
-                        >
-                        <span class="dept-time__note">8 ч</span>
-                      </div>
-                      <p class="row__roles" data-testid="department-item-roles">
-                        DevOps-инженер, Безопасник, Код-ревьюер
-                      </p>
-                      <p class="row__date">2 ноя 2026</p>
-                      <div class="row__actions">
-                        <button class="kebab" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Действия с отделом Выпуск и надёжность">
-                          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-                            <circle cx="3.5" cy="8" r="1.15" />
-                            <circle cx="8" cy="8" r="1.15" />
-                            <circle cx="12.5" cy="8" r="1.15" />
-                          </svg>
-                        </button>
-                      </div>
-                    </li>
-
-                    <!-- три окна, последнее через полночь, «⋯» раскрыто -->
-                    <li class="row row--department" data-testid="department-item">
-                      <div class="row__main">
-                        <p class="row__name" data-testid="department-item-name">Поддержка</p>
-                      </div>
-                      <div class="dept-time">
-                        <span class="dept-time__value" data-testid="department-item-time"
-                          ><span class="dept-time__window">10:00–14:00, </span
-                          ><span class="dept-time__window">17:00–21:00, </span
-                          ><span class="dept-time__window">22:00–01:00</span></span
-                        >
-                        <span class="dept-time__note">11 ч · через полночь</span>
-                      </div>
-                      <p class="row__roles" data-testid="department-item-roles">
-                        Тестировщик, Код-ревьюер
-                      </p>
-                      <p class="row__date">1 ноя 2026</p>
-                      <div class="row__actions">
-                        <button class="kebab" type="button" aria-haspopup="menu" aria-expanded="true" aria-label="Действия с отделом Поддержка">
-                          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-                            <circle cx="3.5" cy="8" r="1.15" />
-                            <circle cx="8" cy="8" r="1.15" />
-                            <circle cx="12.5" cy="8" r="1.15" />
-                          </svg>
-                        </button>
-                        <div class="menu" role="menu" aria-label="Действия с отделом Поддержка">
-                          <button class="menu__item" type="button" role="menuitem" data-testid="department-edit">
-                            Изменить
-                          </button>
-                          <button class="menu__item menu__item--delete" type="button" role="menuitem" data-testid="department-delete">
-                            Удалить
-                          </button>
-                        </div>
-                      </div>
-                    </li>
-                  </ul>
-                </section>
-              </main>
-
-              <footer class="footbar">
-                <p class="footbar__note">© 2026 Workflow</p>
-              </footer>
+        <div class="app">
+          <aside class="sidebar">
+            <div class="brand">
+              <span class="brand__mark" aria-hidden="true">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+                  <path d="M2.5 5.5 8 2.5l5.5 3L8 8.5z" />
+                  <path d="M2.5 8.5 8 11.5l5.5-3" />
+                </svg>
+              </span>
+              <span>
+                <p class="brand__name">Workflow</p>
+                <p class="brand__sub">Отдел разработки</p>
+              </span>
             </div>
-          </div>
-        </div>
-      </figure>
 
-      <!-- ==================== КАДР 2: НОВЫЙ ОТДЕЛ, ОДНО ОКНО ==================== -->
-      <figure class="frame">
-        <figcaption class="frame__cap">
-          <span class="frame__name">Новый отдел: одно окно</span>
-          <span class="frame__meta">
-            кнопки удаления нет — единственное окно удалить нельзя · «Добавить окно» под списком ·
-            подсказка про полночь внизу
-          </span>
-        </figcaption>
+            <nav class="nav" aria-label="Разделы">
+              <p class="nav__label">Разделы</p>
+              <a class="nav__item" href="#" aria-current="page" onclick="return false">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+                  <path d="M2 5.5A1.5 1.5 0 0 1 3.5 4h3l1.5 1.5h4A1.5 1.5 0 0 1 13.5 7v4.5A1.5 1.5 0 0 1 12 13H3.5A1.5 1.5 0 0 1 2 11.5z" />
+                </svg>
+                Проекты
+                <span class="nav__count">12</span>
+              </a>
+            </nav>
+          </aside>
 
-        <div class="frame__app frame__app--dialog">
-          <div class="app" aria-hidden="true">
-            <aside class="sidebar">
-              <div class="brand">
-                <span class="brand__mark">
-                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
-                    <path d="M2.5 5.5 8 2.5l5.5 3L8 8.5z" />
-                    <path d="M2.5 8.5 8 11.5l5.5-3" />
-                  </svg>
-                </span>
-                <span>
-                  <p class="brand__name">Workflow</p>
-                  <p class="brand__sub">Отдел разработки</p>
-                </span>
-              </div>
-              <nav class="nav" aria-label="Разделы">
-                <p class="nav__label">Разделы</p>
-                <a class="nav__item" href="#" aria-current="page">
-                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
-                    <path d="M2 5.5A1.5 1.5 0 0 1 3.5 4h3l1.5 1.5h4A1.5 1.5 0 0 1 13.5 7v4.5A1.5 1.5 0 0 1 12 13H3.5A1.5 1.5 0 0 1 2 11.5z" />
-                  </svg>
-                  Проекты
-                  <span class="nav__count">2</span>
-                </a>
-              </nav>
-            </aside>
-            <div class="main">
-              <header class="topbar">
-                <p class="crumbs">
-                  Приложение
-                  <span class="crumbs__sep">/</span>
-                  Проекты
-                  <span class="crumbs__sep">/</span>
-                  <span class="crumbs__current">Workflow</span>
-                </p>
-                <button class="btn" type="button">← К проектам</button>
-              </header>
-              <main class="content">
-                <div class="page-head">
-                  <div class="project-head">
-                    <h1 class="page-head__title">Workflow</h1>
-                    <p class="project-head__desc">
-                      Конвейер отдела разработки: проекты, задачи и отделы с их временем работы
-                      и набором ролей.
-                    </p>
-                    <p class="project-head__meta">
-                      <span class="project-repo">https://github.com/gidvantus/workflow</span>
-                      <span class="crumbs__sep">·</span>
-                      <span>Обновлён 6 ноя 2026</span>
-                    </p>
-                  </div>
-                </div>
-                <div class="tabs" role="tablist" aria-label="Подразделы проекта">
-                  <button class="tab" type="button" role="tab" aria-selected="false">Задачи</button>
-                  <button class="tab" type="button" role="tab" aria-selected="true">Отделы</button>
-                </div>
-                <section class="card">
-                  <div class="card__head">
-                    <h2 class="card__title">Список отделов</h2>
-                    <div class="card__tools">
-                      <span class="card__meta">4 отдела</span>
-                      <button class="btn btn--dark" type="button">Добавить отдел</button>
-                    </div>
-                  </div>
-                  <div class="card__body">
-                    <p class="state__line">Загрузка…</p>
-                  </div>
-                </section>
-              </main>
-            </div>
-          </div>
+          <div class="main">
+            <header class="topbar">
+              <p class="crumbs">
+                Приложение
+                <span class="crumbs__sep" aria-hidden="true">/</span>
+                Проекты
+                <span class="crumbs__sep" aria-hidden="true">/</span>
+                <span class="crumbs__current">Workflow</span>
+              </p>
+              <button class="btn" type="button">← К проектам</button>
+            </header>
 
-          <div class="overlay">
-            <div class="dialog dialog--wide" role="dialog" aria-modal="true" aria-labelledby="f2-title" data-testid="department-form">
-              <div class="dialog__head">
-                <h2 class="dialog__title" id="f2-title">Новый отдел</h2>
-                <button class="dialog__close" type="button" aria-label="Закрыть окно">
-                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-                    <path d="M2 2l8 8M10 2l-8 8" />
-                  </svg>
-                </button>
-              </div>
-
-              <form class="dialog__form">
-                <div class="field">
-                  <label class="field__label" for="f2-name">Название</label>
-                  <input class="field__input" id="f2-name" type="text" value="Ночная смена" autocomplete="off" data-testid="department-form-name" />
-                </div>
-
-                <div class="time-block">
-                  <span class="field__label" id="f2-windows">Время работы</span>
-                  <div class="windows" role="group" aria-labelledby="f2-windows">
-                    <div class="window-row window-row--single">
-                      <div class="field">
-                        <label class="sr-only" for="f2-w0-start">Окно 1: начало</label>
-                        <input class="field__input" id="f2-w0-start" type="time" value="20:00" data-testid="department-form-window-start-0" />
-                      </div>
-                      <span class="window-row__dash" aria-hidden="true">—</span>
-                      <div class="field">
-                        <label class="sr-only" for="f2-w0-end">Окно 1: конец</label>
-                        <input class="field__input" id="f2-w0-end" type="time" value="06:00" data-testid="department-form-window-end-0" />
-                      </div>
-                    </div>
-                  </div>
-                  <div class="time-block__foot">
-                    <button class="btn" type="button" data-testid="department-form-window-add">Добавить окно</button>
-                  </div>
-                  <p class="field__hint">
-                    Если конец раньше начала, окно идёт через полночь. Окон может быть до шести.
+            <main class="content">
+              <div class="page-head">
+                <div class="project-head">
+                  <h1 class="page-head__title">Workflow</h1>
+                  <p class="project-head__desc">
+                    Отдел разработки надстройки: конвейер задач, отделы с ролями и
+                    расписанием, отчёты смен.
+                  </p>
+                  <p class="project-head__meta">
+                    <span class="project-repo">https://github.com/gidvantus/workflow</span>
+                    <span class="crumbs__sep" aria-hidden="true">·</span>
+                    <span>Обновлён 19 ноя 2026</span>
                   </p>
                 </div>
+              </div>
 
-                <div class="roles">
-                  <div class="roles__head">
-                    <span class="roles__title" id="f2-roles">Роли</span>
-                    <span class="chip">Отмечено 2 из 10</span>
-                  </div>
-                  <div class="roles__grid" role="group" aria-labelledby="f2-roles">
-                    <label class="checkbox"><input type="checkbox" data-testid="department-form-role-analyst" /><span>Аналитик</span></label>
-                    <label class="checkbox"><input type="checkbox" checked data-testid="department-form-role-dev-fullstack" /><span>Разработчик (полный стек)</span></label>
-                    <label class="checkbox"><input type="checkbox" data-testid="department-form-role-dev-backend" /><span>Бэкенд-разработчик</span></label>
-                    <label class="checkbox"><input type="checkbox" data-testid="department-form-role-dev-frontend" /><span>Фронтенд-разработчик</span></label>
-                    <label class="checkbox"><input type="checkbox" data-testid="department-form-role-code-review" /><span>Код-ревьюер</span></label>
-                    <label class="checkbox"><input type="checkbox" checked data-testid="department-form-role-tester" /><span>Тестировщик</span></label>
-                    <label class="checkbox"><input type="checkbox" data-testid="department-form-role-devops-delivery" /><span>DevOps-инженер</span></label>
-                    <label class="checkbox"><input type="checkbox" data-testid="department-form-role-design" /><span>Дизайнер</span></label>
-                    <label class="checkbox"><input type="checkbox" data-testid="department-form-role-security-review" /><span>Безопасник</span></label>
-                    <label class="checkbox"><input type="checkbox" data-testid="department-form-role-jev" /><span>Jev (System One)</span></label>
+              <div class="tabs" role="tablist" aria-label="Подразделы проекта">
+                <button class="tab" type="button" role="tab" aria-selected="false">Задачи</button>
+                <button class="tab" type="button" role="tab" aria-selected="true">Отделы</button>
+              </div>
+
+              <section class="card" aria-label="Список отделов">
+                <div class="card__head">
+                  <h2 class="card__title">Список отделов</h2>
+                  <div class="card__tools">
+                    <span class="card__meta">6 отделов</span>
+                    <button class="btn btn--dark" type="button">Добавить отдел</button>
                   </div>
                 </div>
-              </form>
 
-              <div class="dialog__actions">
-                <button class="btn" type="button" data-testid="department-form-cancel">Отмена</button>
-                <button class="btn btn--dark" type="button" data-testid="department-form-submit">Сохранить</button>
-              </div>
-            </div>
+                <div class="table__head table__head--department" role="presentation">
+                  <span>Отдел</span>
+                  <span>Время работы</span>
+                  <span>Роли</span>
+                  <span>Обновлён</span>
+                  <span>Действия</span>
+                </div>
+
+                <ul class="table__body">
+                  <!-- Два окна, первое через полночь: 13:00–04:00 = 15 ч, 07:00–09:00 = 2 ч. -->
+                  <li class="row row--department">
+                    <div class="row__main">
+                      <p class="row__name">Разработка</p>
+                      <p class="row__kind">Разработка</p>
+                    </div>
+                    <div class="dept-time">
+                      <span class="dept-time__value"
+                        ><span class="dept-time__window">13:00–04:00,</span>
+                        <span class="dept-time__window">07:00–09:00</span></span
+                      >
+                      <span class="dept-time__note">17 ч · через полночь</span>
+                    </div>
+                    <p class="row__roles">
+                      Аналитик, Бэкенд-разработчик, Фронтенд-разработчик, Код-ревьюер,
+                      Тестировщик
+                    </p>
+                    <p class="row__date">19 ноя 2026</p>
+                    <div class="row__actions">
+                      <button class="kebab" type="button" aria-label="Действия с отделом Разработка" aria-haspopup="menu" aria-expanded="false">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                          <circle cx="3.5" cy="8" r="1.15" />
+                          <circle cx="8" cy="8" r="1.15" />
+                          <circle cx="12.5" cy="8" r="1.15" />
+                        </svg>
+                      </button>
+                    </div>
+                  </li>
+
+                  <!-- Одно окно — самый частый случай: выглядит ровно как раньше. -->
+                  <li class="row row--department">
+                    <div class="row__main">
+                      <p class="row__name">Аналитика</p>
+                      <p class="row__kind">Разработка</p>
+                    </div>
+                    <div class="dept-time">
+                      <span class="dept-time__value"
+                        ><span class="dept-time__window">09:00–18:00</span></span
+                      >
+                      <span class="dept-time__note">9 ч</span>
+                    </div>
+                    <p class="row__roles">Аналитик, Дизайнер</p>
+                    <p class="row__date">12 ноя 2026</p>
+                    <div class="row__actions">
+                      <button class="kebab" type="button" aria-label="Действия с отделом Аналитика" aria-haspopup="menu" aria-expanded="false">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                          <circle cx="3.5" cy="8" r="1.15" />
+                          <circle cx="8" cy="8" r="1.15" />
+                          <circle cx="12.5" cy="8" r="1.15" />
+                        </svg>
+                      </button>
+                    </div>
+                  </li>
+
+                  <!-- Два окна внутри суток: 4 ч + 4 ч. -->
+                  <li class="row row--department">
+                    <div class="row__main">
+                      <p class="row__name">Выпуск</p>
+                      <p class="row__kind">Разработка</p>
+                    </div>
+                    <div class="dept-time">
+                      <span class="dept-time__value"
+                        ><span class="dept-time__window">10:00–14:00,</span>
+                        <span class="dept-time__window">17:00–21:00</span></span
+                      >
+                      <span class="dept-time__note">8 ч</span>
+                    </div>
+                    <p class="row__roles">DevOps-инженер, Код-ревьюер</p>
+                    <p class="row__date">3 ноя 2026</p>
+                    <div class="row__actions">
+                      <button class="kebab" type="button" aria-label="Действия с отделом Выпуск" aria-haspopup="menu" aria-expanded="false">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                          <circle cx="3.5" cy="8" r="1.15" />
+                          <circle cx="8" cy="8" r="1.15" />
+                          <circle cx="12.5" cy="8" r="1.15" />
+                        </svg>
+                      </button>
+                    </div>
+                  </li>
+
+                  <!-- Три окна, последнее через полночь: 4 ч + 4 ч + 3 ч = 11 ч. -->
+                  <li class="row row--department">
+                    <div class="row__main">
+                      <p class="row__name">Поддержка</p>
+                      <p class="row__kind">Разработка</p>
+                    </div>
+                    <div class="dept-time">
+                      <span class="dept-time__value"
+                        ><span class="dept-time__window">10:00–14:00,</span>
+                        <span class="dept-time__window">17:00–21:00,</span>
+                        <span class="dept-time__window">22:00–01:00</span></span
+                      >
+                      <span class="dept-time__note">11 ч · через полночь</span>
+                    </div>
+                    <p class="row__roles">Тестировщик, Бэкенд-разработчик</p>
+                    <p class="row__date">28 окт 2026</p>
+                    <div class="row__actions">
+                      <button class="kebab" type="button" aria-label="Действия с отделом Поддержка" aria-haspopup="menu" aria-expanded="false">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                          <circle cx="3.5" cy="8" r="1.15" />
+                          <circle cx="8" cy="8" r="1.15" />
+                          <circle cx="12.5" cy="8" r="1.15" />
+                        </svg>
+                      </button>
+                    </div>
+                  </li>
+
+                  <!-- Шесть окон — предел: строка списка самая высокая, но сетка цела. -->
+                  <li class="row row--department">
+                    <div class="row__main">
+                      <p class="row__name">Релизы</p>
+                      <p class="row__kind">Разработка</p>
+                    </div>
+                    <div class="dept-time">
+                      <span class="dept-time__value"
+                        ><span class="dept-time__window">08:00–10:00,</span>
+                        <span class="dept-time__window">10:00–12:00,</span>
+                        <span class="dept-time__window">12:00–14:00,</span>
+                        <span class="dept-time__window">14:00–16:00,</span>
+                        <span class="dept-time__window">16:00–18:00,</span>
+                        <span class="dept-time__window">18:00–20:00</span></span
+                      >
+                      <span class="dept-time__note">12 ч</span>
+                    </div>
+                    <p class="row__roles">DevOps-инженер, Тестировщик</p>
+                    <p class="row__date">26 окт 2026</p>
+                    <div class="row__actions">
+                      <button class="kebab" type="button" aria-label="Действия с отделом Релизы" aria-haspopup="menu" aria-expanded="false">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                          <circle cx="3.5" cy="8" r="1.15" />
+                          <circle cx="8" cy="8" r="1.15" />
+                          <circle cx="12.5" cy="8" r="1.15" />
+                        </svg>
+                      </button>
+                    </div>
+                  </li>
+
+                  <!-- У «Маркетинга» в наборе полей нет расписания: окон не будет никогда. -->
+                  <li class="row row--department">
+                    <div class="row__main">
+                      <p class="row__name">Маркетинг</p>
+                      <p class="row__kind">Маркетинг</p>
+                    </div>
+                    <div class="dept-time">
+                      <span class="dept-time__value dept-time__value--empty">нет расписания</span>
+                      <span class="dept-time__note"></span>
+                    </div>
+                    <p class="row__roles">—</p>
+                    <p class="row__date">20 окт 2026</p>
+                    <div class="row__actions">
+                      <button class="kebab" type="button" aria-label="Действия с отделом Маркетинг" aria-haspopup="menu" aria-expanded="false">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                          <circle cx="3.5" cy="8" r="1.15" />
+                          <circle cx="8" cy="8" r="1.15" />
+                          <circle cx="12.5" cy="8" r="1.15" />
+                        </svg>
+                      </button>
+                    </div>
+                  </li>
+                </ul>
+              </section>
+            </main>
+
+            <footer class="footbar">
+              <p class="footbar__note">© 2026 Workflow</p>
+            </footer>
           </div>
         </div>
       </figure>
 
-      <!-- ==================== КАДР 3: ИЗМЕНИТЬ, ТРИ ОКНА ==================== -->
+      <!-- ==================== КАДР 2: СТРАНИЦА ПРАВКИ ОТДЕЛА ==================== -->
       <figure class="frame">
         <figcaption class="frame__cap">
-          <span class="frame__name">Изменить отдел: три окна подставлены</span>
+          <span class="frame__name">2 · Страница правки отдела: два окна</span>
           <span class="frame__meta">
-            окна приходят с сервера в серверном порядке и не пересобираются · крестик есть у каждого
-            ряда, кроме последнего оставшегося
+            Список окон живёт в секции «Смена» — там, где до задачи стояла пара
+            «Время работы с / по». Остальные поля, роли и кнопки страницы не меняются.
           </span>
         </figcaption>
 
-        <div class="frame__app frame__app--dialog">
-          <div class="app" aria-hidden="true">
-            <aside class="sidebar">
-              <div class="brand">
-                <span class="brand__mark">
-                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
-                    <path d="M2.5 5.5 8 2.5l5.5 3L8 8.5z" />
-                    <path d="M2.5 8.5 8 11.5l5.5-3" />
-                  </svg>
-                </span>
-                <span>
-                  <p class="brand__name">Workflow</p>
-                  <p class="brand__sub">Отдел разработки</p>
-                </span>
-              </div>
-              <nav class="nav" aria-label="Разделы">
-                <p class="nav__label">Разделы</p>
-                <a class="nav__item" href="#" aria-current="page">
-                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
-                    <path d="M2 5.5A1.5 1.5 0 0 1 3.5 4h3l1.5 1.5h4A1.5 1.5 0 0 1 13.5 7v4.5A1.5 1.5 0 0 1 12 13H3.5A1.5 1.5 0 0 1 2 11.5z" />
-                  </svg>
-                  Проекты
-                  <span class="nav__count">2</span>
-                </a>
-              </nav>
-            </aside>
-            <div class="main">
-              <header class="topbar">
-                <p class="crumbs">
-                  Приложение
-                  <span class="crumbs__sep">/</span>
-                  Проекты
-                  <span class="crumbs__sep">/</span>
-                  <span class="crumbs__current">Workflow</span>
-                </p>
-                <button class="btn" type="button">← К проектам</button>
-              </header>
-              <main class="content">
-                <div class="page-head">
-                  <div class="project-head">
-                    <h1 class="page-head__title">Workflow</h1>
-                    <p class="project-head__desc">
-                      Конвейер отдела разработки: проекты, задачи и отделы с их временем работы
-                      и набором ролей.
-                    </p>
-                    <p class="project-head__meta">
-                      <span class="project-repo">https://github.com/gidvantus/workflow</span>
-                      <span class="crumbs__sep">·</span>
-                      <span>Обновлён 6 ноя 2026</span>
-                    </p>
-                  </div>
-                </div>
-                <div class="tabs" role="tablist" aria-label="Подразделы проекта">
-                  <button class="tab" type="button" role="tab" aria-selected="false">Задачи</button>
-                  <button class="tab" type="button" role="tab" aria-selected="true">Отделы</button>
-                </div>
-                <section class="card">
-                  <div class="card__head">
-                    <h2 class="card__title">Список отделов</h2>
-                    <div class="card__tools">
-                      <span class="card__meta">4 отдела</span>
-                      <button class="btn btn--dark" type="button">Добавить отдел</button>
-                    </div>
-                  </div>
-                  <div class="card__body">
-                    <p class="state__line">Загрузка…</p>
-                  </div>
-                </section>
-              </main>
+        <div class="app">
+          <aside class="sidebar">
+            <div class="brand">
+              <span class="brand__mark" aria-hidden="true">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+                  <path d="M2.5 5.5 8 2.5l5.5 3L8 8.5z" />
+                  <path d="M2.5 8.5 8 11.5l5.5-3" />
+                </svg>
+              </span>
+              <span>
+                <p class="brand__name">Workflow</p>
+                <p class="brand__sub">Отдел разработки</p>
+              </span>
             </div>
-          </div>
 
-          <div class="overlay">
-            <div class="dialog dialog--wide" role="dialog" aria-modal="true" aria-labelledby="f3-title" data-testid="department-form">
-              <div class="dialog__head">
-                <h2 class="dialog__title" id="f3-title">Изменить отдел</h2>
-                <button class="dialog__close" type="button" aria-label="Закрыть окно">
-                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-                    <path d="M2 2l8 8M10 2l-8 8" />
-                  </svg>
-                </button>
-              </div>
+            <nav class="nav" aria-label="Разделы">
+              <p class="nav__label">Разделы</p>
+              <a class="nav__item" href="#" aria-current="page" onclick="return false">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+                  <path d="M2 5.5A1.5 1.5 0 0 1 3.5 4h3l1.5 1.5h4A1.5 1.5 0 0 1 13.5 7v4.5A1.5 1.5 0 0 1 12 13H3.5A1.5 1.5 0 0 1 2 11.5z" />
+                </svg>
+                Проекты
+                <span class="nav__count">12</span>
+              </a>
+            </nav>
+          </aside>
 
-              <form class="dialog__form">
-                <div class="field">
-                  <label class="field__label" for="f3-name">Название</label>
-                  <input class="field__input" id="f3-name" type="text" value="Выпуск и надёжность" autocomplete="off" data-testid="department-form-name" />
-                </div>
+          <div class="main">
+            <header class="topbar">
+              <p class="crumbs">
+                Приложение
+                <span class="crumbs__sep" aria-hidden="true">/</span>
+                Проекты
+                <span class="crumbs__sep" aria-hidden="true">/</span>
+                Workflow
+                <span class="crumbs__sep" aria-hidden="true">/</span>
+                <span class="crumbs__current">Разработка</span>
+              </p>
+              <button class="btn" type="button">← К проекту</button>
+            </header>
 
-                <div class="time-block">
-                  <span class="field__label" id="f3-windows">Время работы</span>
-                  <div class="windows" role="group" aria-labelledby="f3-windows">
-                    <div class="window-row">
-                      <div class="field">
-                        <label class="sr-only" for="f3-w0-start">Окно 1: начало</label>
-                        <input class="field__input" id="f3-w0-start" type="time" value="10:00" data-testid="department-form-window-start-0" />
-                      </div>
-                      <span class="window-row__dash" aria-hidden="true">—</span>
-                      <div class="field">
-                        <label class="sr-only" for="f3-w0-end">Окно 1: конец</label>
-                        <input class="field__input" id="f3-w0-end" type="time" value="14:00" data-testid="department-form-window-end-0" />
-                      </div>
-                      <button class="kebab window-row__remove" type="button" aria-label="Удалить окно 1" data-testid="department-form-window-remove-0">
-                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-                          <path d="M2 2l8 8M10 2l-8 8" />
-                        </svg>
-                      </button>
-                    </div>
-
-                    <div class="window-row">
-                      <div class="field">
-                        <label class="sr-only" for="f3-w1-start">Окно 2: начало</label>
-                        <input class="field__input" id="f3-w1-start" type="time" value="17:00" data-testid="department-form-window-start-1" />
-                      </div>
-                      <span class="window-row__dash" aria-hidden="true">—</span>
-                      <div class="field">
-                        <label class="sr-only" for="f3-w1-end">Окно 2: конец</label>
-                        <input class="field__input" id="f3-w1-end" type="time" value="21:00" data-testid="department-form-window-end-1" />
-                      </div>
-                      <button class="kebab window-row__remove" type="button" aria-label="Удалить окно 2" data-testid="department-form-window-remove-1">
-                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-                          <path d="M2 2l8 8M10 2l-8 8" />
-                        </svg>
-                      </button>
-                    </div>
-
-                    <div class="window-row">
-                      <div class="field">
-                        <label class="sr-only" for="f3-w2-start">Окно 3: начало</label>
-                        <input class="field__input" id="f3-w2-start" type="time" value="22:00" data-testid="department-form-window-start-2" />
-                      </div>
-                      <span class="window-row__dash" aria-hidden="true">—</span>
-                      <div class="field">
-                        <label class="sr-only" for="f3-w2-end">Окно 3: конец</label>
-                        <input class="field__input" id="f3-w2-end" type="time" value="01:00" data-testid="department-form-window-end-2" />
-                      </div>
-                      <button class="kebab window-row__remove" type="button" aria-label="Удалить окно 3" data-testid="department-form-window-remove-2">
-                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-                          <path d="M2 2l8 8M10 2l-8 8" />
-                        </svg>
-                      </button>
-                    </div>
-                  </div>
-                  <div class="time-block__foot">
-                    <button class="btn" type="button" data-testid="department-form-window-add">Добавить окно</button>
-                  </div>
-                  <p class="field__hint">
-                    Если конец раньше начала, окно идёт через полночь. Окон может быть до шести.
+            <main class="content" data-testid="department-page">
+              <div class="page-head">
+                <div class="dept-head">
+                  <h1 class="page-head__title">Разработка</h1>
+                  <p class="dept-head__meta">
+                    <span>Вид: <span>Разработка</span></span>
+                    <span class="crumbs__sep" aria-hidden="true">·</span>
+                    <span>Обновлён 19 ноя 2026</span>
                   </p>
                 </div>
-
-                <div class="roles">
-                  <div class="roles__head">
-                    <span class="roles__title" id="f3-roles">Роли</span>
-                    <span class="chip">Отмечено 3 из 10</span>
-                  </div>
-                  <div class="roles__grid" role="group" aria-labelledby="f3-roles">
-                    <label class="checkbox"><input type="checkbox" data-testid="department-form-role-analyst-3" /><span>Аналитик</span></label>
-                    <label class="checkbox"><input type="checkbox" data-testid="department-form-role-dev-fullstack-3" /><span>Разработчик (полный стек)</span></label>
-                    <label class="checkbox"><input type="checkbox" data-testid="department-form-role-dev-backend-3" /><span>Бэкенд-разработчик</span></label>
-                    <label class="checkbox"><input type="checkbox" data-testid="department-form-role-dev-frontend-3" /><span>Фронтенд-разработчик</span></label>
-                    <label class="checkbox"><input type="checkbox" checked data-testid="department-form-role-code-review-3" /><span>Код-ревьюер</span></label>
-                    <label class="checkbox"><input type="checkbox" data-testid="department-form-role-tester-3" /><span>Тестировщик</span></label>
-                    <label class="checkbox"><input type="checkbox" checked data-testid="department-form-role-devops-delivery-3" /><span>DevOps-инженер</span></label>
-                    <label class="checkbox"><input type="checkbox" data-testid="department-form-role-design-3" /><span>Дизайнер</span></label>
-                    <label class="checkbox"><input type="checkbox" checked data-testid="department-form-role-security-review-3" /><span>Безопасник</span></label>
-                    <label class="checkbox"><input type="checkbox" data-testid="department-form-role-jev-3" /><span>Jev (System One)</span></label>
-                  </div>
-                </div>
-              </form>
-
-              <div class="dialog__actions">
-                <button class="btn" type="button" data-testid="department-form-cancel">Отмена</button>
-                <button class="btn btn--dark" type="button" data-testid="department-form-submit">Сохранить</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </figure>
-
-      <!-- ==================== КАДР 4: ШЕСТЬ ОКОН, ПРЕДЕЛ ==================== -->
-      <figure class="frame">
-        <figcaption class="frame__cap">
-          <span class="frame__name">Шесть окон: предел</span>
-          <span class="frame__meta">
-            «Добавить окно» неактивна, подсказка на месте · окна идут встык, последнее 20:00–00:00
-            идёт через полночь · окно выше оболочки не обрезается
-          </span>
-        </figcaption>
-
-        <div class="frame__app frame__app--dialog">
-          <div class="app" aria-hidden="true">
-            <aside class="sidebar">
-              <div class="brand">
-                <span class="brand__mark">
-                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
-                    <path d="M2.5 5.5 8 2.5l5.5 3L8 8.5z" />
-                    <path d="M2.5 8.5 8 11.5l5.5-3" />
-                  </svg>
-                </span>
-                <span>
-                  <p class="brand__name">Workflow</p>
-                  <p class="brand__sub">Отдел разработки</p>
-                </span>
-              </div>
-              <nav class="nav" aria-label="Разделы">
-                <p class="nav__label">Разделы</p>
-                <a class="nav__item" href="#" aria-current="page">
-                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
-                    <path d="M2 5.5A1.5 1.5 0 0 1 3.5 4h3l1.5 1.5h4A1.5 1.5 0 0 1 13.5 7v4.5A1.5 1.5 0 0 1 12 13H3.5A1.5 1.5 0 0 1 2 11.5z" />
-                  </svg>
-                  Проекты
-                  <span class="nav__count">2</span>
-                </a>
-              </nav>
-            </aside>
-            <div class="main">
-              <header class="topbar">
-                <p class="crumbs">
-                  Приложение
-                  <span class="crumbs__sep">/</span>
-                  Проекты
-                  <span class="crumbs__sep">/</span>
-                  <span class="crumbs__current">Workflow</span>
-                </p>
-                <button class="btn" type="button">← К проектам</button>
-              </header>
-              <main class="content">
-                <div class="page-head">
-                  <div class="project-head">
-                    <h1 class="page-head__title">Workflow</h1>
-                    <p class="project-head__desc">
-                      Конвейер отдела разработки: проекты, задачи и отделы с их временем работы
-                      и набором ролей.
-                    </p>
-                    <p class="project-head__meta">
-                      <span class="project-repo">https://github.com/gidvantus/workflow</span>
-                      <span class="crumbs__sep">·</span>
-                      <span>Обновлён 6 ноя 2026</span>
-                    </p>
-                  </div>
-                </div>
-                <div class="tabs" role="tablist" aria-label="Подразделы проекта">
-                  <button class="tab" type="button" role="tab" aria-selected="false">Задачи</button>
-                  <button class="tab" type="button" role="tab" aria-selected="true">Отделы</button>
-                </div>
-                <section class="card">
-                  <div class="card__head">
-                    <h2 class="card__title">Список отделов</h2>
-                    <div class="card__tools">
-                      <span class="card__meta">4 отдела</span>
-                      <button class="btn btn--dark" type="button">Добавить отдел</button>
-                    </div>
-                  </div>
-                  <div class="card__body">
-                    <p class="state__line">Загрузка…</p>
-                  </div>
-                </section>
-              </main>
-            </div>
-          </div>
-
-          <div class="overlay">
-            <div class="dialog dialog--wide" role="dialog" aria-modal="true" aria-labelledby="f4-title" data-testid="department-form">
-              <div class="dialog__head">
-                <h2 class="dialog__title" id="f4-title">Новый отдел</h2>
-                <button class="dialog__close" type="button" aria-label="Закрыть окно">
-                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-                    <path d="M2 2l8 8M10 2l-8 8" />
-                  </svg>
-                </button>
               </div>
 
-              <form class="dialog__form">
-                <div class="field">
-                  <label class="field__label" for="f4-name">Название</label>
-                  <input class="field__input" id="f4-name" type="text" value="Круглосуточный пульт" autocomplete="off" data-testid="department-form-name" />
-                </div>
-
-                <div class="time-block">
-                  <span class="field__label" id="f4-windows">Время работы</span>
-                  <div class="windows" role="group" aria-labelledby="f4-windows">
-                    <div class="window-row">
-                      <div class="field">
-                        <label class="sr-only" for="f4-w0-start">Окно 1: начало</label>
-                        <input class="field__input" id="f4-w0-start" type="time" value="00:00" data-testid="department-form-window-start-0" />
-                      </div>
-                      <span class="window-row__dash" aria-hidden="true">—</span>
-                      <div class="field">
-                        <label class="sr-only" for="f4-w0-end">Окно 1: конец</label>
-                        <input class="field__input" id="f4-w0-end" type="time" value="04:00" data-testid="department-form-window-end-0" />
-                      </div>
-                      <button class="kebab window-row__remove" type="button" aria-label="Удалить окно 1" data-testid="department-form-window-remove-0">
-                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-                          <path d="M2 2l8 8M10 2l-8 8" />
-                        </svg>
-                      </button>
-                    </div>
-
-                    <div class="window-row">
-                      <div class="field">
-                        <label class="sr-only" for="f4-w1-start">Окно 2: начало</label>
-                        <input class="field__input" id="f4-w1-start" type="time" value="04:00" data-testid="department-form-window-start-1" />
-                      </div>
-                      <span class="window-row__dash" aria-hidden="true">—</span>
-                      <div class="field">
-                        <label class="sr-only" for="f4-w1-end">Окно 2: конец</label>
-                        <input class="field__input" id="f4-w1-end" type="time" value="08:00" data-testid="department-form-window-end-1" />
-                      </div>
-                      <button class="kebab window-row__remove" type="button" aria-label="Удалить окно 2" data-testid="department-form-window-remove-1">
-                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-                          <path d="M2 2l8 8M10 2l-8 8" />
-                        </svg>
-                      </button>
-                    </div>
-
-                    <div class="window-row">
-                      <div class="field">
-                        <label class="sr-only" for="f4-w2-start">Окно 3: начало</label>
-                        <input class="field__input" id="f4-w2-start" type="time" value="08:00" data-testid="department-form-window-start-2" />
-                      </div>
-                      <span class="window-row__dash" aria-hidden="true">—</span>
-                      <div class="field">
-                        <label class="sr-only" for="f4-w2-end">Окно 3: конец</label>
-                        <input class="field__input" id="f4-w2-end" type="time" value="12:00" data-testid="department-form-window-end-2" />
-                      </div>
-                      <button class="kebab window-row__remove" type="button" aria-label="Удалить окно 3" data-testid="department-form-window-remove-2">
-                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-                          <path d="M2 2l8 8M10 2l-8 8" />
-                        </svg>
-                      </button>
-                    </div>
-
-                    <div class="window-row">
-                      <div class="field">
-                        <label class="sr-only" for="f4-w3-start">Окно 4: начало</label>
-                        <input class="field__input" id="f4-w3-start" type="time" value="12:00" data-testid="department-form-window-start-3" />
-                      </div>
-                      <span class="window-row__dash" aria-hidden="true">—</span>
-                      <div class="field">
-                        <label class="sr-only" for="f4-w3-end">Окно 4: конец</label>
-                        <input class="field__input" id="f4-w3-end" type="time" value="16:00" data-testid="department-form-window-end-3" />
-                      </div>
-                      <button class="kebab window-row__remove" type="button" aria-label="Удалить окно 4" data-testid="department-form-window-remove-3">
-                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-                          <path d="M2 2l8 8M10 2l-8 8" />
-                        </svg>
-                      </button>
-                    </div>
-
-                    <div class="window-row">
-                      <div class="field">
-                        <label class="sr-only" for="f4-w4-start">Окно 5: начало</label>
-                        <input class="field__input" id="f4-w4-start" type="time" value="16:00" data-testid="department-form-window-start-4" />
-                      </div>
-                      <span class="window-row__dash" aria-hidden="true">—</span>
-                      <div class="field">
-                        <label class="sr-only" for="f4-w4-end">Окно 5: конец</label>
-                        <input class="field__input" id="f4-w4-end" type="time" value="20:00" data-testid="department-form-window-end-4" />
-                      </div>
-                      <button class="kebab window-row__remove" type="button" aria-label="Удалить окно 5" data-testid="department-form-window-remove-4">
-                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-                          <path d="M2 2l8 8M10 2l-8 8" />
-                        </svg>
-                      </button>
-                    </div>
-
-                    <div class="window-row">
-                      <div class="field">
-                        <label class="sr-only" for="f4-w5-start">Окно 6: начало</label>
-                        <input class="field__input" id="f4-w5-start" type="time" value="20:00" data-testid="department-form-window-start-5" />
-                      </div>
-                      <span class="window-row__dash" aria-hidden="true">—</span>
-                      <div class="field">
-                        <label class="sr-only" for="f4-w5-end">Окно 6: конец</label>
-                        <input class="field__input" id="f4-w5-end" type="time" value="00:00" data-testid="department-form-window-end-5" />
-                      </div>
-                      <button class="kebab window-row__remove" type="button" aria-label="Удалить окно 6" data-testid="department-form-window-remove-5">
-                        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-                          <path d="M2 2l8 8M10 2l-8 8" />
-                        </svg>
-                      </button>
-                    </div>
-                  </div>
-                  <div class="time-block__foot">
-                    <button class="btn" type="button" disabled data-testid="department-form-window-add">
-                      Добавить окно
-                    </button>
-                  </div>
-                  <p class="field__hint">
-                    Если конец раньше начала, окно идёт через полночь. Окон может быть до шести.
-                  </p>
-                </div>
-
-                <div class="roles">
-                  <div class="roles__head">
-                    <span class="roles__title" id="f4-roles">Роли</span>
-                    <span class="chip">Отмечено 1 из 10</span>
-                  </div>
-                  <div class="roles__grid" role="group" aria-labelledby="f4-roles">
-                    <label class="checkbox"><input type="checkbox" data-testid="department-form-role-analyst-4" /><span>Аналитик</span></label>
-                    <label class="checkbox"><input type="checkbox" data-testid="department-form-role-dev-fullstack-4" /><span>Разработчик (полный стек)</span></label>
-                    <label class="checkbox"><input type="checkbox" data-testid="department-form-role-dev-backend-4" /><span>Бэкенд-разработчик</span></label>
-                    <label class="checkbox"><input type="checkbox" data-testid="department-form-role-dev-frontend-4" /><span>Фронтенд-разработчик</span></label>
-                    <label class="checkbox"><input type="checkbox" data-testid="department-form-role-code-review-4" /><span>Код-ревьюер</span></label>
-                    <label class="checkbox"><input type="checkbox" checked data-testid="department-form-role-tester-4" /><span>Тестировщик</span></label>
-                    <label class="checkbox"><input type="checkbox" data-testid="department-form-role-devops-delivery-4" /><span>DevOps-инженер</span></label>
-                    <label class="checkbox"><input type="checkbox" data-testid="department-form-role-design-4" /><span>Дизайнер</span></label>
-                    <label class="checkbox"><input type="checkbox" data-testid="department-form-role-security-review-4" /><span>Безопасник</span></label>
-                    <label class="checkbox"><input type="checkbox" data-testid="department-form-role-jev-4" /><span>Jev (System One)</span></label>
-                  </div>
-                </div>
-              </form>
-
-              <div class="dialog__actions">
-                <button class="btn" type="button" data-testid="department-form-cancel">Отмена</button>
-                <button class="btn btn--dark" type="button" data-testid="department-form-submit">Сохранить</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      </figure>
-
-      <!-- ==================== КАДР 5: ОТПРАВКА И ОТКАЗ ==================== -->
-      <figure class="frame">
-        <figcaption class="frame__cap">
-          <span class="frame__name">Отправка и отказ</span>
-          <span class="frame__meta">
-            «Сохраняю…»: кнопки и крестик неактивны, окно не закрывается · отказ: дословный текст
-            сервера, поля времени помечены `aria-invalid`, введённые окна не теряются
-          </span>
-        </figcaption>
-
-        <div class="frame__dialogs">
-          <!-- 5.1 отправка -->
-          <div class="frame__dialog">
-            <div class="overlay">
-              <div class="dialog dialog--wide" role="dialog" aria-modal="true" aria-labelledby="f5a-title" data-testid="department-form">
-                <div class="dialog__head">
-                  <h2 class="dialog__title" id="f5a-title">Изменить отдел</h2>
-                  <button class="dialog__close" type="button" aria-label="Закрыть окно" disabled>
-                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-                      <path d="M2 2l8 8M10 2l-8 8" />
-                    </svg>
-                  </button>
-                </div>
-
-                <form class="dialog__form">
-                  <div class="field">
-                    <label class="field__label" for="f5a-name">Название</label>
-                    <input class="field__input" id="f5a-name" type="text" value="Разработка" autocomplete="off" disabled data-testid="department-form-name" />
-                  </div>
+              <form class="card" aria-label="Настройки отдела">
+                <div class="form-section">
+                  <h2 class="form-section__title">Смена</h2>
 
                   <div class="time-block">
-                    <span class="field__label" id="f5a-windows">Время работы</span>
-                    <div class="windows" role="group" aria-labelledby="f5a-windows">
+                    <span class="field__label">Время работы</span>
+
+                    <div class="windows" role="group" aria-label="Время работы">
                       <div class="window-row">
-                        <div class="field">
-                          <label class="sr-only" for="f5a-w0-start">Окно 1: начало</label>
-                          <input class="field__input" id="f5a-w0-start" type="time" value="13:00" disabled data-testid="department-form-window-start-0" />
-                        </div>
+                        <input
+                          class="field__input"
+                          type="time"
+                          value="13:00"
+                          aria-label="Окно 1: начало"
+                        />
                         <span class="window-row__dash" aria-hidden="true">—</span>
-                        <div class="field">
-                          <label class="sr-only" for="f5a-w0-end">Окно 1: конец</label>
-                          <input class="field__input" id="f5a-w0-end" type="time" value="04:00" disabled data-testid="department-form-window-end-0" />
-                        </div>
-                        <button class="kebab window-row__remove" type="button" aria-label="Удалить окно 1" disabled data-testid="department-form-window-remove-0">
-                          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-                            <path d="M2 2l8 8M10 2l-8 8" />
+                        <input
+                          class="field__input"
+                          type="time"
+                          value="04:00"
+                          aria-label="Окно 1: конец"
+                        />
+                        <button class="kebab" type="button" aria-label="Удалить окно 1">
+                          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+                            <path d="M4 4l8 8M12 4l-8 8" />
                           </svg>
                         </button>
                       </div>
+
                       <div class="window-row">
-                        <div class="field">
-                          <label class="sr-only" for="f5a-w1-start">Окно 2: начало</label>
-                          <input class="field__input" id="f5a-w1-start" type="time" value="07:00" disabled data-testid="department-form-window-start-1" />
-                        </div>
+                        <input
+                          class="field__input"
+                          type="time"
+                          value="07:00"
+                          aria-label="Окно 2: начало"
+                        />
                         <span class="window-row__dash" aria-hidden="true">—</span>
-                        <div class="field">
-                          <label class="sr-only" for="f5a-w1-end">Окно 2: конец</label>
-                          <input class="field__input" id="f5a-w1-end" type="time" value="09:00" disabled data-testid="department-form-window-end-1" />
-                        </div>
-                        <button class="kebab window-row__remove" type="button" aria-label="Удалить окно 2" disabled data-testid="department-form-window-remove-1">
-                          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-                            <path d="M2 2l8 8M10 2l-8 8" />
+                        <input
+                          class="field__input"
+                          type="time"
+                          value="09:00"
+                          aria-label="Окно 2: конец"
+                        />
+                        <button class="kebab" type="button" aria-label="Удалить окно 2">
+                          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+                            <path d="M4 4l8 8M12 4l-8 8" />
                           </svg>
                         </button>
                       </div>
                     </div>
-                    <div class="time-block__foot">
-                      <button class="btn" type="button" disabled data-testid="department-form-window-add">
-                        Добавить окно
-                      </button>
-                    </div>
+
+                    <button class="btn windows__add" type="button">Добавить окно</button>
+
                     <p class="field__hint">
-                      Если конец раньше начала, окно идёт через полночь. Окон может быть до шести.
+                      Если конец раньше начала, окно идёт через полночь. Окон может быть до
+                      шести.
                     </p>
                   </div>
 
                   <div class="roles">
                     <div class="roles__head">
-                      <span class="roles__title" id="f5a-roles">Роли</span>
-                      <span class="chip">Отмечено 4 из 10</span>
+                      <span class="roles__title">Роли</span>
+                      <span class="chip">Отмечено 5 из 10</span>
                     </div>
-                    <div class="roles__grid" role="group" aria-labelledby="f5a-roles">
-                      <label class="checkbox"><input type="checkbox" disabled data-testid="department-form-role-analyst-5a" /><span>Аналитик</span></label>
-                      <label class="checkbox"><input type="checkbox" checked disabled data-testid="department-form-role-dev-fullstack-5a" /><span>Разработчик (полный стек)</span></label>
-                      <label class="checkbox"><input type="checkbox" checked disabled data-testid="department-form-role-dev-backend-5a" /><span>Бэкенд-разработчик</span></label>
-                      <label class="checkbox"><input type="checkbox" checked disabled data-testid="department-form-role-dev-frontend-5a" /><span>Фронтенд-разработчик</span></label>
-                      <label class="checkbox"><input type="checkbox" disabled data-testid="department-form-role-code-review-5a" /><span>Код-ревьюер</span></label>
-                      <label class="checkbox"><input type="checkbox" checked disabled data-testid="department-form-role-tester-5a" /><span>Тестировщик</span></label>
-                      <label class="checkbox"><input type="checkbox" disabled data-testid="department-form-role-devops-delivery-5a" /><span>DevOps-инженер</span></label>
-                      <label class="checkbox"><input type="checkbox" disabled data-testid="department-form-role-design-5a" /><span>Дизайнер</span></label>
-                      <label class="checkbox"><input type="checkbox" disabled data-testid="department-form-role-security-review-5a" /><span>Безопасник</span></label>
-                      <label class="checkbox"><input type="checkbox" disabled data-testid="department-form-role-jev-5a" /><span>Jev (System One)</span></label>
+
+                    <div class="roles__grid" role="group" aria-label="Роли">
+                      <label class="checkbox"><input type="checkbox" checked /><span>Аналитик</span></label>
+                      <label class="checkbox"><input type="checkbox" checked /><span>Разработчик (полный стек)</span></label>
+                      <label class="checkbox"><input type="checkbox" checked /><span>Бэкенд-разработчик</span></label>
+                      <label class="checkbox"><input type="checkbox" checked /><span>Фронтенд-разработчик</span></label>
+                      <label class="checkbox"><input type="checkbox" checked /><span>Код-ревьюер</span></label>
+                      <label class="checkbox"><input type="checkbox" /><span>Тестировщик</span></label>
+                      <label class="checkbox"><input type="checkbox" /><span>DevOps-инженер</span></label>
+                      <label class="checkbox"><input type="checkbox" /><span>Дизайнер</span></label>
+                      <label class="checkbox"><input type="checkbox" /><span>Безопасник</span></label>
+                      <label class="checkbox"><input type="checkbox" /><span>Jev (System One)</span></label>
                     </div>
                   </div>
-                </form>
+                </div>
 
-                <div class="dialog__actions">
-                  <button class="btn" type="button" disabled data-testid="department-form-cancel">Отмена</button>
-                  <button class="btn btn--dark" type="button" disabled data-testid="department-form-submit">
-                    Сохраняю…
-                  </button>
+                <div class="form-section">
+                  <h2 class="form-section__title">Где работает отдел</h2>
+
+                  <div class="form-grid">
+                    <div class="field field--machine">
+                      <span class="field__label">Путь репозитория</span>
+                      <input class="field__input" type="text" value="D:\Agents\Workflow" />
+                    </div>
+                    <div class="field field--machine">
+                      <span class="field__label">Базовая ветка</span>
+                      <input class="field__input" type="text" value="main" />
+                    </div>
+                    <div class="field field--machine">
+                      <span class="field__label">Рабочее пространство отдела</span>
+                      <input class="field__input" type="text" value="D:\Agents\Workflow" />
+                    </div>
+                    <div class="field field--machine">
+                      <span class="field__label">Рабочее пространство человека</span>
+                      <input class="field__input" type="text" value="D:\Development\VideCoding\Workflow" />
+                    </div>
+                    <div class="field field--machine">
+                      <span class="field__label">Директория для сохранения документов</span>
+                      <input class="field__input" type="text" value="D:\Agents\Workflow-artifacts" />
+                    </div>
+                    <div class="field field--machine">
+                      <span class="field__label">Название проекта в Docker</span>
+                      <input class="field__input" type="text" value="workflow-agent" />
+                    </div>
+                  </div>
+                </div>
+
+                <div class="form-section">
+                  <h2 class="form-section__title">Возврат и уведомления</h2>
+
+                  <div class="form-grid">
+                    <div class="field field--cost">
+                      <span class="field__label">Лимит возврата задачи</span>
+                      <input class="field__input" type="text" inputmode="numeric" value="3" />
+                      <span class="field__hint">
+                        Сколько раз задачу можно вернуть в работу. Пустое поле — 3.
+                      </span>
+                    </div>
+                  </div>
+
+                  <div class="notify">
+                    <label class="checkbox">
+                      <input type="checkbox" checked />
+                      <span>Включить уведомления</span>
+                    </label>
+
+                    <div class="form-grid">
+                      <div class="field field--machine">
+                        <span class="field__label">API telegram бота</span>
+                        <input class="field__input" type="text" value="1234567890:AAHdemo-not-a-real-token" />
+                      </div>
+                      <div class="field field--machine">
+                        <span class="field__label">Ваш ID</span>
+                        <input class="field__input" type="text" inputmode="numeric" value="100200300" />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="form-foot">
+                  <div class="form-actions">
+                    <button class="btn" type="button">Отмена</button>
+                    <button class="btn btn--dark" type="submit">Сохранить</button>
+                  </div>
+                </div>
+              </form>
+            </main>
+
+            <footer class="footbar">
+              <p class="footbar__note">© 2026 Workflow</p>
+            </footer>
+          </div>
+        </div>
+      </figure>
+
+      <!-- ==================== КАДР 3: СОСТОЯНИЯ БЛОКА «СМЕНА» ==================== -->
+      <figure class="frame">
+        <figcaption class="frame__cap">
+          <span class="frame__name">3 · Блок «Смена» в состояниях</span>
+          <span class="frame__meta">
+            Кадр из фрагментов страницы правки: секция «Смена» и полоса сохранения под
+            ней. Отказы стоят у кнопки «Сохранить» — там же, где стоит отказ любого поля
+            этой страницы; поля при этом подсвечены.
+          </span>
+        </figcaption>
+
+        <div class="states">
+          <!-- 1. Одно окно -->
+          <div class="state">
+            <p class="state__cap">
+              <strong>Одно окно.</strong> Расписание из одного окна выглядит и читается как
+              прежнее, поэтому крестика нет: единственное окно не удаляют — сначала
+              добавляют второе.
+            </p>
+            <form class="card" aria-label="Фрагмент страницы: одно окно">
+              <div class="form-section">
+                <h2 class="form-section__title">Смена</h2>
+                <div class="time-block">
+                  <span class="field__label">Время работы</span>
+                  <div class="windows" role="group" aria-label="Время работы">
+                    <div class="window-row">
+                      <input class="field__input" type="time" value="09:00" aria-label="Окно 1: начало" />
+                      <span class="window-row__dash" aria-hidden="true">—</span>
+                      <input class="field__input" type="time" value="18:00" aria-label="Окно 1: конец" />
+                    </div>
+                  </div>
+                  <button class="btn windows__add" type="button">Добавить окно</button>
+                  <p class="field__hint">
+                    Если конец раньше начала, окно идёт через полночь. Окон может быть до
+                    шести.
+                  </p>
                 </div>
               </div>
-            </div>
+              <div class="form-foot">
+                <div class="form-actions">
+                  <button class="btn" type="button">Отмена</button>
+                  <button class="btn btn--dark" type="submit">Сохранить</button>
+                </div>
+              </div>
+            </form>
           </div>
 
-          <!-- 5.2 отказ -->
-          <div class="frame__dialog">
-            <div class="overlay">
-              <div class="dialog dialog--wide" role="dialog" aria-modal="true" aria-labelledby="f5b-title" aria-describedby="f5b-error" data-testid="department-form">
-                <div class="dialog__head">
-                  <h2 class="dialog__title" id="f5b-title">Новый отдел</h2>
-                  <button class="dialog__close" type="button" aria-label="Закрыть окно">
-                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-                      <path d="M2 2l8 8M10 2l-8 8" />
-                    </svg>
-                  </button>
+          <!-- 2. Предел: шесть окон -->
+          <div class="state">
+            <p class="state__cap">
+              <strong>Шесть окон — предел.</strong> «Добавить окно» неактивна: седьмого окна
+              не бывает, и отказ «Окон времени работы не может быть больше шести» с
+              выключенной кнопкой человек не увидит.
+            </p>
+            <form class="card" aria-label="Фрагмент страницы: шесть окон">
+              <div class="form-section">
+                <h2 class="form-section__title">Смена</h2>
+                <div class="time-block">
+                  <span class="field__label">Время работы</span>
+                  <div class="windows" role="group" aria-label="Время работы">
+                    <div class="window-row">
+                      <input class="field__input" type="time" value="07:00" aria-label="Окно 1: начало" />
+                      <span class="window-row__dash" aria-hidden="true">—</span>
+                      <input class="field__input" type="time" value="10:00" aria-label="Окно 1: конец" />
+                      <button class="kebab" type="button" aria-label="Удалить окно 1">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+                      </button>
+                    </div>
+                    <div class="window-row">
+                      <input class="field__input" type="time" value="10:00" aria-label="Окно 2: начало" />
+                      <span class="window-row__dash" aria-hidden="true">—</span>
+                      <input class="field__input" type="time" value="13:00" aria-label="Окно 2: конец" />
+                      <button class="kebab" type="button" aria-label="Удалить окно 2">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+                      </button>
+                    </div>
+                    <div class="window-row">
+                      <input class="field__input" type="time" value="13:00" aria-label="Окно 3: начало" />
+                      <span class="window-row__dash" aria-hidden="true">—</span>
+                      <input class="field__input" type="time" value="16:00" aria-label="Окно 3: конец" />
+                      <button class="kebab" type="button" aria-label="Удалить окно 3">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+                      </button>
+                    </div>
+                    <div class="window-row">
+                      <input class="field__input" type="time" value="16:00" aria-label="Окно 4: начало" />
+                      <span class="window-row__dash" aria-hidden="true">—</span>
+                      <input class="field__input" type="time" value="19:00" aria-label="Окно 4: конец" />
+                      <button class="kebab" type="button" aria-label="Удалить окно 4">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+                      </button>
+                    </div>
+                    <div class="window-row">
+                      <input class="field__input" type="time" value="19:00" aria-label="Окно 5: начало" />
+                      <span class="window-row__dash" aria-hidden="true">—</span>
+                      <input class="field__input" type="time" value="22:00" aria-label="Окно 5: конец" />
+                      <button class="kebab" type="button" aria-label="Удалить окно 5">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+                      </button>
+                    </div>
+                    <div class="window-row">
+                      <input class="field__input" type="time" value="22:00" aria-label="Окно 6: начало" />
+                      <span class="window-row__dash" aria-hidden="true">—</span>
+                      <input class="field__input" type="time" value="01:00" aria-label="Окно 6: конец" />
+                      <button class="kebab" type="button" aria-label="Удалить окно 6">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+                      </button>
+                    </div>
+                  </div>
+                  <button class="btn windows__add" type="button" disabled>Добавить окно</button>
+                  <p class="field__hint">
+                    Если конец раньше начала, окно идёт через полночь. Окон может быть до
+                    шести.
+                  </p>
                 </div>
+              </div>
+              <div class="form-foot">
+                <div class="form-actions">
+                  <button class="btn" type="button">Отмена</button>
+                  <button class="btn btn--dark" type="submit">Сохранить</button>
+                </div>
+              </div>
+            </form>
+          </div>
 
-                <form class="dialog__form">
-                  <div class="field">
-                    <label class="field__label" for="f5b-name">Название</label>
-                    <input class="field__input" id="f5b-name" type="text" value="Разработка, ночные смены" autocomplete="off" data-testid="department-form-name" />
-                  </div>
-
-                  <div class="time-block">
-                    <span class="field__label" id="f5b-windows">Время работы</span>
-                    <div class="windows" role="group" aria-labelledby="f5b-windows" aria-invalid="true">
-                      <div class="window-row">
-                        <div class="field">
-                          <label class="sr-only" for="f5b-w0-start">Окно 1: начало</label>
-                          <input class="field__input" id="f5b-w0-start" type="time" value="13:00" aria-invalid="true" data-testid="department-form-window-start-0" />
-                        </div>
-                        <span class="window-row__dash" aria-hidden="true">—</span>
-                        <div class="field">
-                          <label class="sr-only" for="f5b-w0-end">Окно 1: конец</label>
-                          <input class="field__input" id="f5b-w0-end" type="time" value="04:00" aria-invalid="true" data-testid="department-form-window-end-0" />
-                        </div>
-                        <button class="kebab window-row__remove" type="button" aria-label="Удалить окно 1" data-testid="department-form-window-remove-0">
-                          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-                            <path d="M2 2l8 8M10 2l-8 8" />
-                          </svg>
-                        </button>
-                      </div>
-                      <div class="window-row">
-                        <div class="field">
-                          <label class="sr-only" for="f5b-w1-start">Окно 2: начало</label>
-                          <input class="field__input" id="f5b-w1-start" type="time" value="03:00" aria-invalid="true" data-testid="department-form-window-start-1" />
-                        </div>
-                        <span class="window-row__dash" aria-hidden="true">—</span>
-                        <div class="field">
-                          <label class="sr-only" for="f5b-w1-end">Окно 2: конец</label>
-                          <input class="field__input" id="f5b-w1-end" type="time" value="05:00" aria-invalid="true" data-testid="department-form-window-end-1" />
-                        </div>
-                        <button class="kebab window-row__remove" type="button" aria-label="Удалить окно 2" data-testid="department-form-window-remove-1">
-                          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
-                            <path d="M2 2l8 8M10 2l-8 8" />
-                          </svg>
-                        </button>
-                      </div>
-                    </div>
-                    <div class="time-block__foot">
-                      <button class="btn" type="button" data-testid="department-form-window-add">Добавить окно</button>
-                    </div>
-                    <p class="field__hint">
-                      Если конец раньше начала, окно идёт через полночь. Окон может быть до шести.
-                    </p>
-                  </div>
-
-                  <div class="roles">
-                    <div class="roles__head">
-                      <span class="roles__title" id="f5b-roles">Роли</span>
-                      <span class="chip">Отмечено 2 из 10</span>
-                    </div>
-                    <div class="roles__grid" role="group" aria-labelledby="f5b-roles">
-                      <label class="checkbox"><input type="checkbox" data-testid="department-form-role-analyst-5b" /><span>Аналитик</span></label>
-                      <label class="checkbox"><input type="checkbox" data-testid="department-form-role-dev-fullstack-5b" /><span>Разработчик (полный стек)</span></label>
-                      <label class="checkbox"><input type="checkbox" checked data-testid="department-form-role-dev-backend-5b" /><span>Бэкенд-разработчик</span></label>
-                      <label class="checkbox"><input type="checkbox" data-testid="department-form-role-dev-frontend-5b" /><span>Фронтенд-разработчик</span></label>
-                      <label class="checkbox"><input type="checkbox" data-testid="department-form-role-code-review-5b" /><span>Код-ревьюер</span></label>
-                      <label class="checkbox"><input type="checkbox" checked data-testid="department-form-role-tester-5b" /><span>Тестировщик</span></label>
-                      <label class="checkbox"><input type="checkbox" data-testid="department-form-role-devops-delivery-5b" /><span>DevOps-инженер</span></label>
-                      <label class="checkbox"><input type="checkbox" data-testid="department-form-role-design-5b" /><span>Дизайнер</span></label>
-                      <label class="checkbox"><input type="checkbox" data-testid="department-form-role-security-review-5b" /><span>Безопасник</span></label>
-                      <label class="checkbox"><input type="checkbox" data-testid="department-form-role-jev-5b" /><span>Jev (System One)</span></label>
+          <!-- 3. Отдел создан видом: окон ещё нет -->
+          <div class="state">
+            <p class="state__cap">
+              <strong>Окон ещё нет.</strong> Отдел заводится видом, время в окне создания не
+              спрашивают — на странице правки такой отдел показывает один пустой ряд.
+              Сохранение пустого ряда — отказ сервера, дословно: «Укажите хотя бы одно окно
+              времени работы».
+            </p>
+            <form class="card" aria-label="Фрагмент страницы: пустое окно">
+              <div class="form-section">
+                <h2 class="form-section__title">Смена</h2>
+                <div class="time-block">
+                  <span class="field__label">Время работы</span>
+                  <div class="windows" role="group" aria-label="Время работы">
+                    <div class="window-row">
+                      <input
+                        class="field__input"
+                        type="time"
+                        value=""
+                        aria-label="Окно 1: начало"
+                        aria-invalid="true"
+                        aria-describedby="department-edit-error-empty"
+                      />
+                      <span class="window-row__dash" aria-hidden="true">—</span>
+                      <input
+                        class="field__input"
+                        type="time"
+                        value=""
+                        aria-label="Окно 1: конец"
+                        aria-invalid="true"
+                        aria-describedby="department-edit-error-empty"
+                      />
                     </div>
                   </div>
-                </form>
+                  <button class="btn windows__add" type="button">Добавить окно</button>
+                  <p class="field__hint">
+                    Если конец раньше начала, окно идёт через полночь. Окон может быть до
+                    шести.
+                  </p>
+                </div>
+              </div>
+              <div class="form-foot">
+                <p class="error" id="department-edit-error-empty" role="alert">
+                  Укажите хотя бы одно окно времени работы
+                </p>
+                <div class="form-actions">
+                  <button class="btn" type="button">Отмена</button>
+                  <button class="btn btn--dark" type="submit">Сохранить</button>
+                </div>
+              </div>
+            </form>
+          </div>
 
-                <p class="error" id="f5b-error" data-testid="department-form-error" role="alert">
+          <!-- 4. Пересечение окон -->
+          <div class="state">
+            <p class="state__cap">
+              <strong>Окна пересекаются.</strong> 13:00–04:00 и 03:00–05:00 накладываются на
+              час. Отказ серверный, своих проверок на фронте нет: «Окна времени работы
+              пересекаются».
+            </p>
+            <form class="card" aria-label="Фрагмент страницы: окна пересекаются">
+              <div class="form-section">
+                <h2 class="form-section__title">Смена</h2>
+                <div class="time-block">
+                  <span class="field__label">Время работы</span>
+                  <div class="windows" role="group" aria-label="Время работы">
+                    <div class="window-row">
+                      <input class="field__input" type="time" value="13:00" aria-label="Окно 1: начало" aria-invalid="true" aria-describedby="department-edit-error-cross" />
+                      <span class="window-row__dash" aria-hidden="true">—</span>
+                      <input class="field__input" type="time" value="04:00" aria-label="Окно 1: конец" aria-invalid="true" aria-describedby="department-edit-error-cross" />
+                      <button class="kebab" type="button" aria-label="Удалить окно 1">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+                      </button>
+                    </div>
+                    <div class="window-row">
+                      <input class="field__input" type="time" value="03:00" aria-label="Окно 2: начало" aria-invalid="true" aria-describedby="department-edit-error-cross" />
+                      <span class="window-row__dash" aria-hidden="true">—</span>
+                      <input class="field__input" type="time" value="05:00" aria-label="Окно 2: конец" aria-invalid="true" aria-describedby="department-edit-error-cross" />
+                      <button class="kebab" type="button" aria-label="Удалить окно 2">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+                      </button>
+                    </div>
+                  </div>
+                  <button class="btn windows__add" type="button">Добавить окно</button>
+                  <p class="field__hint">
+                    Если конец раньше начала, окно идёт через полночь. Окон может быть до
+                    шести.
+                  </p>
+                </div>
+              </div>
+              <div class="form-foot">
+                <p class="error" id="department-edit-error-cross" role="alert">
                   Окна времени работы пересекаются
                 </p>
-
-                <div class="dialog__actions">
-                  <button class="btn" type="button" data-testid="department-form-cancel">Отмена</button>
-                  <button class="btn btn--dark" type="button" data-testid="department-form-submit">Сохранить</button>
+                <div class="form-actions">
+                  <button class="btn" type="button">Отмена</button>
+                  <button class="btn btn--dark" type="submit">Сохранить</button>
                 </div>
               </div>
-            </div>
+            </form>
+          </div>
+
+          <!-- 5. Отправка: карточка во всю ширину, потому что в секцию входят ещё роли -->
+          <div class="state state--wide">
+            <p class="state__cap">
+              <strong>Отправка.</strong> Пока запрос идёт, «Сохранить» показывает
+              «Сохраняю…», а «Отмена» и крестики окон выключены: уйти со страницы или
+              убрать окно из середины сохранения нельзя.
+            </p>
+            <form class="card" aria-label="Фрагмент страницы: отправка">
+              <div class="form-section">
+                <h2 class="form-section__title">Смена</h2>
+                <div class="time-block">
+                  <span class="field__label">Время работы</span>
+                  <div class="windows" role="group" aria-label="Время работы">
+                    <div class="window-row">
+                      <input class="field__input" type="time" value="13:00" aria-label="Окно 1: начало" />
+                      <span class="window-row__dash" aria-hidden="true">—</span>
+                      <input class="field__input" type="time" value="04:00" aria-label="Окно 1: конец" />
+                      <button class="kebab" type="button" aria-label="Удалить окно 1" disabled>
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+                      </button>
+                    </div>
+                    <div class="window-row">
+                      <input class="field__input" type="time" value="07:00" aria-label="Окно 2: начало" />
+                      <span class="window-row__dash" aria-hidden="true">—</span>
+                      <input class="field__input" type="time" value="09:00" aria-label="Окно 2: конец" />
+                      <button class="kebab" type="button" aria-label="Удалить окно 2" disabled>
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" /></svg>
+                      </button>
+                    </div>
+                  </div>
+                  <button class="btn windows__add" type="button" disabled>Добавить окно</button>
+                  <p class="field__hint">
+                    Если конец раньше начала, окно идёт через полночь. Окон может быть до
+                    шести.
+                  </p>
+                </div>
+
+                <div class="roles">
+                  <div class="roles__head">
+                    <span class="roles__title">Роли</span>
+                    <span class="chip">Отмечено 5 из 10</span>
+                  </div>
+                  <div class="roles__grid" role="group" aria-label="Роли">
+                    <label class="checkbox"><input type="checkbox" checked /><span>Аналитик</span></label>
+                    <label class="checkbox"><input type="checkbox" checked /><span>Разработчик (полный стек)</span></label>
+                    <label class="checkbox"><input type="checkbox" checked /><span>Бэкенд-разработчик</span></label>
+                    <label class="checkbox"><input type="checkbox" checked /><span>Фронтенд-разработчик</span></label>
+                    <label class="checkbox"><input type="checkbox" checked /><span>Код-ревьюер</span></label>
+                    <label class="checkbox"><input type="checkbox" /><span>Тестировщик</span></label>
+                    <label class="checkbox"><input type="checkbox" /><span>DevOps-инженер</span></label>
+                    <label class="checkbox"><input type="checkbox" /><span>Дизайнер</span></label>
+                    <label class="checkbox"><input type="checkbox" /><span>Безопасник</span></label>
+                    <label class="checkbox"><input type="checkbox" /><span>Jev (System One)</span></label>
+                  </div>
+                </div>
+              </div>
+              <div class="form-foot">
+                <div class="form-actions">
+                  <button class="btn" type="button" disabled>Отмена</button>
+                  <button class="btn btn--dark" type="submit" disabled>Сохраняю…</button>
+                </div>
+              </div>
+            </form>
           </div>
         </div>
       </figure>
 
-      <!-- ==================== КАДР 6: СОСТОЯНИЯ СПИСКА ==================== -->
+      <!-- ==================== КАДР 4: СОСТОЯНИЯ СПИСКА ==================== -->
       <figure class="frame">
         <figcaption class="frame__cap">
-          <span class="frame__name">Состояния карточки списка</span>
+          <span class="frame__name">4 · Состояния списка отделов</span>
           <span class="frame__meta">
-            «Загрузка…» · «Пока нет отделов» с подсказкой · «Сервер не отвечает» с повтором · форма
-            от этого не менялась
+            Карточка списка не меняется: загрузка, пустой список и отказ загрузки — как
+            сейчас. Колонка времени в пустой карточке не участвует.
           </span>
         </figcaption>
 
-        <div class="frame__dialogs frame__dialogs--three">
-          <div class="frame__dialog" style="background-color: var(--chrome)">
-            <section class="card" aria-labelledby="state-1-title" style="margin: auto; width: 100%">
+        <div class="states">
+          <div class="state state--wide">
+            <p class="state__cap"><strong>Загрузка.</strong> Счётчик отделов не показывается, пока список не приехал.</p>
+            <section class="card" aria-label="Список отделов: загрузка">
               <div class="card__head">
-                <h2 class="card__title" id="state-1-title">Список отделов</h2>
+                <h2 class="card__title">Список отделов</h2>
+                <div class="card__tools">
+                  <button class="btn btn--dark" type="button">Добавить отдел</button>
+                </div>
               </div>
               <div class="card__body">
-                <p class="state__line" data-testid="departments-state" aria-live="polite">Загрузка…</p>
+                <p class="state__line" aria-live="polite">Загрузка…</p>
               </div>
             </section>
           </div>
 
-          <div class="frame__dialog" style="background-color: var(--chrome)">
-            <section class="card" aria-labelledby="state-2-title" style="margin: auto; width: 100%">
+          <div class="state state--wide">
+            <p class="state__cap"><strong>Пусто.</strong> Подсказка называет кнопку, которая пополняет список.</p>
+            <section class="card" aria-label="Список отделов: пусто">
               <div class="card__head">
-                <h2 class="card__title" id="state-2-title">Список отделов</h2>
-                <span class="card__meta">0 отделов</span>
+                <h2 class="card__title">Список отделов</h2>
+                <div class="card__tools">
+                  <span class="card__meta">0 отделов</span>
+                  <button class="btn btn--dark" type="button">Добавить отдел</button>
+                </div>
               </div>
               <div class="card__body">
-                <p class="state__line" data-testid="departments-empty">Пока нет отделов</p>
-                <p class="state__hint">Нажмите «Добавить отдел», и он появится в этом списке.</p>
+                <p class="state__line">Пока нет отделов</p>
+                <p class="state__hint">
+                  Нажмите «Добавить отдел», выберите вид — и отдел появится в этом списке.
+                </p>
               </div>
             </section>
           </div>
 
-          <div class="frame__dialog" style="background-color: var(--chrome)">
-            <section class="card" aria-labelledby="state-3-title" style="margin: auto; width: 100%">
+          <div class="state state--wide">
+            <p class="state__cap"><strong>Отказ загрузки.</strong> Текст ошибки и «Повторить» в одну строку.</p>
+            <section class="card" aria-label="Список отделов: отказ загрузки">
               <div class="card__head">
-                <h2 class="card__title" id="state-3-title">Список отделов</h2>
+                <h2 class="card__title">Список отделов</h2>
+                <div class="card__tools">
+                  <button class="btn btn--dark" type="button">Добавить отдел</button>
+                </div>
               </div>
               <div class="card__body">
                 <div class="state__error">
-                  <p class="error" data-testid="department-error" role="alert">Сервер не отвечает</p>
-                  <button class="btn" type="button" data-testid="departments-retry">Повторить</button>
+                  <p class="error" role="alert">Сервер не отвечает</p>
+                  <button class="btn" type="button">Повторить</button>
                 </div>
               </div>
             </section>
           </div>
         </div>
       </figure>
-    </main>
+    </div>
   </body>
 </html>
