@@ -4,7 +4,7 @@ from fastapi import FastAPI, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from app.api import departments, projects, roles, tasks
+from app.api import department_kinds, departments, projects, roles, tasks
 from app.config import get_settings
 from app.db import check_db
 
@@ -38,10 +38,11 @@ def create_app() -> FastAPI:
         title="APP API",
         version=settings.version,
         description=(
-            "API приложения: живость сервиса и базы, справочник ролей, проекты (список "
-            "живых строк, создание, правка и мягкое удаление), отделы проекта (список "
-            "отделов проекта и создание отдела по вложенному пути "
-            "`/api/projects/{project_id}/departments`; правка и мягкое удаление отдела — "
+            "API приложения: живость сервиса и базы, справочники ролей и видов отделов, "
+            "проекты (список живых строк, создание, правка и мягкое удаление), отделы "
+            "проекта (список отделов проекта и создание отдела по вложенному пути "
+            "`/api/projects/{project_id}/departments`; создание выбирает вид отдела, а "
+            "имя отдела — название вида; правка полей страницы отдела и мягкое удаление — "
             "по пути `/api/departments/{department_id}`) и задачи проекта: список задач "
             "проекта и создание задачи. Правки и удаления задач в приложении нет."
         ),
@@ -51,6 +52,7 @@ def create_app() -> FastAPI:
     application.include_router(departments.router)
     application.include_router(departments.items_router)
     application.include_router(roles.router)
+    application.include_router(department_kinds.router)
     application.include_router(tasks.router)
 
     @application.get(

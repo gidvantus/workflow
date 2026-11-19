@@ -1,22 +1,30 @@
-"""Модель отдела: проект, время работы, набор ролей и признак мягкого удаления.
+"""Модель отдела: проект, вид из справочника, расписание, роли и признак мягкого удаления.
 
 Отдел живёт внутри проекта: `project_id` — внешний ключ на `projects`, а имя отдела
 уникально **в пределах проекта**. Колонка допускает `NULL`: данные, заведённые до
 появления привязки, не удаляются и не бэкфиллятся, поэтому строка без проекта — это
 сирота, а не ошибка схемы. Обязательность привязки держит API, а не колонка.
 
+Вид отдела (`kind_id`) задаёт набор полей страницы правки: порядок и состав полей
+приезжают наружу массивом `fields` из каталога `FIELD_KEYS_BY_CODE`. Имя отдела — это
+`title` вида на момент создания, и правкой оно не меняется: переименования отделов в
+приложении нет.
+
+Время работы **необязательное**: `NULL` — отдела без расписания (так создаются все
+отделы, а у вида «Маркетинг» времени работы нет вовсе). Расписание заполняется на
+странице правки одной парой «с/по»; переход через полночь (`end_time < start_time`,
+например 13:00 → 04:00) — штатный случай, а не два окна внутри суток.
+
 Отдел ссылается на роли через таблицу связи `department_roles`. Мягко удалённый отдел
 свои строки связи не теряет: физического удаления в приложении нет, поэтому набор ролей
-удалённого отдела остаётся в базе как есть.
-
-Переход через полночь (`end_time < start_time`, например 13:00 → 04:00) — штатный
-случай: это одна пара «с/по», а не два окна внутри суток, и никакой проверки на
-`end_time > start_time` здесь нет.
+удалённого отдела остаётся в базе как есть. Ролей может не быть ни одной: пустой набор —
+это не ошибка, а «роли ещё не заполнены».
 """
 
 from datetime import datetime, time
 
 from sqlalchemy import (
+    Boolean,
     Column,
     DateTime,
     ForeignKey,
@@ -31,10 +39,15 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
+from app.models.department_kind import DepartmentKind
 from app.models.role import Role
 
 # Условие частичного индекса: в нём участвуют только живые строки.
 ALIVE_CONDITION = text("deleted_at IS NULL")
+
+# Лимит возврата задачи по умолчанию: столько раз задачу можно вернуть в работу, если
+# поле на странице правки оставили пустым.
+DEFAULT_MAX_REWORK = 3
 
 # Связь многие-ко-многим: у отдела много ролей, роль может стоять в нескольких отделах.
 department_roles = Table(
@@ -63,10 +76,45 @@ class Department(Base):
         nullable=True,
         index=True,
     )
+    # Вид отдела: справочник `department_kinds`. Обязателен — миграция `0006` бэкфиллит
+    # его всем строкам, включая сирот, и только потом снимает `NULL`.
+    kind_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("department_kinds.id"),
+        nullable=False,
+        index=True,
+    )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     # Время работы одной парой «с/по»: конец раньше начала — переход через полночь.
-    start_time: Mapped[time] = mapped_column(Time, nullable=False)
-    end_time: Mapped[time] = mapped_column(Time, nullable=False)
+    # `NULL` — расписания нет: отдел создаётся без него, а у «Маркетинга» его нет вовсе.
+    start_time: Mapped[time | None] = mapped_column(Time, nullable=True)
+    end_time: Mapped[time | None] = mapped_column(Time, nullable=True)
+    # Поля страницы правки: набор задаёт вид, сами значения — необязательные строки.
+    repo_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    base_branch: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    workspace: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    human_workspace: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    artifacts_dir: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    compose_project: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # Токен и id чата телеграм-бота отдела. Хранятся открытым текстом: аутентификации в
+    # приложении нет, а стенд не публичный — это принятое решение, а не упущение.
+    telegram_token: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    telegram_chat_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Лимит возврата задачи: пустое поле на странице правки означает `DEFAULT_MAX_REWORK`.
+    max_rework: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=DEFAULT_MAX_REWORK,
+        server_default=str(DEFAULT_MAX_REWORK),
+    )
+    # Блок «Включить уведомления»: выключенный флажок значения полей токена и чата не
+    # стирает, он означает «поля не показывать и не отправлять».
+    notifications_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -84,6 +132,9 @@ class Department(Base):
         nullable=True,
         default=None,
     )
+    # `joined`: одна строка на отдел достаётся тем же `SELECT`, что и сам отдел, а не
+    # вторым запросом на каждую строку списка.
+    kind: Mapped[DepartmentKind] = relationship(DepartmentKind, lazy="joined")
     # `selectin`: роли приезжают одним дополнительным запросом, а не по строке на отдел,
     # и порядок ответа задаёт `id`, а не порядок в таблице связи.
     roles: Mapped[list[Role]] = relationship(
