@@ -1,4 +1,4 @@
-"""Ручки отделов: отделы проекта и правка/удаление отдельной строки.
+"""Ручки отделов: список и создание в проекте, правка/удаление отдельной строки.
 
 Отдел живёт внутри проекта, поэтому список и создание вложены в проект
 (`/api/projects/{project_id}/departments`) и первым шагом проверяют, что проект жив:
@@ -6,10 +6,19 @@
 проектов. Проверка берётся из `app.api.projects`, а не переписывается здесь: текст
 `404` у обеих половин один и тот же.
 
+Создание выбирает только вид отдела: имя отдела — это `title` вида на момент создания,
+а время работы и роли заполняются на странице правки. Поэтому новый отдел приходит с
+`start_time: null`, `end_time: null`, `roles: []` и `max_rework: 3`, и второго отдела
+того же вида в проекте быть не может — имя занято (`409`).
+
 Правка и удаление адресуются отделом, а не парой «проект + отдел»: плоский путь
 `/api/departments/{department_id}` достаёт и строку без проекта — сироту, заведённую до
 привязки отделов к проектам. В списке проекта такая строка не видна, а `PATCH` и
 `DELETE` по ней работают: иначе мёртвый груз нельзя было бы убрать вовсе.
+
+Вид отдела задаёт **набор полей страницы**, но не ограничивает `PATCH`: ручка принимает
+любое известное поле, отказа «поле не того вида» в этой задаче нет. Набор полей — правило
+отображения, а не авторизация, и третьему виду он тоже не мешает.
 
 Уникальность названия — правило проекта: имя занято, только если живой отдел **этого**
 проекта уже так называется. Одно и то же имя в двух проектах — не конфликт.
@@ -19,12 +28,14 @@
 
 Время работы — одна пара «с/по». `end_time` меньше `start_time` — это переход через
 полночь (13:00 → 04:00), штатный случай: запрещать его нельзя и «исправлять» тоже.
+Пустые оба поля — расписание очищается; пуст только один — отказ: половина пары
+расписанием не является.
 """
 
 import re
 from collections.abc import Sequence
 from datetime import UTC, datetime, time
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
@@ -33,7 +44,8 @@ from sqlalchemy.orm import Session
 
 from app.api.projects import PROJECT_NOT_FOUND, _get_alive_project
 from app.db import get_db
-from app.models.department import Department
+from app.models.department import DEFAULT_MAX_REWORK, Department
+from app.models.department_kind import DepartmentKind
 from app.models.role import Role
 from app.schemas.department import DepartmentCreate, DepartmentResponse, DepartmentUpdate
 
@@ -47,21 +59,53 @@ items_router = APIRouter(prefix="/api/departments", tags=["departments"])
 # Сессия на запрос: одна и та же зависимость у всех четырёх ручек.
 DbSession = Annotated[Session, Depends(get_db)]
 
-NAME_MAX_LENGTH = 200
-
 # Время принимается строго как `ЧЧ:ММ`: `9:00` — это уже отказ, а не «починим сами».
 CLOCK_PATTERN = re.compile(r"^\d{2}:\d{2}$")
 CLOCK_FORMAT = "%H:%M"
 
-NAME_REQUIRED = "Укажите название отдела"
-NAME_TOO_LONG = "Название отдела длиннее 200 символов"
+# Длины полей страницы правки. Ограничение схемы, а не вкуса: у каждого — свой текст.
+REPO_PATH_MAX_LENGTH = 500
+BASE_BRANCH_MAX_LENGTH = 200
+WORKSPACE_MAX_LENGTH = 500
+HUMAN_WORKSPACE_MAX_LENGTH = 500
+ARTIFACTS_DIR_MAX_LENGTH = 500
+COMPOSE_PROJECT_MAX_LENGTH = 200
+TELEGRAM_TOKEN_MAX_LENGTH = 200
+TELEGRAM_CHAT_ID_MAX_LENGTH = 64
+
+# Лимит возврата задачи: 0 — «возвращать нельзя», 99 — верхняя граница поля ввода.
+MAX_REWORK_MIN = 0
+MAX_REWORK_MAX = 99
+
 CLOCK_INVALID = "Время работы указывается как ЧЧ:ММ, например 09:00"
 CLOCK_EQUAL = "Начало и конец рабочего времени совпадают"
-ROLES_REQUIRED = "Выберите хотя бы одну роль"
 ROLE_UNKNOWN = "Выбрана роль, которой нет в списке ролей"
+KIND_UNKNOWN = "Выбран вид отдела, которого нет в справочнике"
 NO_FIELDS_TO_UPDATE = "Нет полей для изменения"
 NAME_TAKEN = "Отдел с таким названием уже есть"
 DEPARTMENT_NOT_FOUND = "Отдел не найден"
+REPO_PATH_TOO_LONG = "Путь репозитория длиннее 500 символов"
+BASE_BRANCH_TOO_LONG = "Базовая ветка длиннее 200 символов"
+WORKSPACE_TOO_LONG = "Рабочее пространство отдела длиннее 500 символов"
+HUMAN_WORKSPACE_TOO_LONG = "Рабочее пространство человека длиннее 500 символов"
+ARTIFACTS_DIR_TOO_LONG = "Директория для сохранения документов длиннее 500 символов"
+COMPOSE_PROJECT_TOO_LONG = "Название проекта в Docker длиннее 200 символов"
+TELEGRAM_TOKEN_TOO_LONG = "API telegram бота длиннее 200 символов"
+TELEGRAM_CHAT_ID_TOO_LONG = "Ваш ID длиннее 64 символов"
+MAX_REWORK_INVALID = "Лимит возврата задачи указывается целым числом от 0 до 99"
+
+# Строковые поля страницы правки: имя поля → (предел длины, текст отказа). Порядок
+# словаря — порядок проверки и сообщений в документации.
+TEXT_FIELDS: dict[str, tuple[int, str]] = {
+    "repo_path": (REPO_PATH_MAX_LENGTH, REPO_PATH_TOO_LONG),
+    "base_branch": (BASE_BRANCH_MAX_LENGTH, BASE_BRANCH_TOO_LONG),
+    "workspace": (WORKSPACE_MAX_LENGTH, WORKSPACE_TOO_LONG),
+    "human_workspace": (HUMAN_WORKSPACE_MAX_LENGTH, HUMAN_WORKSPACE_TOO_LONG),
+    "artifacts_dir": (ARTIFACTS_DIR_MAX_LENGTH, ARTIFACTS_DIR_TOO_LONG),
+    "compose_project": (COMPOSE_PROJECT_MAX_LENGTH, COMPOSE_PROJECT_TOO_LONG),
+    "telegram_token": (TELEGRAM_TOKEN_MAX_LENGTH, TELEGRAM_TOKEN_TOO_LONG),
+    "telegram_chat_id": (TELEGRAM_CHAT_ID_MAX_LENGTH, TELEGRAM_CHAT_ID_TOO_LONG),
+}
 
 
 def _reject(detail: str) -> HTTPException:
@@ -69,14 +113,30 @@ def _reject(detail: str) -> HTTPException:
     return HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail)
 
 
-def validate_name(value: str) -> str:
-    """Название: вернуть обрезанное значение или отказать `422`."""
-    name = value.strip()
-    if not name:
-        raise _reject(NAME_REQUIRED)
-    if len(name) > NAME_MAX_LENGTH:
-        raise _reject(NAME_TOO_LONG)
-    return name
+def validate_text(value: str | None, max_length: int, too_long: str) -> str | None:
+    """Строковое поле: обрезать по краям и превратить пустое в `NULL`.
+
+    `null` и `""` значат одно и то же — «не заполнено», поэтому в базе не появляется ни
+    пустая строка, ни строка из пробелов: и то и другое читается на экране как пустое
+    поле. Длина проверяется после обрезки, чтобы пробелы по краям не считались.
+    """
+    if value is None:
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    if len(cleaned) > max_length:
+        raise _reject(too_long)
+    return cleaned
+
+
+def validate_max_rework(value: int | None) -> int:
+    """Лимит возврата: `null` (пустое поле) — умолчание `3`, иначе `0..99`."""
+    if value is None:
+        return DEFAULT_MAX_REWORK
+    if not MAX_REWORK_MIN <= value <= MAX_REWORK_MAX:
+        raise _reject(MAX_REWORK_INVALID)
+    return value
 
 
 def validate_time(value: str) -> time:
@@ -106,23 +166,59 @@ def validate_times(start: str, end: str) -> tuple[time, time]:
 
 
 def validate_role_ids(db: Session, role_ids: list[int]) -> list[Role]:
-    """Набор ролей: непустой, без повторов, каждая роль есть в справочнике.
+    """Набор ролей: без повторов, каждая роль есть в справочнике.
 
-    Повтор схлопывается молча — это не ошибка ввода. Порядок ответа задаёт `id` роли,
-    а не порядок в присланном списке.
+    Пустой набор допустим и означает «ролей нет»: требование «хотя бы одна роль» из
+    контракта ушло. Повтор схлопывается молча — это не ошибка ввода. Порядок ответа
+    задаёт `id` роли, а не порядок в присланном списке.
     """
     unique_ids = list(dict.fromkeys(role_ids))
     if not unique_ids:
-        raise _reject(ROLES_REQUIRED)
+        return []
     roles = db.scalars(select(Role).where(Role.id.in_(unique_ids)).order_by(Role.id)).all()
     if len(roles) != len(unique_ids):
         raise _reject(ROLE_UNKNOWN)
     return list(roles)
 
 
-def _clock(value: time) -> str:
-    """Обратное преобразование: время из базы в строку `ЧЧ:ММ` для повторной проверки."""
+def _clock(value: time | None) -> str | None:
+    """Обратное преобразование: время из базы в строку `ЧЧ:ММ`; `NULL` — так `NULL`."""
+    if value is None:
+        return None
     return value.strftime(CLOCK_FORMAT)
+
+
+def _payload_clock(value: str | None) -> str | None:
+    """Присланное время: `null` и `""` одинаково значат «поле пустое»."""
+    if not value:
+        return None
+    return value
+
+
+def _patched_schedule(
+    department: Department,
+    changes: dict[str, Any],
+) -> tuple[time | None, time | None]:
+    """Итоговая пара «с/по» после правки: проверяется целиком, а не половина.
+
+    Неприсланное поле берётся из базы, и если в базе его нет — считается пустым. Оба
+    пусты — расписание очищается; пуст только один — отказ: половина пары не расписание.
+    """
+    raw_start = (
+        _payload_clock(changes["start_time"])
+        if "start_time" in changes
+        else _clock(department.start_time)
+    )
+    raw_end = (
+        _payload_clock(changes["end_time"])
+        if "end_time" in changes
+        else _clock(department.end_time)
+    )
+    if raw_start is None and raw_end is None:
+        return None, None
+    if raw_start is None or raw_end is None:
+        raise _reject(CLOCK_INVALID)
+    return validate_times(raw_start, raw_end)
 
 
 def _name_is_taken(
@@ -186,7 +282,8 @@ def list_departments(project_id: int, db: DbSession) -> Sequence[Department]:
     """Только живые отделы этого проекта, порядок — по `id` возрастанию.
 
     Пустой проект — пустой массив, а не отказ. Отделы других проектов и строки без
-    проекта в список не попадают.
+    проекта в список не попадают. `fields` каждой строки — набор полей страницы правки
+    по её виду: фронт рисует страницу прямо по ответу списка.
     """
     _get_alive_project(db, project_id)
     return db.scalars(
@@ -207,28 +304,33 @@ def list_departments(project_id: int, db: DbSession) -> Sequence[Department]:
     responses={
         status.HTTP_404_NOT_FOUND: {"description": f"Проекта нет: «{PROJECT_NOT_FOUND}»."},
         status.HTTP_409_CONFLICT: {"description": f"Имя занято: «{NAME_TAKEN}»."},
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "description": f"Вида нет в справочнике: «{KIND_UNKNOWN}».",
+        },
     },
 )
 def create_department(project_id: int, payload: DepartmentCreate, db: DbSession) -> Department:
-    """`201` с созданным отделом; `404` — проекта нет, `409` — имя занято в проекте.
+    """`201` с созданным отделом; `404` — проекта нет, `422` — вида нет, `409` — имя занято.
 
-    Порядок проверок: проект → название → время → роли → занятость имени. Проект
-    проверяется до разбора тела, поэтому вложенный путь на удалённом проекте отвечает
-    `404`, а не `422` о кривом теле.
+    Порядок проверок: проект → вид → занятость имени вида в проекте. Проект проверяется
+    до вида, поэтому вложенный путь на удалённом проекте отвечает `404`, а не `422` о
+    виде. Имя отдела — `title` вида; время работы и роли остаются пустыми до страницы
+    правки, поэтому «хотя бы одна роль» и «время обязательно» из контракта ушли.
     """
     _get_alive_project(db, project_id)
-    name = validate_name(payload.name)
-    start_time, end_time = validate_times(payload.start_time, payload.end_time)
-    roles = validate_role_ids(db, payload.role_ids)
-    if _name_is_taken(db, project_id, name):
+    kind = db.get(DepartmentKind, payload.kind_id)
+    if kind is None:
+        raise _reject(KIND_UNKNOWN)
+    if _name_is_taken(db, project_id, kind.title):
         raise HTTPException(status.HTTP_409_CONFLICT, NAME_TAKEN)
 
     department = Department(
         project_id=project_id,
-        name=name,
-        start_time=start_time,
-        end_time=end_time,
-        roles=roles,
+        kind_id=kind.id,
+        name=kind.title,
+        start_time=None,
+        end_time=None,
+        roles=[],
     )
     db.add(department)
     _commit_or_conflict(db)
@@ -242,9 +344,10 @@ def create_department(project_id: int, payload: DepartmentCreate, db: DbSession)
     summary="Правка отдела",
     responses={
         status.HTTP_404_NOT_FOUND: {"description": f"Отдела нет: «{DEPARTMENT_NOT_FOUND}»."},
-        status.HTTP_409_CONFLICT: {"description": f"Имя занято: «{NAME_TAKEN}»."},
         status.HTTP_422_UNPROCESSABLE_CONTENT: {
-            "description": f"Пустое тело: «{NO_FIELDS_TO_UPDATE}».",
+            "description": (
+                f"Пустое тело: «{NO_FIELDS_TO_UPDATE}», кривое поле: тексты отказов контракта."
+            ),
         },
     },
 )
@@ -253,15 +356,21 @@ def update_department(
     payload: DepartmentUpdate,
     db: DbSession,
 ) -> Department:
-    """`200` с обновлённым отделом; `422` на пустое тело, `404` для удалённого.
+    """`200` с обновлённым отделом; `422` на пустое тело и кривые поля, `404` для удалённого.
 
-    Сначала проверяются все присланные поля, и только потом они присваиваются:
-    отказ не должен оставлять в сессии половину правки. `role_ids` заменяет набор
-    ролей целиком, а не дополняет его.
+    Сначала проверяются все присланные поля, и только потом они присваиваются: отказ не
+    должен оставлять в сессии половину правки. `role_ids` заменяет набор ролей целиком, а
+    не дополняет его; пустой список роли стирает.
 
-    Отдел между проектами не переезжает: `project_id` в теле — не поле правки, его
-    значение игнорируется. Тело из одного `project_id` не меняет ничего, поэтому ручка
-    отдаёт отдел как есть, не трогая строку; пустое тело по-прежнему `422`.
+    Строковое поле со значением `null` или `""` стирает значение в базе: пустая строка в
+    `departments` не появляется ни после одной правки. `max_rework: null` возвращает
+    умолчание `3`, а `notifications_enabled: null` значит «не менять»: у флажка нет
+    значения «пусто».
+
+    Имя отдела не меняется: оно равно названию вида, а переименования отделов в
+    приложении нет. Отдел между проектами не переезжает: `project_id` в теле — не поле
+    правки, его значение игнорируется. Тело из одного `project_id` не меняет ничего,
+    поэтому ручка отдаёт отдел как есть, не трогая строку; пустое тело по-прежнему `422`.
     """
     department = _get_alive_department(db, department_id)
     changes = payload.model_dump(exclude_unset=True)
@@ -272,36 +381,25 @@ def update_department(
             return department
         raise _reject(NO_FIELDS_TO_UPDATE)
 
-    name: str | None = None
-    start_time: time | None = None
-    end_time: time | None = None
+    updates: dict[str, object] = {}
+    for field, (max_length, too_long) in TEXT_FIELDS.items():
+        if field in changes:
+            updates[field] = validate_text(changes[field], max_length, too_long)
+    if "max_rework" in changes:
+        updates["max_rework"] = validate_max_rework(changes["max_rework"])
+    if payload.notifications_enabled is not None:
+        updates["notifications_enabled"] = payload.notifications_enabled
     roles: list[Role] | None = None
-
-    if "name" in changes:
-        name = validate_name(changes["name"] or "")
-    if "start_time" in changes or "end_time" in changes:
-        # Неприсланное поле берётся из базы: проверяется итоговая пара, а не половина.
-        raw_start = (
-            changes["start_time"] if "start_time" in changes else _clock(department.start_time)
-        )
-        raw_end = changes["end_time"] if "end_time" in changes else _clock(department.end_time)
-        start_time, end_time = validate_times(raw_start or "", raw_end or "")
     if "role_ids" in changes:
         roles = validate_role_ids(db, changes["role_ids"] or [])
-    if name is not None and _name_is_taken(
-        db,
-        department.project_id,
-        name,
-        exclude_id=department.id,
-    ):
-        raise HTTPException(status.HTTP_409_CONFLICT, NAME_TAKEN)
+    schedule: tuple[time | None, time | None] | None = None
+    if "start_time" in changes or "end_time" in changes:
+        schedule = _patched_schedule(department, changes)
 
-    if name is not None:
-        department.name = name
-    if start_time is not None:
-        department.start_time = start_time
-    if end_time is not None:
-        department.end_time = end_time
+    for field, value in updates.items():
+        setattr(department, field, value)
+    if schedule is not None:
+        department.start_time, department.end_time = schedule
     if roles is not None:
         department.roles = roles
         # Роли лежат в `department_roles`, а строка `departments` при такой правке не

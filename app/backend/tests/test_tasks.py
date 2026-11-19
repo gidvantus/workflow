@@ -3,10 +3,10 @@
 Живая PostgreSQL тестам не нужна: `get_db` подменяется на SQLite в памяти, таблицы
 создаются из метаданных моделей. `Numeric` в SQLite хранится числом с плавающей
 точкой, поэтому тесты сверяют строку контракта (`"1250.00"`), а не `Decimal`, и берут
-представимые значения: на стенде с PostgreSQL поведение точное.
+представимые значения: на стенде с PostgreSQL поведение точное. База в памяти и клиент
+живут в `conftest.py` — один общий движок на все ручки.
 """
 
-from collections.abc import Iterator
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -14,13 +14,10 @@ from typing import Any
 import pytest
 from fastapi import HTTPException, status
 from fastapi.testclient import TestClient
-from sqlalchemy import Engine, create_engine, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import StaticPool
 
-from app import main
 from app.api import tasks as api
-from app.db import Base, get_db
 from app.models.task import Task
 
 PROJECT: dict[str, str] = {
@@ -33,42 +30,6 @@ TASK: dict[str, str] = {
     "description": "Первый подраздел проекта",
     "cost": "1250",
 }
-
-
-@pytest.fixture(name="session_factory")
-def session_factory_fixture() -> Iterator[sessionmaker[Session]]:
-    """Движок на одну in-memory базу: все сессии видят одно и то же соединение."""
-    engine: Engine = create_engine(
-        "sqlite+pysqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(engine)
-    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
-    try:
-        yield factory
-    finally:
-        Base.metadata.drop_all(engine)
-        engine.dispose()
-
-
-@pytest.fixture(name="client")
-def client_fixture(session_factory: sessionmaker[Session]) -> Iterator[TestClient]:
-    """Клиент поверх подменённой зависимости: приложение не ходит в настоящую базу."""
-
-    def override_get_db() -> Iterator[Session]:
-        session = session_factory()
-        try:
-            yield session
-        finally:
-            session.close()
-
-    main.app.dependency_overrides[get_db] = override_get_db
-    try:
-        with TestClient(main.app) as test_client:
-            yield test_client
-    finally:
-        main.app.dependency_overrides.clear()
 
 
 def _tasks_url(project_id: int) -> str:

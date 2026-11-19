@@ -1,33 +1,28 @@
-"""Ручки `/api/roles` и отделов проекта: коды, дословные тексты и soft delete.
+"""Ручки `/api/roles` и отделов проекта: коды, дословные тексты и мягкое удаление.
 
 Отдел живёт внутри проекта, поэтому создание и список ходят вложенным путём
 (`/api/projects/{project_id}/departments`), а правка и удаление — плоским
-(`/api/departments/{department_id}`).
+(`/api/departments/{department_id}`). Создание выбирает только вид отдела: имя отдела —
+это название вида, время работы и роли заполняются на странице правки.
 
-Живая PostgreSQL тестам не нужна: `get_db` подменяется на SQLite в памяти, таблицы
-создаются из метаданных моделей — вместе с частичным уникальным индексом
-`uq_departments_project_name_alive`, поэтому гонка по имени проверяется на настоящем
-индексе, а не на заглушке. Миграции здесь не выполняются, поэтому сид ролей делает
-фикстура — тем же каталогом `DEFAULT_ROLES`, что и ревизия `0003_departments`: без сида
-таблица `roles` пуста и любой `POST` падает на «нет такой роли».
+База в памяти и сид справочников живут в `conftest.py`: без сида `department_kinds` и
+`roles` нечего выбирать, а без настоящего частичного индекса
+`uq_departments_project_name_alive` гонку по имени проверить нечем.
 """
 
-from collections.abc import Iterator
 from datetime import datetime
 from typing import Any
 
 import pytest
 from fastapi import HTTPException, status
 from fastapi.testclient import TestClient
-from sqlalchemy import Engine, create_engine, select, update
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import StaticPool
 
-from app import main
 from app.api import departments as api
-from app.db import Base, get_db
 from app.models.department import Department, department_roles
-from app.models.role import DEFAULT_ROLES, Role
+from app.models.department_kind import FIELD_KEYS_BY_CODE
+from app.models.role import DEFAULT_ROLES
 
 PROJECT: dict[str, str] = {
     "name": "Workflow",
@@ -39,56 +34,58 @@ SECOND_PROJECT: dict[str, str] = {
     "description": "Второй проект",
     "repo_url": "gidvantus/cloudpass",
 }
-DEPARTMENT: dict[str, Any] = {
-    "name": "Разработка",
-    "start_time": "13:00",
-    "end_time": "04:00",
-    "role_ids": [2, 6],
+
+# `id` видов — автоинкремент сида: «Разработка» первая, «Маркетинг» вторая.
+DEVELOPMENT_KIND_ID = 1
+MARKETING_KIND_ID = 2
+
+# Тело создания: ровно один вид, ни имени, ни времени, ни ролей.
+DEPARTMENT: dict[str, Any] = {"kind_id": DEVELOPMENT_KIND_ID}
+
+# Telegram-значения в тестах вымышленные: настоящие токен и id чата живут только
+# в реестре проектов отдела и в репозиторий не попадают никогда.
+TELEGRAM_TOKEN = "123456789:AAHfakeTokenForDepartmentTests"
+TELEGRAM_CHAT_ID = "123456789"
+
+# Поля страницы правки: имя, образец значения, предел длины, текст отказа на длину.
+TEXT_FIELD_CASES: list[tuple[str, str, int, str]] = [
+    ("repo_path", "gidvantus/workflow", 500, api.REPO_PATH_TOO_LONG),
+    ("base_branch", "main", 200, api.BASE_BRANCH_TOO_LONG),
+    ("workspace", "D:\\Agents\\Workflow", 500, api.WORKSPACE_TOO_LONG),
+    ("human_workspace", "D:\\Development\\VideCoding\\Workflow", 500, api.HUMAN_WORKSPACE_TOO_LONG),
+    ("artifacts_dir", "D:\\Agents\\Workflow-artifacts", 500, api.ARTIFACTS_DIR_TOO_LONG),
+    ("compose_project", "workflow-agent", 200, api.COMPOSE_PROJECT_TOO_LONG),
+    ("telegram_token", TELEGRAM_TOKEN, 200, api.TELEGRAM_TOKEN_TOO_LONG),
+    ("telegram_chat_id", TELEGRAM_CHAT_ID, 64, api.TELEGRAM_CHAT_ID_TOO_LONG),
+]
+TEXT_FIELDS = [field for field, _value, _max, _detail in TEXT_FIELD_CASES]
+
+# Договорное тело ответа отдела: `fields` и `kind` добавлены справочником видов.
+DEPARTMENT_FIELDS = {
+    "id",
+    "project_id",
+    "name",
+    "kind",
+    "fields",
+    "start_time",
+    "end_time",
+    "roles",
+    "repo_path",
+    "base_branch",
+    "workspace",
+    "human_workspace",
+    "artifacts_dir",
+    "compose_project",
+    "telegram_token",
+    "telegram_chat_id",
+    "max_rework",
+    "notifications_enabled",
+    "created_at",
+    "updated_at",
 }
 
-
-def _seed_roles(factory: sessionmaker[Session]) -> None:
-    """Наполнить справочник так же, как это делает сид миграции."""
-    with factory() as session:
-        session.add_all([Role(code=code, title=title) for code, title in DEFAULT_ROLES])
-        session.commit()
-
-
-@pytest.fixture(name="session_factory")
-def session_factory_fixture() -> Iterator[sessionmaker[Session]]:
-    """Движок на одну in-memory базу: все сессии видят одно и то же соединение."""
-    engine: Engine = create_engine(
-        "sqlite+pysqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(engine)
-    factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
-    _seed_roles(factory)
-    try:
-        yield factory
-    finally:
-        Base.metadata.drop_all(engine)
-        engine.dispose()
-
-
-@pytest.fixture(name="client")
-def client_fixture(session_factory: sessionmaker[Session]) -> Iterator[TestClient]:
-    """Клиент поверх подменённой зависимости: приложение не ходит в настоящую базу."""
-
-    def override_get_db() -> Iterator[Session]:
-        session = session_factory()
-        try:
-            yield session
-        finally:
-            session.close()
-
-    main.app.dependency_overrides[get_db] = override_get_db
-    try:
-        with TestClient(main.app) as test_client:
-            yield test_client
-    finally:
-        main.app.dependency_overrides.clear()
+# Отодвинутое в прошлое время: сравнение `updated_at` не зависит от точности часов.
+PAST = datetime(2000, 1, 1)
 
 
 @pytest.fixture(name="project_id")
@@ -115,13 +112,27 @@ def _department_url(department_id: int) -> str:
     return f"/api/departments/{department_id}"
 
 
-def _create(client: TestClient, project_id: int, **overrides: Any) -> dict[str, Any]:
-    """Создать отдел через ручку и вернуть тело ответа."""
-    payload = {**DEPARTMENT, **overrides}
-    response = client.post(_departments_url(project_id), json=payload)
+def _create(
+    client: TestClient,
+    project_id: int,
+    kind_id: int = DEVELOPMENT_KIND_ID,
+) -> dict[str, Any]:
+    """Создать отдел через ручку выбранным видом и вернуть тело ответа."""
+    response = client.post(_departments_url(project_id), json={"kind_id": kind_id})
     assert response.status_code == status.HTTP_201_CREATED, response.text
     body: dict[str, Any] = response.json()
     return body
+
+
+def _age_row(session_factory: sessionmaker[Session], department_id: int) -> None:
+    """Отодвинуть `created_at` и `updated_at` строки в прошлое — для сравнения дат."""
+    with session_factory() as session:
+        session.execute(
+            update(Department)
+            .where(Department.id == department_id)
+            .values(created_at=PAST, updated_at=PAST)
+        )
+        session.commit()
 
 
 def _rows(session_factory: sessionmaker[Session]) -> list[Department]:
@@ -153,44 +164,129 @@ def test_roles_are_seeded_in_contract_order(client: TestClient) -> None:
 
 
 def test_create_returns_created_department(client: TestClient, project_id: int) -> None:
-    """`201` и ровно те поля, что обещаны контрактом, время — без секунд."""
+    """`201` и ровно те поля, что обещаны контрактом: пустое расписание и роли.
+
+    Создание выбирает только вид, поэтому имя — название вида, а время и роли приезжают
+    пустыми: их заполняют на странице правки. `fields` уже здесь — фронт рисует страницу
+    по ответу ручки, не дожидаясь отдельного справочника.
+    """
     response = client.post(_departments_url(project_id), json=DEPARTMENT)
 
     assert response.status_code == status.HTTP_201_CREATED
     body = response.json()
-    assert set(body) == {
-        "id",
-        "project_id",
-        "name",
-        "start_time",
-        "end_time",
-        "roles",
-        "created_at",
-        "updated_at",
-    }
+    assert set(body) == DEPARTMENT_FIELDS
     assert body["id"] == 1
     # Проект приходит из пути, а не из тела: форма создания проекта не выбирает.
     assert body["project_id"] == project_id
     assert body["name"] == "Разработка"
-    # Именно `13:00`, а не `13:00:00`: `<input type="time">` иначе не подставит значение.
-    assert body["start_time"] == "13:00"
-    assert body["end_time"] == "04:00"
-    assert [role["id"] for role in body["roles"]] == [2, 6]
-    assert [role["title"] for role in body["roles"]] == [
-        "Разработчик (полный стек)",
-        "Тестировщик",
-    ]
+    assert body["kind"] == {"id": DEVELOPMENT_KIND_ID, "code": "development", "title": "Разработка"}
+    assert body["fields"] == list(FIELD_KEYS_BY_CODE["development"])
+    assert body["start_time"] is None
+    assert body["end_time"] is None
+    assert body["roles"] == []
+    assert body["max_rework"] == 3
+    assert body["notifications_enabled"] is False
+    for field in TEXT_FIELDS:
+        assert body[field] is None
     assert isinstance(datetime.fromisoformat(body["created_at"]), datetime)
     assert isinstance(datetime.fromisoformat(body["updated_at"]), datetime)
 
 
-def test_create_allows_midnight_crossing(client: TestClient, project_id: int) -> None:
-    """`end_time` меньше `start_time` — переход через полночь, а не ошибка."""
-    created = _create(client, project_id, start_time="13:00", end_time="04:00")
+def test_create_marketing_kind_uses_its_own_fields(
+    client: TestClient,
+    project_id: int,
+) -> None:
+    """«Маркетинг» — четыре поля страницы и ни одного лишнего."""
+    created = _create(client, project_id, MARKETING_KIND_ID)
 
-    assert created["start_time"] == "13:00"
-    assert created["end_time"] == "04:00"
+    assert created["name"] == "Маркетинг"
+    assert created["kind"]["code"] == "marketing"
+    assert created["fields"] == list(FIELD_KEYS_BY_CODE["marketing"])
+    assert created["fields"] == ["repo_path", "base_branch", "workspace", "human_workspace"]
+
+
+def test_create_allows_both_kinds_in_one_project(
+    client: TestClient,
+    project_id: int,
+) -> None:
+    """Вид — не уникальный ключ: в одном проекте живут и разработка, и маркетинг."""
+    _create(client, project_id, DEVELOPMENT_KIND_ID)
+    marketing = _create(client, project_id, MARKETING_KIND_ID)
+
+    assert [item["name"] for item in client.get(_departments_url(project_id)).json()] == [
+        "Разработка",
+        "Маркетинг",
+    ]
+    assert marketing["id"] == 2
+
+
+def test_create_same_kind_in_two_projects_is_allowed(client: TestClient) -> None:
+    """Одно и то же имя в двух проектах — не конфликт: правило проекта."""
+    first_project = _create_project(client)["id"]
+    second_project = _create_project(client, **SECOND_PROJECT)["id"]
+
+    first = _create(client, first_project)
+    second = _create(client, second_project)
+
+    assert first["name"] == second["name"] == "Разработка"
+    assert first["project_id"] != second["project_id"]
+
+
+def test_create_duplicate_kind_is_conflict(client: TestClient, project_id: int) -> None:
+    """Второй отдел того же вида в проекте — `409`: имя вида уже занято."""
+    _create(client, project_id)
+
+    response = client.post(_departments_url(project_id), json=DEPARTMENT)
+
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert response.json() == {"detail": "Отдел с таким названием уже есть"}
     assert len(client.get(_departments_url(project_id)).json()) == 1
+
+
+def test_create_duplicate_name_is_caught_by_index(
+    client: TestClient,
+    project_id: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Гонку по имени ловит частичный индекс, а не только проверка в ручке.
+
+    Проверка `_name_is_taken` отключена: если бы уникальность держала только она, второй
+    `POST` создал бы дубль, а он обязан получить тот же `409`.
+    """
+    _create(client, project_id)
+    monkeypatch.setattr(api, "_name_is_taken", lambda *_args, **_kwargs: False)
+
+    response = client.post(_departments_url(project_id), json=DEPARTMENT)
+
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert response.json() == {"detail": "Отдел с таким названием уже есть"}
+    assert len(client.get(_departments_url(project_id)).json()) == 1
+
+
+def test_index_allows_same_name_in_different_projects(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Индекс не мешает одинаковым именам в разных проектах: он по паре с проектом."""
+    first_project = _create_project(client)["id"]
+    second_project = _create_project(client, **SECOND_PROJECT)["id"]
+    _create(client, first_project)
+    monkeypatch.setattr(api, "_name_is_taken", lambda *_args, **_kwargs: False)
+
+    created = _create(client, second_project)
+
+    assert created["name"] == "Разработка"
+    assert created["project_id"] == second_project
+    assert len(client.get(_departments_url(first_project)).json()) == 1
+    assert len(client.get(_departments_url(second_project)).json()) == 1
+
+
+def test_create_without_kind_is_schema_error(client: TestClient, project_id: int) -> None:
+    """Тело без `kind_id` — `422` схемы: без вида отдел не создаётся."""
+    response = client.post(_departments_url(project_id), json={})
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert "kind_id" in response.text
 
 
 def test_list_is_empty_on_empty_project(client: TestClient, project_id: int) -> None:
@@ -205,38 +301,35 @@ def test_list_returns_alive_departments_ordered_by_id(
     client: TestClient,
     project_id: int,
 ) -> None:
-    """Список — только живые строки проекта, порядок по `id` возрастанию."""
-    first = _create(client, project_id)
-    second = _create(
-        client,
-        project_id,
-        name="Аналитика",
-        start_time="09:00",
-        end_time="18:00",
-        role_ids=[1],
-    )
+    """Список — только живые строки проекта, порядок по `id`, у каждой свой `fields`."""
+    first = _create(client, project_id, DEVELOPMENT_KIND_ID)
+    second = _create(client, project_id, MARKETING_KIND_ID)
 
     response = client.get(_departments_url(project_id))
 
     assert response.status_code == status.HTTP_200_OK
-    assert [item["id"] for item in response.json()] == [first["id"], second["id"]]
-    assert [item["name"] for item in response.json()] == ["Разработка", "Аналитика"]
-    assert [item["project_id"] for item in response.json()] == [project_id, project_id]
+    body = response.json()
+    assert [item["id"] for item in body] == [first["id"], second["id"]]
+    assert [item["name"] for item in body] == ["Разработка", "Маркетинг"]
+    assert [item["fields"] for item in body] == [
+        list(FIELD_KEYS_BY_CODE["development"]),
+        list(FIELD_KEYS_BY_CODE["marketing"]),
+    ]
+    assert set(body[0]) == DEPARTMENT_FIELDS
 
 
 def test_list_shows_only_departments_of_this_project(client: TestClient) -> None:
-    """Отдел одного проекта не виден в списке другого: изоляция по `project_id`."""
+    """Список проекта не показывает чужие отделы."""
     first_project = _create_project(client)["id"]
     second_project = _create_project(client, **SECOND_PROJECT)["id"]
-    first = _create(client, first_project)
-    _create(client, second_project, name="Поддержка", role_ids=[9])
+    _create(client, first_project, DEVELOPMENT_KIND_ID)
+    _create(client, second_project, MARKETING_KIND_ID)
 
-    first_list = client.get(_departments_url(first_project)).json()
-    second_list = client.get(_departments_url(second_project)).json()
+    first_listed = client.get(_departments_url(first_project)).json()
+    second_listed = client.get(_departments_url(second_project)).json()
 
-    assert [item["id"] for item in first_list] == [first["id"]]
-    assert [item["name"] for item in first_list] == ["Разработка"]
-    assert [item["name"] for item in second_list] == ["Поддержка"]
+    assert [item["name"] for item in first_listed] == ["Разработка"]
+    assert [item["name"] for item in second_listed] == ["Маркетинг"]
 
 
 @pytest.mark.parametrize("method", ["get", "post"])
@@ -244,18 +337,11 @@ def test_nested_handlers_check_project_before_body(
     client: TestClient,
     method: str,
 ) -> None:
-    """Живость проекта проверяется раньше проверок полей.
-
-    Тело заведомо негодное по смыслу (пустое название), но валидное по схеме: разбор
-    тела и проверку проекта делает FastAPI одинаково для обеих ручек, поэтому на
-    несуществующем проекте побеждает `404`, а не `422` о названии.
-    """
-    url = _departments_url(999999)
-
-    if method == "get":
-        response = client.get(url)
-    else:
-        response = client.post(url, json={**DEPARTMENT, "name": "   "})
+    """Несуществующий проект — `404` раньше любой проверки тела."""
+    response = getattr(client, method)(
+        _departments_url(999),
+        **({"json": {"kind_id": 999}} if method == "post" else {}),
+    )
 
     assert response.status_code == status.HTTP_404_NOT_FOUND
     assert response.json() == {"detail": "Проект не найден"}
@@ -263,148 +349,17 @@ def test_nested_handlers_check_project_before_body(
 
 @pytest.mark.parametrize("method", ["get", "post"])
 def test_nested_handlers_hide_deleted_project(client: TestClient, method: str) -> None:
-    """Удалённый проект — тот же `404`: вложенный путь не находит ни одного отдела."""
-    project = _create_project(client)
-    deleted = client.delete(f"/api/projects/{project['id']}")
-    assert deleted.status_code == status.HTTP_204_NO_CONTENT
-    url = _departments_url(int(project["id"]))
-    response = client.get(url) if method == "get" else client.post(url, json=DEPARTMENT)
+    """Мягко удалённый проект — тот же `404`: его отделы недостижимы вложенным путём."""
+    project_id = _create_project(client)["id"]
+    assert client.delete(f"/api/projects/{project_id}").status_code == status.HTTP_204_NO_CONTENT
+
+    response = getattr(client, method)(
+        _departments_url(project_id),
+        **({"json": DEPARTMENT} if method == "post" else {}),
+    )
 
     assert response.status_code == status.HTTP_404_NOT_FOUND
     assert response.json() == {"detail": "Проект не найден"}
-
-
-def test_duplicate_name_is_conflict(client: TestClient, project_id: int) -> None:
-    """Повтор названия в том же проекте — `409` с дословным текстом контракта."""
-    _create(client, project_id)
-
-    response = client.post(
-        _departments_url(project_id),
-        json={**DEPARTMENT, "role_ids": [1]},
-    )
-
-    assert response.status_code == status.HTTP_409_CONFLICT
-    assert response.json() == {"detail": "Отдел с таким названием уже есть"}
-
-
-def test_duplicate_name_ignores_register(client: TestClient, project_id: int) -> None:
-    """Занятость названия сравнивается без учёта регистра."""
-    _create(client, project_id)
-
-    response = client.post(
-        _departments_url(project_id),
-        json={**DEPARTMENT, "name": "разработка"},
-    )
-
-    assert response.status_code == status.HTTP_409_CONFLICT
-    assert response.json() == {"detail": "Отдел с таким названием уже есть"}
-
-
-def test_same_name_is_allowed_in_two_projects(client: TestClient) -> None:
-    """Уникальность имени — в пределах проекта: в двух проектах имя не конфликт."""
-    first_project = _create_project(client)["id"]
-    second_project = _create_project(client, **SECOND_PROJECT)["id"]
-
-    first = _create(client, first_project)
-    second = _create(client, second_project)
-
-    assert first["name"] == second["name"] == "Разработка"
-    assert first["project_id"] == first_project
-    assert second["project_id"] == second_project
-
-
-def test_duplicate_name_is_caught_by_index(
-    client: TestClient,
-    project_id: int,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Гонка двух `POST`: предварительная проверка отключена, `409` держит индекс.
-
-    Так поведение двух одновременных запросов с одним именем: оба проходят
-    `_name_is_taken`, второй ловит `IntegrityError` частичного индекса
-    `uq_departments_project_name_alive` и получает тот же текст контракта.
-    """
-    _create(client, project_id)
-    monkeypatch.setattr(api, "_name_is_taken", lambda *args, **kwargs: False)
-
-    response = client.post(
-        _departments_url(project_id),
-        json={**DEPARTMENT, "role_ids": [1]},
-    )
-
-    assert response.status_code == status.HTTP_409_CONFLICT
-    assert response.json() == {"detail": "Отдел с таким названием уже есть"}
-    assert len(client.get(_departments_url(project_id)).json()) == 1
-
-
-def test_index_allows_same_name_in_different_projects(
-    client: TestClient,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Тот же индекс пропускает одинаковое имя в разных проектах.
-
-    Предварительная проверка отключена, поэтому решение принимает только индекс: если
-    бы он остался глобальным по имени, второй `POST` получил бы `409`.
-    """
-    first_project = _create_project(client)["id"]
-    second_project = _create_project(client, **SECOND_PROJECT)["id"]
-    _create(client, first_project)
-    monkeypatch.setattr(api, "_name_is_taken", lambda *args, **kwargs: False)
-
-    response = client.post(_departments_url(second_project), json=DEPARTMENT)
-
-    assert response.status_code == status.HTTP_201_CREATED, response.text
-    assert response.json()["project_id"] == second_project
-
-
-@pytest.mark.parametrize(
-    ("payload", "detail"),
-    [
-        ({"name": "  "}, "Укажите название отдела"),
-        ({"name": "я" * 201}, "Название отдела длиннее 200 символов"),
-        ({"start_time": "9:00"}, "Время работы указывается как ЧЧ:ММ, например 09:00"),
-        ({"start_time": "25:00"}, "Время работы указывается как ЧЧ:ММ, например 09:00"),
-        ({"end_time": "12:60"}, "Время работы указывается как ЧЧ:ММ, например 09:00"),
-        ({"start_time": "13:00", "end_time": "13:00"}, "Начало и конец рабочего времени совпадают"),
-        ({"role_ids": []}, "Выберите хотя бы одну роль"),
-        ({"role_ids": [999]}, "Выбрана роль, которой нет в списке ролей"),
-    ],
-)
-def test_create_rejects_invalid_fields(
-    client: TestClient,
-    project_id: int,
-    payload: dict[str, Any],
-    detail: str,
-) -> None:
-    """Отказы проверки — `422` с ровно тем текстом, что записан в контракте."""
-    response = client.post(_departments_url(project_id), json={**DEPARTMENT, **payload})
-
-    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
-    assert response.json() == {"detail": detail}
-
-
-def test_repeated_role_ids_collapse(client: TestClient, project_id: int) -> None:
-    """Повтор роли в `role_ids` — не ошибка: в ответе роль стоит один раз."""
-    created = _create(client, project_id, role_ids=[6, 2, 6, 2])
-
-    assert [role["id"] for role in created["roles"]] == [2, 6]
-
-
-def test_role_can_stand_in_two_departments_of_different_projects(
-    client: TestClient,
-) -> None:
-    """Одна роль живёт в отделах двух проектов: связь многие-ко-многим, а не владение."""
-    first_project = _create_project(client)["id"]
-    second_project = _create_project(client, **SECOND_PROJECT)["id"]
-    first = _create(client, first_project, role_ids=[6])
-    second = _create(client, second_project, role_ids=[6])
-
-    first_listed = client.get(_departments_url(first_project)).json()
-    second_listed = client.get(_departments_url(second_project)).json()
-
-    assert [[role["id"] for role in item["roles"]] for item in first_listed] == [[6]]
-    assert [[role["id"] for role in item["roles"]] for item in second_listed] == [[6]]
-    assert first["project_id"] != second["project_id"]
 
 
 def test_patch_changes_only_sent_fields(
@@ -412,68 +367,200 @@ def test_patch_changes_only_sent_fields(
     project_id: int,
     session_factory: sessionmaker[Session],
 ) -> None:
-    """`PATCH` меняет название и `updated_at`, не трогая время, роли и проект."""
+    """`PATCH` меняет присланное поле и `updated_at`, не трогая время, роли и проект."""
     created = _create(client, project_id)
-    # created_at отодвигается в прошлое, чтобы сравнение не зависело от точности часов.
-    with session_factory() as session:
-        session.execute(
-            update(Department)
-            .where(Department.id == created["id"])
-            .values(created_at=datetime(2000, 1, 1))
-        )
-        session.commit()
+    _age_row(session_factory, created["id"])
 
-    response = client.patch(_department_url(created["id"]), json={"name": "Разработка 2"})
+    response = client.patch(
+        _department_url(created["id"]), json={"repo_path": " gidvantus/workflow "}
+    )
 
     assert response.status_code == status.HTTP_200_OK
     body = response.json()
     assert body["id"] == created["id"]
     assert body["project_id"] == project_id
-    assert body["name"] == "Разработка 2"
-    assert body["start_time"] == created["start_time"]
-    assert body["end_time"] == created["end_time"]
-    assert [role["id"] for role in body["roles"]] == [2, 6]
+    assert body["name"] == created["name"]
+    # Пробелы по краям снимаются: в базе не остаётся « gidvantus/workflow ».
+    assert body["repo_path"] == "gidvantus/workflow"
+    for field in TEXT_FIELDS[1:]:
+        assert body[field] is None
+    assert body["start_time"] is None
+    assert body["end_time"] is None
+    assert body["roles"] == []
+    assert body["max_rework"] == 3
     assert datetime.fromisoformat(body["updated_at"]) > datetime.fromisoformat(body["created_at"])
 
 
-def test_patch_replaces_roles_entirely(
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [(field, value) for field, value, _max, _detail in TEXT_FIELD_CASES],
+    ids=TEXT_FIELDS,
+)
+def test_patch_writes_each_text_field(
     client: TestClient,
     project_id: int,
-    session_factory: sessionmaker[Session],
+    field: str,
+    value: str,
 ) -> None:
-    """`PATCH` с `role_ids` заменяет набор целиком, не меняя `project_id`.
-
-    Строка `departments` при правке одних ролей не меняется, поэтому `updated_at`
-    выставляется в ручке явно: без этого «Обновлён» в списке остался бы прежним.
-    """
+    """Каждое из восьми строковых полей страницы записывается своим значением."""
     created = _create(client, project_id)
-    # created_at отодвигается в прошлое, чтобы сравнение не зависело от точности часов.
-    with session_factory() as session:
-        session.execute(
-            update(Department)
-            .where(Department.id == created["id"])
-            .values(created_at=datetime(2000, 1, 1))
-        )
-        session.commit()
 
-    response = client.patch(_department_url(created["id"]), json={"role_ids": [1, 5, 6]})
+    response = client.patch(_department_url(created["id"]), json={field: value})
 
     assert response.status_code == status.HTTP_200_OK
-    body = response.json()
-    assert [role["id"] for role in body["roles"]] == [1, 5, 6]
-    assert body["project_id"] == project_id
-    assert body["name"] == created["name"]
-    assert body["start_time"] == created["start_time"]
-    assert body["end_time"] == created["end_time"]
-    assert datetime.fromisoformat(body["updated_at"]) > datetime.fromisoformat(body["created_at"])
+    assert response.json()[field] == value
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "max_length", "detail"),
+    TEXT_FIELD_CASES,
+    ids=TEXT_FIELDS,
+)
+def test_patch_rejects_too_long_text_field(
+    client: TestClient,
+    project_id: int,
+    field: str,
+    value: str,
+    max_length: int,
+    detail: str,
+) -> None:
+    """У каждого поля свой предел и свой дословный текст отказа."""
+    created = _create(client, project_id)
+
+    response = client.patch(_department_url(created["id"]), json={field: "я" * (max_length + 1)})
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert response.json() == {"detail": detail}
+    # Отказ не оставляет половину правки: поле осталось пустым.
+    assert client.get(_departments_url(project_id)).json()[0][field] is None
+
+
+@pytest.mark.parametrize("cleared", ["", None], ids=["empty-string", "null"])
+@pytest.mark.parametrize("field", TEXT_FIELDS, ids=TEXT_FIELDS)
+def test_patch_clears_text_field(
+    client: TestClient,
+    project_id: int,
+    field: str,
+    cleared: str | None,
+) -> None:
+    """`""` и `null` значат одно и то же — «не заполнено»: значение стирается."""
+    created = _create(client, project_id)
+    filled = client.patch(_department_url(created["id"]), json={field: "значение"})
+    assert filled.status_code == status.HTTP_200_OK
+
+    response = client.patch(_department_url(created["id"]), json={field: cleared})
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()[field] is None
+
+
+def test_patch_max_rework_null_returns_default(client: TestClient, project_id: int) -> None:
+    """Пустое поле лимита возвращает умолчание `3`, а не ноль."""
+    created = _create(client, project_id)
+    filled = client.patch(_department_url(created["id"]), json={"max_rework": 7})
+    assert filled.json()["max_rework"] == 7
+
+    response = client.patch(_department_url(created["id"]), json={"max_rework": None})
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()["max_rework"] == 3
+
+
+@pytest.mark.parametrize("value", [0, 99])
+def test_patch_max_rework_accepts_bounds(
+    client: TestClient,
+    project_id: int,
+    value: int,
+) -> None:
+    """`0` — «возвращать нельзя», `99` — верхняя граница поля: обе допустимы."""
+    created = _create(client, project_id)
+
+    response = client.patch(_department_url(created["id"]), json={"max_rework": value})
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()["max_rework"] == value
+
+
+@pytest.mark.parametrize("value", [-1, 100])
+def test_patch_max_rework_rejects_out_of_range(
+    client: TestClient,
+    project_id: int,
+    value: int,
+) -> None:
+    """За пределами `0..99` — `422` с дословным текстом контракта."""
+    created = _create(client, project_id)
+
+    response = client.patch(_department_url(created["id"]), json={"max_rework": value})
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert response.json() == {
+        "detail": "Лимит возврата задачи указывается целым числом от 0 до 99"
+    }
+
+
+def test_patch_max_rework_rejects_not_integer(client: TestClient, project_id: int) -> None:
+    """`"abc"` в лимите — `422` схемы: это не число, а не «пустое поле»."""
+    created = _create(client, project_id)
+
+    response = client.patch(_department_url(created["id"]), json={"max_rework": "abc"})
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+
+
+def test_patch_notifications_toggle_keeps_telegram_values(
+    client: TestClient,
+    project_id: int,
+) -> None:
+    """Выключение уведомлений не стирает токен и id чата: значения остаются в базе."""
+    created = _create(client, project_id)
+    enabled = client.patch(
+        _department_url(created["id"]),
+        json={
+            "notifications_enabled": True,
+            "telegram_token": TELEGRAM_TOKEN,
+            "telegram_chat_id": TELEGRAM_CHAT_ID,
+        },
+    )
+
+    disabled = client.patch(_department_url(created["id"]), json={"notifications_enabled": False})
+
+    assert enabled.status_code == status.HTTP_200_OK
+    assert enabled.json()["notifications_enabled"] is True
+    assert disabled.status_code == status.HTTP_200_OK
+    assert disabled.json()["notifications_enabled"] is False
+    assert disabled.json()["telegram_token"] == TELEGRAM_TOKEN
+    assert disabled.json()["telegram_chat_id"] == TELEGRAM_CHAT_ID
+
+
+def test_patch_notifications_null_does_not_change(
+    client: TestClient,
+    project_id: int,
+) -> None:
+    """`null` для флажка — «не менять»: значения «пусто» у флажка нет."""
+    created = _create(client, project_id)
+    assert (
+        client.patch(
+            _department_url(created["id"]),
+            json={"notifications_enabled": True},
+        ).json()["notifications_enabled"]
+        is True
+    )
+
+    response = client.patch(
+        _department_url(created["id"]),
+        json={"notifications_enabled": None},
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()["notifications_enabled"] is True
 
 
 def test_patch_ignores_sent_project_id(client: TestClient) -> None:
     """Присланный `project_id` не переносит отдел: значение остаётся прежним.
 
     Переноса отдела между проектами в приложении нет. Тело из одного `project_id` не
-    меняет ничего, поэтому отдел возвращается как есть; вместе с настоящим полем
-    правки применяется только оно.
+    меняет ничего, поэтому отдел возвращается как есть; вместе с настоящим полем правки
+    применяется только оно.
     """
     first_project = _create_project(client)["id"]
     second_project = _create_project(client, **SECOND_PROJECT)["id"]
@@ -483,53 +570,39 @@ def test_patch_ignores_sent_project_id(client: TestClient) -> None:
         _department_url(created["id"]),
         json={"project_id": second_project},
     )
-    with_name = client.patch(
+    with_repo = client.patch(
         _department_url(created["id"]),
-        json={"project_id": second_project, "name": "Разработка 2"},
+        json={"project_id": second_project, "repo_path": "gidvantus/workflow"},
     )
 
     assert only_project.status_code == status.HTTP_200_OK
     assert only_project.json()["project_id"] == first_project
-    assert only_project.json()["name"] == "Разработка"
-    assert with_name.status_code == status.HTTP_200_OK
-    assert with_name.json()["project_id"] == first_project
-    assert with_name.json()["name"] == "Разработка 2"
+    assert only_project.json()["repo_path"] is None
+    assert with_repo.status_code == status.HTTP_200_OK
+    assert with_repo.json()["project_id"] == first_project
+    assert with_repo.json()["repo_path"] == "gidvantus/workflow"
     # Отдел не переехал: в списке второго проекта его нет.
     assert client.get(_departments_url(second_project)).json() == []
 
 
-def test_patch_one_time_checks_the_whole_pair(client: TestClient, project_id: int) -> None:
-    """Правка только начала проверяет итоговую пару: равные значения — отказ `422`."""
-    created = _create(client, project_id, start_time="09:00", end_time="18:00")
+def test_patch_does_not_rename(client: TestClient, project_id: int) -> None:
+    """Имя отдела не редактируется: оно равно названию вида.
 
-    response = client.patch(_department_url(created["id"]), json={"start_time": "18:00"})
-
-    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
-    assert response.json() == {"detail": "Начало и конец рабочего времени совпадают"}
-
-
-@pytest.mark.parametrize(
-    ("payload", "detail"),
-    [
-        ({"start_time": "9:00"}, "Время работы указывается как ЧЧ:ММ, например 09:00"),
-        ({"role_ids": []}, "Выберите хотя бы одну роль"),
-        ({"role_ids": [999]}, "Выбрана роль, которой нет в списке ролей"),
-        ({"name": "  "}, "Укажите название отдела"),
-    ],
-)
-def test_patch_rejects_invalid_fields(
-    client: TestClient,
-    project_id: int,
-    payload: dict[str, Any],
-    detail: str,
-) -> None:
-    """Те же тексты `422`, что и на создании: набор отказов один на `POST` и `PATCH`."""
+    Тело из одного `name` не меняет ничего и получает отказ пустого тела; вместе с
+    настоящим полем правки `name` молча игнорируется, и отдел остаётся «Разработкой».
+    """
     created = _create(client, project_id)
 
-    response = client.patch(_department_url(created["id"]), json=payload)
+    only_name = client.patch(_department_url(created["id"]), json={"name": "Аналитика"})
+    with_field = client.patch(
+        _department_url(created["id"]),
+        json={"name": "Аналитика", "repo_path": "gidvantus/workflow"},
+    )
 
-    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
-    assert response.json() == {"detail": detail}
+    assert only_name.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert only_name.json() == {"detail": "Нет полей для изменения"}
+    assert with_field.status_code == status.HTTP_200_OK
+    assert with_field.json()["name"] == "Разработка"
 
 
 def test_patch_empty_body_is_unprocessable(client: TestClient, project_id: int) -> None:
@@ -542,34 +615,195 @@ def test_patch_empty_body_is_unprocessable(client: TestClient, project_id: int) 
     assert response.json() == {"detail": "Нет полей для изменения"}
 
 
-def test_patch_taken_name_is_conflict(client: TestClient, project_id: int) -> None:
-    """Переименование в занятое имя того же проекта — `409`."""
-    _create(client, project_id)
-    second = _create(client, project_id, name="Аналитика", role_ids=[1])
+def test_patch_replaces_roles_entirely(
+    client: TestClient,
+    project_id: int,
+    session_factory: sessionmaker[Session],
+) -> None:
+    """`PATCH` с `role_ids` заменяет набор целиком и двигает `updated_at`.
 
-    response = client.patch(_department_url(second["id"]), json={"name": "разработка"})
+    Строка `departments` при правке одних ролей не меняется, поэтому `updated_at`
+    выставляется в ручке явно: без этого «Обновлён» в списке остался бы прежним.
+    """
+    created = _create(client, project_id)
+    _age_row(session_factory, created["id"])
 
-    assert response.status_code == status.HTTP_409_CONFLICT
-    assert response.json() == {"detail": "Отдел с таким названием уже есть"}
-
-
-def test_patch_taken_name_in_other_project_is_allowed(client: TestClient) -> None:
-    """Имя, занятое в другом проекте, не мешает правке: правило — в пределах проекта."""
-    first_project = _create_project(client)["id"]
-    second_project = _create_project(client, **SECOND_PROJECT)["id"]
-    _create(client, first_project)
-    second = _create(client, second_project)
-
-    response = client.patch(_department_url(second["id"]), json={"name": "Разработка"})
+    response = client.patch(_department_url(created["id"]), json={"role_ids": [1, 5, 6]})
 
     assert response.status_code == status.HTTP_200_OK
-    assert response.json()["name"] == "Разработка"
-    assert response.json()["project_id"] == second_project
+    body = response.json()
+    assert [role["id"] for role in body["roles"]] == [1, 5, 6]
+    assert [role["title"] for role in body["roles"]] == [
+        "Аналитик",
+        "Код-ревьюер",
+        "Тестировщик",
+    ]
+    assert body["project_id"] == project_id
+    assert body["name"] == created["name"]
+    assert datetime.fromisoformat(body["updated_at"]) > datetime.fromisoformat(body["created_at"])
+
+
+def test_patch_repeated_role_ids_collapse(client: TestClient, project_id: int) -> None:
+    """Повтор в `role_ids` — не ошибка ввода: набор приходит без повторов."""
+    created = _create(client, project_id)
+
+    response = client.patch(_department_url(created["id"]), json={"role_ids": [6, 2, 6, 2]})
+
+    assert response.status_code == status.HTTP_200_OK
+    assert [role["id"] for role in response.json()["roles"]] == [2, 6]
+
+
+def test_patch_empty_role_list_clears_roles(client: TestClient, project_id: int) -> None:
+    """Пустой список ролей допустим и стирает набор: «хотя бы одна роль» больше не нужно."""
+    created = _create(client, project_id)
+    assert client.patch(
+        _department_url(created["id"]),
+        json={"role_ids": [2, 6]},
+    ).json()["roles"]
+
+    response = client.patch(_department_url(created["id"]), json={"role_ids": []})
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()["roles"] == []
+
+
+def test_patch_null_role_ids_clears_roles(client: TestClient, project_id: int) -> None:
+    """`null` в `role_ids` — «ничего не выбрано», как и пустой список.
+
+    Фронт отправляет блок ролей массивом, поэтому `null` — edge case контракта, а не
+    рабочий путь; трактуется он так же, как пустой набор, иначе отдел нельзя было бы
+    очистить одним телом.
+    """
+    created = _create(client, project_id)
+    assert client.patch(
+        _department_url(created["id"]),
+        json={"role_ids": [2]},
+    ).json()["roles"]
+
+    response = client.patch(_department_url(created["id"]), json={"role_ids": None})
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()["roles"] == []
+
+
+def test_patch_unknown_role_rejects(client: TestClient, project_id: int) -> None:
+    """Неизвестный `id` роли — прежний `422` с прежним текстом."""
+    created = _create(client, project_id)
+
+    response = client.patch(_department_url(created["id"]), json={"role_ids": [999]})
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert response.json() == {"detail": "Выбрана роль, которой нет в списке ролей"}
+
+
+def test_role_can_stand_in_two_departments_of_different_projects(
+    client: TestClient,
+) -> None:
+    """Одна роль стоит в отделах двух проектов: связь многие-ко-многим, не поле."""
+    first_project = _create_project(client)["id"]
+    second_project = _create_project(client, **SECOND_PROJECT)["id"]
+    first = _create(client, first_project, DEVELOPMENT_KIND_ID)
+    second = _create(client, second_project, DEVELOPMENT_KIND_ID)
+    assert client.patch(_department_url(first["id"]), json={"role_ids": [6]}).status_code == 200
+
+    response = client.patch(_department_url(second["id"]), json={"role_ids": [6]})
+
+    assert response.status_code == status.HTTP_200_OK
+    assert [role["id"] for role in response.json()["roles"]] == [6]
+
+
+def test_patch_sets_midnight_crossing_schedule(
+    client: TestClient,
+    project_id: int,
+) -> None:
+    """`end_time` меньше `start_time` — переход через полночь, а не ошибка."""
+    created = _create(client, project_id)
+
+    response = client.patch(
+        _department_url(created["id"]),
+        json={"start_time": "13:00", "end_time": "04:00"},
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    # Именно `13:00`, а не `13:00:00`: `<input type="time">` иначе не подставит значение.
+    assert response.json()["start_time"] == "13:00"
+    assert response.json()["end_time"] == "04:00"
+
+
+def test_patch_clears_schedule_with_null_pair(client: TestClient, project_id: int) -> None:
+    """Оба поля пусты — расписания нет; `null` и `""` значат одно и то же."""
+    created = _create(client, project_id)
+    assert (
+        client.patch(
+            _department_url(created["id"]),
+            json={"start_time": "13:00", "end_time": "04:00"},
+        ).json()["start_time"]
+        == "13:00"
+    )
+
+    response = client.patch(
+        _department_url(created["id"]),
+        json={"start_time": None, "end_time": ""},
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()["start_time"] is None
+    assert response.json()["end_time"] is None
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [{"start_time": "13:00"}, {"end_time": "04:00"}],
+    ids=["start-only", "end-only"],
+)
+def test_patch_one_time_without_pair_is_rejected(
+    client: TestClient,
+    project_id: int,
+    payload: dict[str, Any],
+) -> None:
+    """Половина пары расписанием не является: второй половины нет ни в теле, ни в базе."""
+    created = _create(client, project_id)
+
+    response = client.patch(_department_url(created["id"]), json=payload)
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert response.json() == {"detail": "Время работы указывается как ЧЧ:ММ, например 09:00"}
+
+
+def test_patch_one_time_checks_the_whole_pair(client: TestClient, project_id: int) -> None:
+    """Правка только начала проверяет итоговую пару: равные значения — отказ `422`."""
+    created = _create(client, project_id)
+    assert (
+        client.patch(
+            _department_url(created["id"]),
+            json={"start_time": "09:00", "end_time": "18:00"},
+        ).status_code
+        == status.HTTP_200_OK
+    )
+
+    response = client.patch(_department_url(created["id"]), json={"start_time": "18:00"})
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert response.json() == {"detail": "Начало и конец рабочего времени совпадают"}
+
+
+@pytest.mark.parametrize("value", ["9:00", "25:00", "12:60", "13:00:00", "утро"])
+def test_patch_rejects_invalid_time(client: TestClient, project_id: int, value: str) -> None:
+    """Кривой формат времени — тот же текст отказа, что и у валидатора."""
+    created = _create(client, project_id)
+
+    response = client.patch(
+        _department_url(created["id"]),
+        json={"start_time": value, "end_time": "04:00"},
+    )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert response.json() == {"detail": "Время работы указывается как ЧЧ:ММ, например 09:00"}
 
 
 def test_patch_unknown_department_not_found(client: TestClient) -> None:
     """Правка несуществующего отдела — `404`."""
-    response = client.patch(_department_url(999), json={"name": "Кто-то"})
+    response = client.patch(_department_url(999), json={"repo_path": "gidvantus/workflow"})
 
     assert response.status_code == status.HTTP_404_NOT_FOUND
     assert response.json() == {"detail": "Отдел не найден"}
@@ -597,7 +831,8 @@ def test_orphan_department_is_reachable_by_flat_paths(
     """Строка без проекта (сирота) не видна в списке, но достаётся плоскими ручками.
 
     Так ведут себя отделы, заведённые до привязки к проектам: их не удаляют и не
-    бэкфиллят, а убрать строку можно только плоским `PATCH`/`DELETE`.
+    бэкфиллят, а убрать строку можно только плоским `PATCH`/`DELETE`. Вид у сироты есть:
+    миграция `0006` бэкфиллит `kind_id` всем строкам, включая сирот.
     """
     created = _create(client, project_id)
     with session_factory() as session:
@@ -609,17 +844,20 @@ def test_orphan_department_is_reachable_by_flat_paths(
     # В списке проекта строки без проекта нет.
     assert client.get(_departments_url(project_id)).json() == []
 
-    response = client.patch(_department_url(created["id"]), json={"name": "Сирота 2"})
+    response = client.patch(
+        _department_url(created["id"]), json={"repo_path": "gidvantus/workflow"}
+    )
 
     assert response.status_code == status.HTTP_200_OK
     body = response.json()
     assert body["project_id"] is None
-    assert body["name"] == "Сирота 2"
+    assert body["repo_path"] == "gidvantus/workflow"
+    assert body["kind"]["code"] == "development"
     # Имя освобождается в проекте: сирота с ним не конфликтует.
     _create(client, project_id)
 
 
-def test_orphan_duplicate_name_is_conflict(
+def test_orphan_names_are_unique_among_orphans(
     client: TestClient,
     project_id: int,
     session_factory: sessionmaker[Session],
@@ -627,18 +865,31 @@ def test_orphan_duplicate_name_is_conflict(
     """Уникальность сирот держит ручка: индекс с `NULL project_id` дубль не ловит.
 
     `NULL` в уникальном индексе не равен `NULL`, поэтому две живые строки без проекта
-    с одинаковым именем индекс пропустит. Отказ обязан дать `_name_is_taken`.
+    с одинаковым именем индекс пропускает — проверка `_name_is_taken` обязана их видеть.
     """
-    first = _create(client, project_id)
-    second = _create(client, project_id, name="Аналитика", role_ids=[1])
+    created = _create(client, project_id)
     with session_factory() as session:
         session.execute(update(Department).values(project_id=None))
         session.commit()
 
-    response = client.patch(_department_url(second["id"]), json={"name": first["name"]})
+    with session_factory() as session:
+        assert api._name_is_taken(session, None, created["name"]) is True
+        assert api._name_is_taken(session, None, "разработка") is True
+        assert api._name_is_taken(session, None, "Маркетинг") is False
 
-    assert response.status_code == status.HTTP_409_CONFLICT
-    assert response.json() == {"detail": "Отдел с таким названием уже есть"}
+
+def test_name_check_ignores_register(
+    client: TestClient,
+    project_id: int,
+    session_factory: sessionmaker[Session],
+) -> None:
+    """Занятость имени сравнивается без учёта регистра — кириллицей тоже."""
+    _create(client, project_id)
+
+    with session_factory() as session:
+        assert api._name_is_taken(session, project_id, "разработка") is True
+        assert api._name_is_taken(session, project_id, "РАЗРАБОТКА") is True
+        assert api._name_is_taken(session, project_id, "Маркетинг") is False
 
 
 def test_delete_keeps_row_and_role_links(
@@ -648,6 +899,11 @@ def test_delete_keeps_row_and_role_links(
 ) -> None:
     """`204`; из списка проекта отдел исчезает, строка и строки связи остаются."""
     created = _create(client, project_id)
+    filled = client.patch(
+        _department_url(created["id"]),
+        json={"role_ids": [2, 6], "repo_path": "gidvantus/workflow"},
+    )
+    assert filled.status_code == status.HTTP_200_OK
 
     response = client.delete(_department_url(created["id"]))
 
@@ -673,7 +929,10 @@ def test_repeat_operations_on_deleted_department_are_not_found(
     deleted = client.delete(_department_url(created["id"]))
     assert deleted.status_code == status.HTTP_204_NO_CONTENT
 
-    patch_response = client.patch(_department_url(created["id"]), json={"name": "Ещё раз"})
+    patch_response = client.patch(
+        _department_url(created["id"]),
+        json={"repo_path": "gidvantus/workflow"},
+    )
     delete_response = client.delete(_department_url(created["id"]))
 
     assert patch_response.status_code == status.HTTP_404_NOT_FOUND
@@ -691,7 +950,7 @@ def test_name_of_deleted_department_can_be_used_again(
     deleted = client.delete(_department_url(created["id"]))
     assert deleted.status_code == status.HTTP_204_NO_CONTENT
 
-    repeated = _create(client, project_id, role_ids=[1])
+    repeated = _create(client, project_id)
 
     assert repeated["name"] == created["name"]
     assert repeated["id"] != created["id"]
@@ -699,27 +958,47 @@ def test_name_of_deleted_department_can_be_used_again(
 
 @pytest.mark.parametrize(
     ("value", "expected"),
-    [("Разработка", "Разработка"), ("  Разработка  ", "Разработка")],
-)
-def test_validate_name_returns_trimmed_value(value: str, expected: str) -> None:
-    """Валидатор имени доступен без HTTP: он снимает пробелы по краям."""
-    assert api.validate_name(value) == expected
-
-
-@pytest.mark.parametrize(
-    ("value", "detail"),
     [
-        ("", "Укажите название отдела"),
-        ("   ", "Укажите название отдела"),
-        ("я" * 201, "Название отдела длиннее 200 символов"),
+        ("gidvantus/workflow", "gidvantus/workflow"),
+        ("  gidvantus/workflow  ", "gidvantus/workflow"),
     ],
 )
-def test_validate_name_rejects(value: str, detail: str) -> None:
-    """Пустое и слишком длинное имя — отказ `422` из валидатора."""
+def test_validate_text_returns_trimmed_value(value: str, expected: str) -> None:
+    """Валидатор строкового поля снимает пробелы по краям."""
+    assert api.validate_text(value, api.REPO_PATH_MAX_LENGTH, api.REPO_PATH_TOO_LONG) == expected
+
+
+@pytest.mark.parametrize("value", ["", "   ", None])
+def test_validate_text_turns_blank_into_none(value: str | None) -> None:
+    """Пустое и пробельное значение — это `NULL`, а не пустая строка в базе."""
+    assert api.validate_text(value, api.REPO_PATH_MAX_LENGTH, api.REPO_PATH_TOO_LONG) is None
+
+
+def test_validate_text_rejects_too_long() -> None:
+    """Слишком длинное значение — отказ `422` с текстом своего поля."""
     with pytest.raises(HTTPException) as excinfo:
-        api.validate_name(value)
+        api.validate_text(
+            "я" * (api.BASE_BRANCH_MAX_LENGTH + 1),
+            api.BASE_BRANCH_MAX_LENGTH,
+            api.BASE_BRANCH_TOO_LONG,
+        )
     assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
-    assert excinfo.value.detail == detail
+    assert excinfo.value.detail == "Базовая ветка длиннее 200 символов"
+
+
+@pytest.mark.parametrize(("value", "expected"), [(None, 3), (0, 0), (3, 3), (99, 99)])
+def test_validate_max_rework_accepts(value: int | None, expected: int) -> None:
+    """Пустое поле — умолчание `3`; остальные допустимые значения проходят как есть."""
+    assert api.validate_max_rework(value) == expected
+
+
+@pytest.mark.parametrize("value", [-1, 100])
+def test_validate_max_rework_rejects(value: int) -> None:
+    """За пределами `0..99` — один и тот же текст отказа."""
+    with pytest.raises(HTTPException) as excinfo:
+        api.validate_max_rework(value)
+    assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert excinfo.value.detail == "Лимит возврата задачи указывается целым числом от 0 до 99"
 
 
 @pytest.mark.parametrize("value", ["00:00", "09:00", "13:00", "23:59"])

@@ -1,17 +1,23 @@
 /**
  * Карточка «Список отделов»: состояния загрузки, пустого списка и ошибки загрузки,
- * строки с названием, временем работы, ролями и действиями под «⋯», кнопка
+ * строки с названием, видом, временем работы, ролями и действиями под «⋯», кнопка
  * «Добавить отдел» в шапке карточки рядом со счётчиком.
  *
  * Карточка самодостаточна и переиспользуется: она не знает, где стоит — на странице
- * проекта; проект в запросы подставляет форма, которую открывает `onCreate`.
+ * проекта; проект в запросы подставляет окно, которое открывает `onCreate`.
+ *
+ * Вид — мелкая строка под названием, а не колонка: имя отдела равно названию вида
+ * только у отделов, заведённых выбором, а у переживших миграцию `0006` оно прежнее
+ * («Поддержка» при виде «Разработка»), и различить их иначе нечем.
  *
  * Время — главный элемент раздела: значение приходит с сервера строкой `"ЧЧ:ММ"` и
  * показывается как `13:00–04:00`, под ним длительность смены. Переход через полночь
  * (`end` раньше `start`) — штатный случай: длительность считается по кругу суток,
- * а слова «через полночь» снимают вопрос «почему конец раньше начала».
+ * а слова «через полночь» снимают вопрос «почему конец раньше начала». Расписания может
+ * не быть вовсе: тогда в значении «нет расписания», а длительность пуста.
  *
- * Роли — текст через запятую по названиям из справочника сервера, не чипы.
+ * Роли — текст через запятую по названиям из справочника сервера, не чипы; пустой набор
+ * ролей допустим и показывается прочерком.
  */
 
 import { useEffect, useId, useRef, useState } from 'react';
@@ -43,8 +49,14 @@ function formatDate(iso: string): string {
   return `${date.getDate()} ${month} ${date.getFullYear()}`;
 }
 
-/** Минуты с начала суток из `"ЧЧ:ММ"`; неразборчивое время — `null`, без выдумок. */
-function minutesOf(time: string): number | null {
+/**
+ * Минуты с начала суток из `"ЧЧ:ММ"`; неразборчивое время — `null`, без выдумок.
+ * `null` на входе — расписания нет, это тоже `null`, а не полночь.
+ */
+function minutesOf(time: string | null): number | null {
+  if (time === null) {
+    return null;
+  }
   const match = /^(\d{2}):(\d{2})$/.exec(time);
   if (match === null) {
     return null;
@@ -58,7 +70,7 @@ function minutesOf(time: string): number | null {
 }
 
 /** Длительность смены: `9 ч`, `15 ч`, `9 ч 30 мин`. Конец раньше начала — через полночь. */
-function shiftText(startTime: string, endTime: string): string {
+function shiftText(startTime: string | null, endTime: string | null): string {
   const start = minutesOf(startTime);
   const end = minutesOf(endTime);
   if (start === null || end === null) {
@@ -133,8 +145,16 @@ function DepartmentRow({
   }, [menuOpen]);
 
   const menuLabel = `Действия с отделом ${department.name}`;
-  const time = `${department.start_time}–${department.end_time}`;
-  const rolesText = department.roles.map((role) => role.title).join(', ');
+  // Расписание — пара: одна половина без второй расписанием не является, сервер такую
+  // пару и не отдаст, но «нет расписания» честнее пустого прочерка.
+  const hasSchedule = department.start_time !== null && department.end_time !== null;
+  const time = hasSchedule
+    ? `${department.start_time}–${department.end_time}`
+    : 'нет расписания';
+  const rolesText =
+    department.roles.length === 0
+      ? '—'
+      : department.roles.map((role) => role.title).join(', ');
 
   return (
     <li className="row row--department" data-testid="department-item">
@@ -142,9 +162,15 @@ function DepartmentRow({
         <p className="row__name" data-testid="department-item-name">
           {department.name}
         </p>
+        <p className="row__kind" data-testid="department-item-kind">
+          {department.kind.title}
+        </p>
       </div>
       <div className="dept-time">
-        <span className="dept-time__value" data-testid="department-item-time">
+        <span
+          className={hasSchedule ? 'dept-time__value' : 'dept-time__value dept-time__value--empty'}
+          data-testid="department-item-time"
+        >
           {time}
         </span>
         <span className="dept-time__note">
@@ -284,7 +310,7 @@ export default function DepartmentList({
             Пока нет отделов
           </p>
           <p className="state__hint">
-            Нажмите «Добавить отдел», и он появится в этом списке.
+            Нажмите «Добавить отдел», выберите вид — и отдел появится в этом списке.
           </p>
         </div>
       )}

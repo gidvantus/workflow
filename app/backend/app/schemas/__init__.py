@@ -2,6 +2,8 @@
 
 from app.schemas.department import (
     DepartmentCreate,
+    DepartmentKindRef,
+    DepartmentKindResponse,
     DepartmentResponse,
     DepartmentUpdate,
     RoleResponse,
@@ -11,6 +13,8 @@ from app.schemas.task import TaskCreate, TaskResponse
 
 __all__ = [
     "DepartmentCreate",
+    "DepartmentKindRef",
+    "DepartmentKindResponse",
     "DepartmentResponse",
     "DepartmentUpdate",
     "ProjectCreate",
