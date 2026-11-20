@@ -121,8 +121,10 @@ import {
   overlay,
   parseRegistry,
   projectFields,
+  projectsOf,
   readRegistryFile,
   stripBom,
+  telegramOf,
   writeRegistryFile,
 } from './registry.mjs'
 
@@ -731,6 +733,132 @@ function loadProjects(shared) {
     problem: problems.length > 0 ? problems.join('; ') : null,
     defaultId: registry.defaultId,
   }
+}
+
+// ── Тревога «отдел не обслуживает ни одного проекта» ────────────────────────
+//
+// 20.11.2026 файл реестра перевели в форму, которой установленный пакет не
+// понимал, и отдел просто перестал обслуживать все проекты: `step()` возвращал
+// `config-error` без строки в журнале и без сообщения в Telegram, а `dev_department_status`
+// показывал `registry.serving: []`. Заметить это можно было только ручным вызовом
+// инструмента — отдел простоял около трёх часов.
+//
+// Причина остановки живёт в `loaded.problem`; отсюда её получают журнал смены и
+// Telegram. Одна и та же причина повторяется не чаще раза в 30 минут: три часа
+// одинаковых блоков в журнале ничего не добавляют. Возврат в норму — одно `✅`.
+const ALARM_REPEAT_MS = 30 * 60 * 1000
+
+// Подсказка приклеена не к любой причине: «форма файла» и `.bak` — совет только
+// тогда, когда причина в самом файле. Первый запуск на новой машине («сначала
+// склонируйте репозиторий») или пустой документ не должны заканчиваться
+// предложением восстановить `.bak` поверх целого реестра.
+const ALARM_FORM_TAIL = 'Проверьте projects.json в каталоге состояния отдела: его форма должна совпадать ' +
+  'с версией установленного пакета. Файл предыдущей версии лежит рядом как projects.json.bak.'
+const ALARM_PLAIN_TAIL = 'Проверьте projects.json в каталоге состояния отдела.'
+
+function alarmText(problem) {
+  return '🛑 Отдел разработки: не обслуживается ни один проект\n' +
+    'Причина: ' + problem + '\n' + (problem.includes('реестр') ? ALARM_FORM_TAIL : ALARM_PLAIN_TAIL)
+}
+
+// Бот для тревоги — бот проекта, названного полем `default` того же файла реестра.
+// Файл при этом может быть как раз в чужой форме (потому отдел и молчит), так что
+// читаем его здесь ещё раз и снисходительно: нужна одна запись, и её отсутствие —
+// не ошибка, а «тревога остаётся в журнале». Форму документа разбирает
+// `registry.mjs` — `parseRegistry`, `projectsOf`, `developmentOf`, `telegramOf`:
+// своей копии разбора здесь нет, иначе правка формы там молча разошлась бы с
+// копией здесь. Руками читается только запись проекта формы v1 — её
+// установленный пакет не разбирает вовсе, а бота из неё взять можно.
+function alarmBot() {
+  const file = readStateFile(STATE_FILES.projects)
+  let raw
+  try {
+    raw = JSON.parse(stripBom(fs.readFileSync(file, 'utf8')))
+  } catch (error) {
+    return undefined
+  }
+  if (!raw || typeof raw !== 'object') return undefined
+  const wanted = typeof raw.default === 'string' && raw.default.trim() !== '' ? raw.default.trim() : null
+  if (wanted === null) return undefined
+  const parsed = parseRegistry(raw, file)
+  if (parsed.document) {
+    const project = projectsOf(parsed.document).find((item) => item.id === wanted)
+    return project ? telegramOf(developmentOf(project).department) : undefined
+  }
+  const projects = raw.projects
+  if (projects && typeof projects === 'object' && !Array.isArray(projects)) return telegramOf(projects[wanted])
+  return undefined
+}
+
+// Состояние тревоги живёт в памяти: перезапуск приложения сбрасывает троттлинг, и
+// это принятый деграйд — журнал остаётся источником правды, Telegram уведомлением.
+// `reason` — причина, о которой уже сказали: по ней решается, повторять ли блок.
+const registryAlarm = { active: false, since: null, lastSentAt: null, channel: null, reason: null }
+
+// Одна тревога: блок в журнал смены и, если у проекта по умолчанию есть бот,
+// сообщение в Telegram. `channel` в отчёте говорит, где тревога осталась: сеть
+// могла не дойти, и тогда честный ответ — `log`, а не `telegram`. Отказ отправки
+// возвращается текстом ошибки: `lastError` принадлежит диспетчеру, а не этому
+// разделу, и ставит его вызывающий.
+async function alarmEmit(problem, now) {
+  const text = alarmText(problem)
+  appendShiftLog(text)
+  const bot = alarmBot()
+  registryAlarm.channel = bot ? 'telegram' : 'log'
+  registryAlarm.lastSentAt = now.toISOString()
+  if (!bot) return { text, error: null }
+  try {
+    await sendTelegram(bot, text)
+  } catch (error) {
+    registryAlarm.channel = 'log'
+    return { text, error: error && error.message ? error.message : String(error) }
+  }
+  return { text, error: null }
+}
+
+// Обслуживаемых проектов нет. Причина всегда названа: `loaded.problem` — если
+// виноват файл или рабочая область, и «нет ни одного проекта с включённым отделом»
+// — если отдел выключен везде. Тревоги без причины не бывает: иначе `active: true`
+// без единого сообщения, а потом `✅` без предшествующего `🛑`.
+// Тревога включается на первом же таком тике, молчит, пока причина та же и не
+// прошло 30 минут, и повторяется сразу, если причина сменилась.
+async function noteRegistrySilent(loaded, now) {
+  const problem = loaded.problem || 'нет ни одного проекта с включённым отделом'
+  if (!registryAlarm.active) {
+    registryAlarm.active = true
+    registryAlarm.since = now.toISOString()
+    registryAlarm.reason = problem
+    return alarmEmit(problem, now)
+  }
+  if (problem !== registryAlarm.reason) {
+    registryAlarm.reason = problem
+    return alarmEmit(problem, now)
+  }
+  if (registryAlarm.lastSentAt === null) return alarmEmit(problem, now)
+  if (now.getTime() - new Date(registryAlarm.lastSentAt).getTime() < ALARM_REPEAT_MS) return null
+  return alarmEmit(problem, now)
+}
+
+// Отдел снова обслуживает проекты: одно `✅` на переход, и только если тревога
+// была включена (после перезапуска приложения сравнивать не с чем). `lastSentAt` и
+// `channel` в статусе относятся к тревоге, а не к `✅`: после возврата они снова
+// `null`, иначе поле «момент последней отправки» показывало бы время снятой тревоги.
+async function noteRegistryServing(loaded) {
+  if (!registryAlarm.active) return null
+  const text = '✅ Отдел разработки снова обслуживает проекты: ' + loaded.projects.map((project) => project.id).join(', ')
+  registryAlarm.active = false
+  registryAlarm.since = null
+  registryAlarm.reason = null
+  registryAlarm.lastSentAt = null
+  registryAlarm.channel = null
+  const bot = alarmBot()
+  if (!bot) return { text, error: null }
+  try {
+    await sendTelegram(bot, text)
+  } catch (error) {
+    return { text, error: error && error.message ? error.message : String(error) }
+  }
+  return { text, error: null }
 }
 
 // ── GitHub через MCP ────────────────────────────────────────────────────────
@@ -3815,8 +3943,21 @@ export default {
       if (loaded.problem) state.lastError = 'проекты: ' + loaded.problem
 
       if (loaded.projects.length === 0) {
-        return { action: 'config-error', note: loaded.problem || 'нет ни одного проекта с включённым отделом', projects: [] }
+        // Отдел не обслуживает ни один проект. Причина может быть названа (файл
+        // реестра не той формы, пропавшая рабочая область) или нет (отдел везде
+        // выключен) — но молчать нельзя: об этой остановке человек узнаёт только
+        // отсюда, из журнала смены и Telegram.
+        const alarm = await noteRegistrySilent(loaded, now)
+        if (alarm && alarm.error) state.lastError = 'Telegram: ' + alarm.error
+        return {
+          action: 'config-error',
+          note: loaded.problem || 'нет ни одного проекта с включённым отделом',
+          alarm: alarm ? alarm.text : null,
+          projects: [],
+        }
       }
+      const recovered = await noteRegistryServing(loaded)
+      if (recovered && recovered.error) state.lastError = 'Telegram: ' + recovered.error
 
       // Каждый проект двигается своим шагом и своей сменой. Ошибка одного
       // проекта не должна останавливать остальные: у них разные репозитории и
@@ -3997,6 +4138,13 @@ export default {
         state.projectProblem = loaded.problem
         state.servedIds = loaded.projects.map((p) => p.id)
         state.disabledIds = loaded.disabled
+        // Тревога считается и здесь: человек, который спросил статус, — это первый,
+        // кто заметил остановку, и он вправе увидеть её в журнале и в Telegram, а
+        // не только в пустом `serving`. Троттлинг общий с тиком.
+        const alarm = loaded.projects.length === 0
+          ? await noteRegistrySilent(loaded, now)
+          : await noteRegistryServing(loaded)
+        if (alarm && alarm.error) state.lastError = 'Telegram: ' + alarm.error
         const report = {
           now: now.toISOString(),
           // Токен реестра — секрет: в ответ инструмента он не попадает, но факт
@@ -4014,6 +4162,16 @@ export default {
             defaultId: loaded.defaultId,
             serving: loaded.projects.map((p) => p.id),
             disabled: loaded.disabled,
+            // Тревога по реестру: отдел не обслуживает ни одного проекта. `since` —
+            // когда отдел впервые увидели без проектов, `lastSentAt` — когда об этом
+            // последний раз сказали (журнал и Telegram), `channel` — где сказали:
+            // `telegram` или `log`, если бота у проекта по умолчанию нет.
+            alarm: {
+              active: registryAlarm.active,
+              since: registryAlarm.since,
+              lastSentAt: registryAlarm.lastSentAt,
+              channel: registryAlarm.channel,
+            },
           },
           // Состояние кеша: `ok` и `revision` — по контракту, остальное объясняет
           // расхождение. `localKeys` — то, что живёт только в файле: человек
