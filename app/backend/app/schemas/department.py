@@ -6,8 +6,9 @@
 
 Время в ответе — строка `"ЧЧ:ММ"` (`"13:00"`), а не `"13:00:00"`: `<input type="time">`
 на фронте получает значение из этого поля без собственного форматирования, и секунды
-сделали бы его невалидным. `null` в этом поле — «расписания нет», а не пустая строка:
-так отдел приходит сразу после создания и так выглядит «Маркетинг».
+сделали бы его невалидным. Время работы — список окон `windows`; пустой список —
+«расписания нет»: так отдел приходит сразу после создания и так выглядит «Маркетинг».
+Порядок окон — по возрастанию начала, его задаёт сервер; фронт массив не сортирует.
 
 `fields` — набор и порядок полей страницы правки, вычисляемый из вида: каталог
 `FIELD_KEYS_BY_CODE` живёт в одном месте (`app.models.department_kind`), поэтому
@@ -57,6 +58,34 @@ class DepartmentKindResponse(BaseModel):
         return list(FIELD_KEYS_BY_CODE.get(self.code, ()))
 
 
+class WindowInput(BaseModel):
+    """Окно времени работы во входном теле: время приходит строкой и проверяется ручкой.
+
+    `start_time: str`, а не `time`: отказ на `9:00`, `25:00` и `12:60` отдаёт валидатор
+    `app.api.departments` одним и тем же текстом контракта, а не `422` схемы списком
+    ошибок pydantic.
+    """
+
+    start_time: str
+    end_time: str
+
+
+class WindowValue(BaseModel):
+    """Окно времени работы в ответе: время как `"ЧЧ:ММ"` без секунд.
+
+    Полей ровно два: элемент колонки `windows` — это `{"start_time", "end_time"}`, и
+    другие ключи в ответ отдела не попадают.
+    """
+
+    start_time: time
+    end_time: time
+
+    @field_serializer("start_time", "end_time")
+    def serialize_clock(self, value: time) -> str:
+        """В JSON — только часы и минуты: `"13:00"`, без секунд."""
+        return value.strftime("%H:%M")
+
+
 class DepartmentResponse(BaseModel):
     """Живой отдел в ответах `GET`, `POST` и `PATCH`.
 
@@ -76,8 +105,7 @@ class DepartmentResponse(BaseModel):
     project_id: int | None
     name: str
     kind: DepartmentKindRef
-    start_time: time | None
-    end_time: time | None
+    windows: list[WindowValue]
     roles: list[RoleResponse]
     repo_path: str | None
     base_branch: str | None
@@ -91,13 +119,6 @@ class DepartmentResponse(BaseModel):
     notifications_enabled: bool
     created_at: datetime
     updated_at: datetime
-
-    @field_serializer("start_time", "end_time")
-    def serialize_clock(self, value: time | None) -> str | None:
-        """В JSON — только часы и минуты: `"13:00"`, без секунд; `None` — расписания нет."""
-        if value is None:
-            return None
-        return value.strftime("%H:%M")
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -123,8 +144,9 @@ class DepartmentUpdate(BaseModel):
     Поля, которого нет в теле, не меняется. Строковое поле со значением `null` или `""`
     означает «не заполнено» и стирает значение в базе. `notifications_enabled` — булево
     поле: `null` для него значит «не менять», потому что значения «пусто» у флажка нет.
-    `role_ids` заменяет набор ролей целиком, пустой список роли стирает. `start_time` и
-    `end_time` проверяются парой: пустые оба — расписание очищается, пуст один — отказ.
+    `role_ids` заменяет набор ролей целиком, пустой список роли стирает. `windows`
+    заменяет набор окон целиком и проверяется ручкой: от одного до шести окон, без
+    пересечений; `[]` и `null` — отказ «Укажите хотя бы одно окно времени работы».
 
     Пустое тело — отказ `422`, его проверяет ручка, а не схема.
 
@@ -144,6 +166,5 @@ class DepartmentUpdate(BaseModel):
     max_rework: int | None = None
     notifications_enabled: bool | None = None
     role_ids: list[int] | None = None
-    start_time: str | None = None
-    end_time: str | None = None
+    windows: list[WindowInput] | None = None
     project_id: int | None = None

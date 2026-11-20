@@ -13,7 +13,7 @@
 """
 
 from collections.abc import Iterator
-from datetime import datetime, time
+from datetime import datetime
 from typing import Any
 
 import pytest
@@ -345,8 +345,10 @@ def test_rebuild_builds_document_from_database(
                 "human_workspace": "D:\\Development\\VideCoding\\Workflow",
                 "artifacts_dir": "D:\\Agents\\workflow-artifacts",
                 "compose_project": "workflow-agent",
-                "start_time": time(13, 0),
-                "end_time": time(4, 0),
+                "windows": [
+                    {"start_time": "13:00", "end_time": "04:00"},
+                    {"start_time": "07:00", "end_time": "09:00"},
+                ],
                 "max_rework": 5,
                 "notifications_enabled": True,
                 "telegram_token": "bot-token",
@@ -384,7 +386,12 @@ def test_rebuild_builds_document_from_database(
         "humanClone": "D:\\Development\\VideCoding\\Workflow",
         "artifacts": "D:\\Agents\\workflow-artifacts",
         "composeProject": "workflow-agent",
-        "windows": [{"start": "13:00", "stop": "04:00"}],
+        # Все окна отдела попадают в документ v2 и в том же порядке: ключи формы —
+        # `start`/`stop`, а не `start_time`/`end_time`.
+        "windows": [
+            {"start": "13:00", "stop": "04:00"},
+            {"start": "07:00", "stop": "09:00"},
+        ],
         "maxRework": 5,
         "telegram": {"token": "bot-token", "chatId": 294292338},
     }

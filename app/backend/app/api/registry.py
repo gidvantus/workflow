@@ -21,6 +21,12 @@
 **Ревизии только добавляются.** `PUT` и `rebuild` пишут новую строку, прошлые не
 меняются; `GET` отдаёт последнюю. Документ сохраняется как прислан (ручка его не
 переписывает), `rebuild` собирает его из базы по правилам из контракта задачи.
+
+**Расписание отделов.** В базе окна лежат колонкой `departments.windows` с ключами
+`start_time`/`end_time`, а в документе v2 — массивом `windows` у отдела с ключами
+`start`/`stop`: форму документа задаёт `plugins/registry.mjs`, и переименовывать его
+ключи нельзя. Все окна отдела попадают в документ в том же порядке (по возрастанию
+начала), пустой набор — ключа `windows` в документе нет вовсе.
 """
 
 import json
@@ -275,22 +281,18 @@ def _document_of(row: RegistryDocument) -> dict[str, Any]:
     return document
 
 
-def _clock(value: time) -> str:
-    """Время в документе — только часы и минуты: `"13:00"`, без секунд."""
-    return value.strftime("%H:%M")
+def _windows(department: Department) -> list[dict[str, str]]:
+    """Окна работы отдела парами `start`/`stop` в порядке из колонки.
 
-
-def _window(department: Department) -> dict[str, str] | None:
-    """Окно работы отдела парой или `None`.
-
-    Половина окна (`start_time` без `end_time` и наоборот) в документ не попадает:
-    такая пара не прошла бы проверку формы, и собирать заведомо отвергаемый документ
-    незачем — расписание считается незаданным.
+    Пустой набор — расписания нет, и ключ `windows` в документ не попадает: форма v2
+    знает его как необязательный, а пустой массив в файле реестра означал бы «окон ноль»
+    вместо «нет данных». Окна уже лежат в колонке по возрастанию начала и без
+    пересечений — ручка правки проверяет это до записи, — поэтому здесь только форма
+    ключей: `windows` в документе — `start`/`stop`, а в базе — `start_time`/`end_time`.
     """
-    start, stop = department.start_time, department.end_time
-    if start is None or stop is None:
-        return None
-    return {"start": _clock(start), "stop": _clock(stop)}
+    return [
+        {"start": window["start_time"], "stop": window["end_time"]} for window in department.windows
+    ]
 
 
 def _telegram(department: Department) -> dict[str, Any] | None:
@@ -327,9 +329,9 @@ def _department_row(department: Department) -> dict[str, Any]:
         text = (value or "").strip()
         if text:
             row[key] = text
-    window = _window(department)
-    if window is not None:
-        row["windows"] = [window]
+    windows = _windows(department)
+    if windows:
+        row["windows"] = windows
     row["maxRework"] = department.max_rework
     telegram = _telegram(department)
     if telegram is not None:

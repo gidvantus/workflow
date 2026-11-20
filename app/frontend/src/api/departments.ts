@@ -15,8 +15,10 @@
  * Поэтому же справочник видов читается с сервера, как и справочник ролей.
  *
  * Время приходит строкой `"ЧЧ:ММ"` без секунд и уходит обратно так же, поэтому
- * подставляется в `<input type="time">` без переформатирования. `null` во времени и
- * `""` в строковых полях значат «не заполнено».
+ * подставляется в `<input type="time">` без переформатирования. Время работы — набор
+ * окон `windows`: пустой массив значит «расписания нет», а порядок окон (по возрастанию
+ * начала) задаёт сервер — фронт массив не сортирует и время не переформатирует.
+ * `""` в строковых полях значит «не заполнено».
  *
  * Тексты отказов — часть контракта: сервер присылает их в `detail`, и они показываются
  * пользователю дословно.
@@ -54,6 +56,18 @@ export type DepartmentKind = DepartmentKindRef & {
   fields: string[];
 };
 
+/**
+ * Окно времени работы: `{"start_time": "ЧЧ:ММ", "end_time": "ЧЧ:ММ"}`.
+ *
+ * Вторых ключей у элемента колонки `windows` нет, а `end_time` меньше `start_time` —
+ * штатный переход через полночь, а не ошибка: окно идёт до конца суток и продолжается
+ * с нуля.
+ */
+export type DepartmentWindow = {
+  start_time: string;
+  end_time: string;
+};
+
 /** Отдел в том виде, в каком его отдают ручки списка, создания и правки. */
 export type Department = {
   id: number;
@@ -68,10 +82,12 @@ export type Department = {
   kind: DepartmentKindRef;
   /** Набор блоков страницы правки — тот же, что у вида отдела. */
   fields: string[];
-  /** Время работы «с» в виде `"ЧЧ:ММ"`; `null` — расписания нет. */
-  start_time: string | null;
-  /** Время работы «по»; меньше `start_time` — переход через полночь, это норма. */
-  end_time: string | null;
+  /**
+   * Окна времени работы в серверном порядке (по возрастанию начала). Пустой массив —
+   * расписания нет: так приезжает только что созданный отдел и отделы видов без
+   * расписания в наборе полей.
+   */
+  windows: DepartmentWindow[];
   roles: Role[];
   /** Восемь строковых полей страницы правки: `null` — не заполнено. */
   repo_path: string | null;
@@ -98,8 +114,8 @@ export type Department = {
  * текстом). Число контрактом тоже допустимо, поэтому оно остаётся в типе.
  */
 export type DepartmentPatch = {
-  start_time?: string | null;
-  end_time?: string | null;
+  /** Набор окон целиком: сервер заменяет его, а не дополняет. Пустой список — отказ. */
+  windows?: DepartmentWindow[];
   role_ids?: number[];
   repo_path?: string | null;
   base_branch?: string | null;
@@ -184,6 +200,41 @@ function readFields(payload: unknown): string[] | null {
 }
 
 /**
+ * Окно времени работы: ровно две строки. Время не проверяется на формат — его формат
+ * принадлежит контракту сервера, и переписывать его на фронте нельзя; отказ разбора тут
+ * только на форме ответа (не объект, второй ключ вместо пары, число вместо строки).
+ */
+function readWindow(payload: unknown): DepartmentWindow | null {
+  if (!isRecord(payload)) {
+    return null;
+  }
+  const { start_time, end_time } = payload;
+  if (typeof start_time !== 'string' || typeof end_time !== 'string') {
+    return null;
+  }
+  return { start_time, end_time };
+}
+
+/**
+ * Набор окон. Порядок остаётся серверный — сортировки здесь нет; пустой массив допустим
+ * («расписания нет»), а мусор в любом элементе — отказ разбора всего ответа.
+ */
+function readWindows(payload: unknown): DepartmentWindow[] | null {
+  if (!Array.isArray(payload)) {
+    return null;
+  }
+  const windows: DepartmentWindow[] = [];
+  for (const item of payload) {
+    const window = readWindow(item);
+    if (window === null) {
+      return null;
+    }
+    windows.push(window);
+  }
+  return windows;
+}
+
+/**
  * Разбор отдела. Строковые поля страницы правки проверяются одним правилом: строка или
  * `null`, поэтому список полей растёт без правки разбора.
  */
@@ -197,8 +248,7 @@ function readDepartment(payload: unknown): Department | null {
     name,
     kind,
     fields,
-    start_time,
-    end_time,
+    windows,
     roles,
     created_at,
     updated_at,
@@ -214,8 +264,6 @@ function readDepartment(payload: unknown): Department | null {
   const composeProject = readOptionalText(payload.compose_project);
   const telegramToken = readOptionalText(payload.telegram_token);
   const telegramChatId = readOptionalText(payload.telegram_chat_id);
-  const startTime = readOptionalText(start_time);
-  const endTime = readOptionalText(end_time);
 
   if (
     typeof id !== 'number' ||
@@ -232,9 +280,7 @@ function readDepartment(payload: unknown): Department | null {
     artifactsDir === undefined ||
     composeProject === undefined ||
     telegramToken === undefined ||
-    telegramChatId === undefined ||
-    startTime === undefined ||
-    endTime === undefined
+    telegramChatId === undefined
   ) {
     return null;
   }
@@ -242,7 +288,13 @@ function readDepartment(payload: unknown): Department | null {
   const parsedKind = readKindRef(kind);
   const parsedFields = readFields(fields);
   const parsedRoles = readRoles(roles);
-  if (parsedKind === null || parsedFields === null || parsedRoles === null) {
+  const parsedWindows = readWindows(windows);
+  if (
+    parsedKind === null ||
+    parsedFields === null ||
+    parsedRoles === null ||
+    parsedWindows === null
+  ) {
     return null;
   }
 
@@ -252,8 +304,7 @@ function readDepartment(payload: unknown): Department | null {
     name,
     kind: parsedKind,
     fields: parsedFields,
-    start_time: startTime,
-    end_time: endTime,
+    windows: parsedWindows,
     roles: parsedRoles,
     repo_path: repoPath,
     base_branch: baseBranch,
@@ -361,7 +412,10 @@ export async function createDepartment(
   return readDepartmentBody(response);
 }
 
-/** `PATCH /api/departments/{id}` — `200` и обновлённый отдел; `role_ids` заменяет набор целиком. */
+/**
+ * `PATCH /api/departments/{id}` — `200` и обновлённый отдел; `role_ids` и `windows`
+ * заменяют набор целиком.
+ */
 export async function updateDepartment(
   id: number,
   patch: DepartmentPatch,

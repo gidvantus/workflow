@@ -8,7 +8,7 @@
 
 Создание выбирает только вид отдела: имя отдела — это `title` вида на момент создания,
 а время работы и роли заполняются на странице правки. Поэтому новый отдел приходит с
-`start_time: null`, `end_time: null`, `roles: []` и `max_rework: 3`, и второго отдела
+`windows: []`, `roles: []` и `max_rework: 3`, и второго отдела
 того же вида в проекте быть не может — имя занято (`409`).
 
 Правка и удаление адресуются отделом, а не парой «проект + отдел»: плоский путь
@@ -26,16 +26,18 @@
 Тексты отказов — часть контракта: фронт показывает их пользователю дословно и не
 переписывает, поэтому они собраны здесь константами и нигде больше не сочиняются.
 
-Время работы — одна пара «с/по». `end_time` меньше `start_time` — это переход через
-полночь (13:00 → 04:00), штатный случай: запрещать его нельзя и «исправлять» тоже.
-Пустые оба поля — расписание очищается; пуст только один — отказ: половина пары
-расписанием не является.
+Время работы — **набор окон** «с/по»: от одного до шести диапазонов, порядок — по
+возрастанию начала. `end_time` меньше `start_time` — это переход через полночь
+(13:00 → 04:00) в **этом** окне, штатный случай: запрещать его нельзя и «исправлять»
+тоже. Окна не пересекаются, а касание концами (13:00–18:00 и 18:00–21:00) пересечением
+не считается. Набор заменяется целиком, как `role_ids`: сборки «итогового набора из
+базы» нет, потому что у окон нет второй половины, которую надо было бы доставать.
 """
 
 import re
 from collections.abc import Sequence
 from datetime import UTC, datetime, time
-from typing import Annotated, Any
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
@@ -77,8 +79,19 @@ TELEGRAM_CHAT_ID_MAX_LENGTH = 64
 MAX_REWORK_MIN = 0
 MAX_REWORK_MAX = 99
 
+# Окон времени работы: хотя бы одно и не больше шести. Предел — правило обеих половин:
+# сервер отказывает `422`, фронт лишь не даёт добавить седьмое окно кнопкой.
+WINDOWS_MAX = 6
+
+# Минуты суток: окно переводится в полуинтервалы, чтобы пересечение считалось честно.
+MINUTES_PER_HOUR = 60
+MINUTES_PER_DAY = 24 * MINUTES_PER_HOUR
+
 CLOCK_INVALID = "Время работы указывается как ЧЧ:ММ, например 09:00"
 CLOCK_EQUAL = "Начало и конец рабочего времени совпадают"
+WINDOWS_REQUIRED = "Укажите хотя бы одно окно времени работы"
+WINDOWS_TOO_MANY = "Окон времени работы не может быть больше шести"
+WINDOWS_OVERLAP = "Окна времени работы пересекаются"
 ROLE_UNKNOWN = "Выбрана роль, которой нет в списке ролей"
 KIND_UNKNOWN = "Выбран вид отдела, которого нет в справочнике"
 NO_FIELDS_TO_UPDATE = "Нет полей для изменения"
@@ -181,44 +194,61 @@ def validate_role_ids(db: Session, role_ids: list[int]) -> list[Role]:
     return list(roles)
 
 
-def _clock(value: time | None) -> str | None:
-    """Обратное преобразование: время из базы в строку `ЧЧ:ММ`; `NULL` — так `NULL`."""
-    if value is None:
-        return None
+def _clock(value: time) -> str:
+    """Время в колонке окон и в ответе — только часы и минуты: `"13:00"`, без секунд."""
     return value.strftime(CLOCK_FORMAT)
 
 
-def _payload_clock(value: str | None) -> str | None:
-    """Присланное время: `null` и `""` одинаково значат «поле пустое»."""
-    if not value:
-        return None
-    return value
+def _spans(start: time, end: time) -> list[tuple[int, int]]:
+    """Окно в полуинтервалах минут суток: `[start, end)`.
 
-
-def _patched_schedule(
-    department: Department,
-    changes: dict[str, Any],
-) -> tuple[time | None, time | None]:
-    """Итоговая пара «с/по» после правки: проверяется целиком, а не половина.
-
-    Неприсланное поле берётся из базы, и если в базе его нет — считается пустым. Оба
-    пусты — расписание очищается; пуст только один — отказ: половина пары не расписание.
+    `end < start` — окно идёт через полночь (13:00 → 04:00), и это два куска:
+    `[780, 1440)` и `[0, 240)`. Правый конец в интервал не входит, поэтому касание
+    концами (13:00–18:00 и 18:00–21:00) пересечением не считается.
     """
-    raw_start = (
-        _payload_clock(changes["start_time"])
-        if "start_time" in changes
-        else _clock(department.start_time)
-    )
-    raw_end = (
-        _payload_clock(changes["end_time"])
-        if "end_time" in changes
-        else _clock(department.end_time)
-    )
-    if raw_start is None and raw_end is None:
-        return None, None
-    if raw_start is None or raw_end is None:
-        raise _reject(CLOCK_INVALID)
-    return validate_times(raw_start, raw_end)
+    first = start.hour * MINUTES_PER_HOUR + start.minute
+    second = end.hour * MINUTES_PER_HOUR + end.minute
+    if second < first:
+        return [(first, MINUTES_PER_DAY), (0, second)]
+    return [(first, second)]
+
+
+def _windows_overlap(spans: list[list[tuple[int, int]]]) -> bool:
+    """Пересекается ли хоть одна пара **разных** окон: куски одного окна не сравниваются."""
+    for index, first_window in enumerate(spans):
+        for second_window in spans[index + 1 :]:
+            for first_start, first_end in first_window:
+                for second_start, second_end in second_window:
+                    if max(first_start, second_start) < min(first_end, second_end):
+                        return True
+    return False
+
+
+def validate_windows(raw: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Набор окон работы: от одного до шести, формат `ЧЧ:ММ`, без пересечений.
+
+    Порядок проверок фиксирован и повторов не даёт: пустой набор → предел → формат
+    каждого окна (тексты `CLOCK_INVALID` и `CLOCK_EQUAL` те же, что были у пары) →
+    пересечения на уже разобранных значениях. Возвращаются канонические строки
+    `"ЧЧ:ММ"`, отсортированные по возрастанию начала: порядок и формат задаёт сервер,
+    а фронт показывает массив как пришёл и время не переформатирует.
+
+    Совпадающие окна пересекаются, касание концами — нет; окно через полночь
+    раскалывается на два полуинтервала и сравнивается с остальными обоими кусками.
+    """
+    if not raw:
+        raise _reject(WINDOWS_REQUIRED)
+    if len(raw) > WINDOWS_MAX:
+        raise _reject(WINDOWS_TOO_MANY)
+    windows: list[dict[str, str]] = []
+    spans: list[list[tuple[int, int]]] = []
+    for window in raw:
+        start, end = validate_times(window["start_time"], window["end_time"])
+        windows.append({"start_time": _clock(start), "end_time": _clock(end)})
+        spans.append(_spans(start, end))
+    if _windows_overlap(spans):
+        raise _reject(WINDOWS_OVERLAP)
+    return sorted(windows, key=lambda window: window["start_time"])
 
 
 def _name_is_taken(
@@ -315,7 +345,8 @@ def create_department(project_id: int, payload: DepartmentCreate, db: DbSession)
     Порядок проверок: проект → вид → занятость имени вида в проекте. Проект проверяется
     до вида, поэтому вложенный путь на удалённом проекте отвечает `404`, а не `422` о
     виде. Имя отдела — `title` вида; время работы и роли остаются пустыми до страницы
-    правки, поэтому «хотя бы одна роль» и «время обязательно» из контракта ушли.
+    правки, поэтому новый отдел приходит с `windows: []`, а «хотя бы одна роль» и
+    «время обязательно» из прежнего контракта ушли.
     """
     _get_alive_project(db, project_id)
     kind = db.get(DepartmentKind, payload.kind_id)
@@ -328,8 +359,7 @@ def create_department(project_id: int, payload: DepartmentCreate, db: DbSession)
         project_id=project_id,
         kind_id=kind.id,
         name=kind.title,
-        start_time=None,
-        end_time=None,
+        windows=[],
         roles=[],
     )
     db.add(department)
@@ -360,7 +390,8 @@ def update_department(
 
     Сначала проверяются все присланные поля, и только потом они присваиваются: отказ не
     должен оставлять в сессии половину правки. `role_ids` заменяет набор ролей целиком, а
-    не дополняет его; пустой список роли стирает.
+    не дополняет его; пустой список роли стирает. Так же целиком заменяется `windows`:
+    от одного до шести окон без пересечений, `[]` и `null` — отказ.
 
     Строковое поле со значением `null` или `""` стирает значение в базе: пустая строка в
     `departments` не появляется ни после одной правки. `max_rework: null` возвращает
@@ -392,14 +423,16 @@ def update_department(
     roles: list[Role] | None = None
     if "role_ids" in changes:
         roles = validate_role_ids(db, changes["role_ids"] or [])
-    schedule: tuple[time | None, time | None] | None = None
-    if "start_time" in changes or "end_time" in changes:
-        schedule = _patched_schedule(department, changes)
+    windows: list[dict[str, str]] | None = None
+    if "windows" in changes:
+        # `null` и `[]` одинаково значат «окон нет» — это отказ, а не очистка расписания:
+        # расписание отдела — набор окон, и пустой набор через правку недостижим.
+        windows = validate_windows(changes["windows"] or [])
 
     for field, value in updates.items():
         setattr(department, field, value)
-    if schedule is not None:
-        department.start_time, department.end_time = schedule
+    if windows is not None:
+        department.windows = windows
     if roles is not None:
         department.roles = roles
         # Роли лежат в `department_roles`, а строка `departments` при такой правке не

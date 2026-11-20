@@ -10,10 +10,17 @@
 `title` вида на момент создания, и правкой оно не меняется: переименования отделов в
 приложении нет.
 
-Время работы **необязательное**: `NULL` — отдела без расписания (так создаются все
-отделы, а у вида «Маркетинг» времени работы нет вовсе). Расписание заполняется на
-странице правки одной парой «с/по»; переход через полночь (`end_time < start_time`,
-например 13:00 → 04:00) — штатный случай, а не два окна внутри суток.
+Время работы — **набор окон** `windows`: от одного до шести диапазонов «с/по» в одной
+JSON-колонке (на PostgreSQL — `JSONB`), без второй таблицы и без join-ов. Пустой список —
+отдела без расписания: так создаются все отделы, а у вида «Маркетинг» времени работы нет
+вовсе. Переход через полночь (`end_time < start_time`, например 13:00 → 04:00) —
+свойство **каждого** окна, а не «два окна внутри суток». Пересечение окон запрещено;
+окна, касающиеся концами (`13:00–18:00` и `18:00–21:00`), не пересекаются.
+
+Элемент списка — ровно `{"start_time": "ЧЧ:ММ", "end_time": "ЧЧ:ММ"}`. Порядок окон в
+списке — по возрастанию `start_time`, и пишет его **только ручка**: значение колонки
+присваивается целиком, `MutableDict` и правка списка на месте не используются — иначе
+SQLAlchemy не увидит изменения, а `updated_at` не сдвинется.
 
 Отдел ссылается на роли через таблицу связи `department_roles`. Мягко удалённый отдел
 свои строки связи не теряет: физического удаления в приложении нет, поэтому набор ролей
@@ -21,9 +28,10 @@
 это не ошибка, а «роли ещё не заполнены».
 """
 
-from datetime import datetime, time
+from datetime import datetime
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     Column,
     DateTime,
@@ -32,10 +40,10 @@ from sqlalchemy import (
     Integer,
     String,
     Table,
-    Time,
     func,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -44,6 +52,11 @@ from app.models.role import Role
 
 # Условие частичного индекса: в нём участвуют только живые строки.
 ALIVE_CONDITION = text("deleted_at IS NULL")
+
+# Тип колонки окон: на стенде (PostgreSQL) — `JSONB`, в тестах (SQLite) — `JSON`.
+# Вся проверка окон живёт в Python, поэтому поведение обоих диалектов совпадает; на
+# JSON-операторы в запросах ручки не опираются.
+WINDOWS_JSON = JSON().with_variant(JSONB(), "postgresql")
 
 # Лимит возврата задачи по умолчанию: столько раз задачу можно вернуть в работу, если
 # поле на странице правки оставили пустым.
@@ -85,10 +98,14 @@ class Department(Base):
         index=True,
     )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
-    # Время работы одной парой «с/по»: конец раньше начала — переход через полночь.
-    # `NULL` — расписания нет: отдел создаётся без него, а у «Маркетинга» его нет вовсе.
-    start_time: Mapped[time | None] = mapped_column(Time, nullable=True)
-    end_time: Mapped[time | None] = mapped_column(Time, nullable=True)
+    # Окна работы: до шести пар «с/по» в одной JSON-колонке. Пустой список — расписания
+    # нет: отдел создаётся без него, а у «Маркетинга» его нет вовсе. Порядок — по
+    # возрастанию начала, его задаёт ручка.
+    windows: Mapped[list[dict[str, str]]] = mapped_column(
+        WINDOWS_JSON,
+        nullable=False,
+        default=list,
+    )
     # Поля страницы правки: набор задаёт вид, сами значения — необязательные строки.
     repo_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     base_branch: Mapped[str | None] = mapped_column(String(200), nullable=True)
