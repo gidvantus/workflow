@@ -67,8 +67,7 @@ DEPARTMENT_FIELDS = {
     "name",
     "kind",
     "fields",
-    "start_time",
-    "end_time",
+    "windows",
     "roles",
     "repo_path",
     "base_branch",
@@ -122,6 +121,23 @@ def _create(
     assert response.status_code == status.HTTP_201_CREATED, response.text
     body: dict[str, Any] = response.json()
     return body
+
+
+def _windows(*pairs: tuple[str, str]) -> list[dict[str, str]]:
+    """Окна работы из пар «начало, конец» — в том виде, в каком их принимает `PATCH`."""
+    return [{"start_time": start, "end_time": end} for start, end in pairs]
+
+
+# Окна работы — семь штук встык, без пересечений: на одно больше предела задачи.
+SEVEN_WINDOWS: list[dict[str, str]] = _windows(
+    ("00:00", "03:00"),
+    ("03:00", "06:00"),
+    ("06:00", "09:00"),
+    ("09:00", "12:00"),
+    ("12:00", "15:00"),
+    ("15:00", "18:00"),
+    ("18:00", "21:00"),
+)
 
 
 def _age_row(session_factory: sessionmaker[Session], department_id: int) -> None:
@@ -181,8 +197,8 @@ def test_create_returns_created_department(client: TestClient, project_id: int) 
     assert body["name"] == "Разработка"
     assert body["kind"] == {"id": DEVELOPMENT_KIND_ID, "code": "development", "title": "Разработка"}
     assert body["fields"] == list(FIELD_KEYS_BY_CODE["development"])
-    assert body["start_time"] is None
-    assert body["end_time"] is None
+    # Новый отдел создаётся без расписания: пустой набор окон, а не `null`.
+    assert body["windows"] == []
     assert body["roles"] == []
     assert body["max_rework"] == 3
     assert body["notifications_enabled"] is False
@@ -384,8 +400,7 @@ def test_patch_changes_only_sent_fields(
     assert body["repo_path"] == "gidvantus/workflow"
     for field in TEXT_FIELDS[1:]:
         assert body[field] is None
-    assert body["start_time"] is None
-    assert body["end_time"] is None
+    assert body["windows"] == []
     assert body["roles"] == []
     assert body["max_rework"] == 3
     assert datetime.fromisoformat(body["updated_at"]) > datetime.fromisoformat(body["created_at"])
@@ -712,11 +727,197 @@ def test_role_can_stand_in_two_departments_of_different_projects(
     assert [role["id"] for role in response.json()["roles"]] == [6]
 
 
-def test_patch_sets_midnight_crossing_schedule(
+def test_patch_sets_windows(client: TestClient, project_id: int) -> None:
+    """Набор окон приходит целиком, порядок задаёт сервер: по возрастанию начала.
+
+    Первое окно идёт через полночь (`04:00` после `13:00`) — это свойство окна, а не
+    ошибка; в ответе время ровно `"ЧЧ:ММ"` без секунд.
+    """
+    created = _create(client, project_id)
+
+    response = client.patch(
+        _department_url(created["id"]),
+        json={"windows": _windows(("13:00", "04:00"), ("07:00", "09:00"))},
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()["windows"] == [
+        {"start_time": "07:00", "end_time": "09:00"},
+        {"start_time": "13:00", "end_time": "04:00"},
+    ]
+
+
+def test_patch_replaces_windows_entirely(
     client: TestClient,
     project_id: int,
+    session_factory: sessionmaker[Session],
 ) -> None:
-    """`end_time` меньше `start_time` — переход через полночь, а не ошибка."""
+    """Набор заменяется целиком, а не дополняется: старое окно не остаётся в базе.
+
+    Правка другого поля набор не трогает, а правка окна сдвигает `updated_at` — колонка
+    «Обновлён» показывает дату правки, хотя в строке менялся только JSON.
+    """
+    created = _create(client, project_id)
+    first = client.patch(
+        _department_url(created["id"]),
+        json={"windows": _windows(("09:00", "18:00"))},
+    )
+    assert first.status_code == status.HTTP_200_OK
+    _age_row(session_factory, created["id"])
+
+    second = client.patch(
+        _department_url(created["id"]),
+        json={"windows": _windows(("10:00", "14:00"), ("15:00", "19:00"))},
+    )
+
+    assert second.status_code == status.HTTP_200_OK
+    assert second.json()["windows"] == [
+        {"start_time": "10:00", "end_time": "14:00"},
+        {"start_time": "15:00", "end_time": "19:00"},
+    ]
+    assert datetime.fromisoformat(second.json()["updated_at"]) > PAST
+    # Набор пережил круг «правка → база → список»: в строке лежит ровно два окна.
+    listed = client.get(_departments_url(project_id)).json()[0]
+    assert listed["windows"] == second.json()["windows"]
+
+    untouched = client.patch(
+        _department_url(created["id"]),
+        json={"repo_path": "gidvantus/workflow"},
+    )
+
+    assert untouched.status_code == status.HTTP_200_OK
+    assert untouched.json()["windows"] == second.json()["windows"]
+
+
+@pytest.mark.parametrize("payload", [[], None], ids=["empty-list", "null"])
+def test_patch_requires_at_least_one_window(
+    client: TestClient,
+    project_id: int,
+    payload: list[Any] | None,
+) -> None:
+    """`[]` и `null` одинаково значат «окон нет»: расписание — набор, и пустым он не бывает."""
+    created = _create(client, project_id)
+    assert (
+        client.patch(
+            _department_url(created["id"]),
+            json={"windows": _windows(("09:00", "18:00"))},
+        ).status_code
+        == status.HTTP_200_OK
+    )
+
+    response = client.patch(_department_url(created["id"]), json={"windows": payload})
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert response.json() == {"detail": "Укажите хотя бы одно окно времени работы"}
+
+
+def test_patch_accepts_six_touching_windows(client: TestClient, project_id: int) -> None:
+    """Шесть окон встык — предел задачи: касание концами пересечением не считается."""
+    created = _create(client, project_id)
+
+    response = client.patch(
+        _department_url(created["id"]),
+        json={
+            "windows": _windows(
+                ("00:00", "04:00"),
+                ("04:00", "08:00"),
+                ("08:00", "12:00"),
+                ("12:00", "16:00"),
+                ("16:00", "20:00"),
+                ("20:00", "00:00"),
+            )
+        },
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert len(response.json()["windows"]) == 6
+
+
+def test_patch_rejects_seven_windows(client: TestClient, project_id: int) -> None:
+    """Седьмое окно — отказ: предел шесть, и он проверяется до пересечений."""
+    created = _create(client, project_id)
+
+    response = client.patch(_department_url(created["id"]), json={"windows": SEVEN_WINDOWS})
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert response.json() == {"detail": "Окон времени работы не может быть больше шести"}
+
+
+@pytest.mark.parametrize(
+    "pairs",
+    [
+        # второе окно внутри первого
+        (("09:00", "18:00"), ("12:00", "14:00")),
+        # одинаковые окна — тоже пересечение
+        (("13:00", "04:00"), ("13:00", "04:00")),
+        # окно через полночь перекрывает второе после полуночи
+        (("13:00", "04:00"), ("02:00", "05:00")),
+        # окно через полночь перекрывает второе до полуночи
+        (("13:00", "04:00"), ("20:00", "22:00")),
+        # второе само идёт через полночь и перекрывает первое
+        (("06:00", "12:00"), ("20:00", "08:00")),
+        # хвост последнего окна накрывает начало первого
+        (("00:00", "02:00"), ("23:00", "01:00")),
+    ],
+    ids=[
+        "inside",
+        "duplicate",
+        "crossing-vs-after-midnight",
+        "crossing-vs-before-midnight",
+        "crossing-second",
+        "tail-vs-first",
+    ],
+)
+def test_patch_rejects_overlapping_windows(
+    client: TestClient,
+    project_id: int,
+    pairs: tuple[tuple[str, str], ...],
+) -> None:
+    """Пересечение запрещено в любом виде, включая окна через полночь."""
+    created = _create(client, project_id)
+
+    response = client.patch(
+        _department_url(created["id"]),
+        json={"windows": _windows(*pairs)},
+    )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert response.json() == {"detail": "Окна времени работы пересекаются"}
+
+
+@pytest.mark.parametrize("value", ["9:00", "25:00", "12:60", "13:00:00", "утро", ""])
+def test_patch_rejects_invalid_window_time(
+    client: TestClient,
+    project_id: int,
+    value: str,
+) -> None:
+    """Кривой формат времени в окне — тот же текст отказа, что и у валидатора."""
+    created = _create(client, project_id)
+
+    response = client.patch(
+        _department_url(created["id"]),
+        json={"windows": _windows((value, "04:00"))},
+    )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert response.json() == {"detail": "Время работы указывается как ЧЧ:ММ, например 09:00"}
+
+
+def test_patch_rejects_closed_window(client: TestClient, project_id: int) -> None:
+    """Равные начало и конец у окна — отказ с прежним текстом про совпадение."""
+    created = _create(client, project_id)
+
+    response = client.patch(
+        _department_url(created["id"]),
+        json={"windows": _windows(("13:00", "13:00"))},
+    )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert response.json() == {"detail": "Начало и конец рабочего времени совпадают"}
+
+
+def test_patch_windows_do_not_require_old_pair(client: TestClient, project_id: int) -> None:
+    """Прежняя пара ушла из контракта: `start_time`/`end_time` в теле больше не поля."""
     created = _create(client, project_id)
 
     response = client.patch(
@@ -724,81 +925,8 @@ def test_patch_sets_midnight_crossing_schedule(
         json={"start_time": "13:00", "end_time": "04:00"},
     )
 
-    assert response.status_code == status.HTTP_200_OK
-    # Именно `13:00`, а не `13:00:00`: `<input type="time">` иначе не подставит значение.
-    assert response.json()["start_time"] == "13:00"
-    assert response.json()["end_time"] == "04:00"
-
-
-def test_patch_clears_schedule_with_null_pair(client: TestClient, project_id: int) -> None:
-    """Оба поля пусты — расписания нет; `null` и `""` значат одно и то же."""
-    created = _create(client, project_id)
-    assert (
-        client.patch(
-            _department_url(created["id"]),
-            json={"start_time": "13:00", "end_time": "04:00"},
-        ).json()["start_time"]
-        == "13:00"
-    )
-
-    response = client.patch(
-        _department_url(created["id"]),
-        json={"start_time": None, "end_time": ""},
-    )
-
-    assert response.status_code == status.HTTP_200_OK
-    assert response.json()["start_time"] is None
-    assert response.json()["end_time"] is None
-
-
-@pytest.mark.parametrize(
-    "payload",
-    [{"start_time": "13:00"}, {"end_time": "04:00"}],
-    ids=["start-only", "end-only"],
-)
-def test_patch_one_time_without_pair_is_rejected(
-    client: TestClient,
-    project_id: int,
-    payload: dict[str, Any],
-) -> None:
-    """Половина пары расписанием не является: второй половины нет ни в теле, ни в базе."""
-    created = _create(client, project_id)
-
-    response = client.patch(_department_url(created["id"]), json=payload)
-
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
-    assert response.json() == {"detail": "Время работы указывается как ЧЧ:ММ, например 09:00"}
-
-
-def test_patch_one_time_checks_the_whole_pair(client: TestClient, project_id: int) -> None:
-    """Правка только начала проверяет итоговую пару: равные значения — отказ `422`."""
-    created = _create(client, project_id)
-    assert (
-        client.patch(
-            _department_url(created["id"]),
-            json={"start_time": "09:00", "end_time": "18:00"},
-        ).status_code
-        == status.HTTP_200_OK
-    )
-
-    response = client.patch(_department_url(created["id"]), json={"start_time": "18:00"})
-
-    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
-    assert response.json() == {"detail": "Начало и конец рабочего времени совпадают"}
-
-
-@pytest.mark.parametrize("value", ["9:00", "25:00", "12:60", "13:00:00", "утро"])
-def test_patch_rejects_invalid_time(client: TestClient, project_id: int, value: str) -> None:
-    """Кривой формат времени — тот же текст отказа, что и у валидатора."""
-    created = _create(client, project_id)
-
-    response = client.patch(
-        _department_url(created["id"]),
-        json={"start_time": value, "end_time": "04:00"},
-    )
-
-    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
-    assert response.json() == {"detail": "Время работы указывается как ЧЧ:ММ, например 09:00"}
+    assert response.json()["detail"] == "Нет полей для изменения"
 
 
 def test_patch_unknown_department_not_found(client: TestClient) -> None:
@@ -1025,3 +1153,44 @@ def test_validate_times_allows_midnight_crossing() -> None:
 
     assert start.strftime("%H:%M") == "13:00"
     assert end.strftime("%H:%M") == "04:00"
+
+
+def test_validate_windows_canonicalizes_and_orders() -> None:
+    """Валидатор отдаёт `"ЧЧ:ММ"` и сортирует по началу, а не по порядку в теле."""
+    windows = api.validate_windows(_windows(("13:00", "04:00"), ("07:00", "09:00")))
+
+    assert windows == [
+        {"start_time": "07:00", "end_time": "09:00"},
+        {"start_time": "13:00", "end_time": "04:00"},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("raw", "detail"),
+    [
+        ([], api.WINDOWS_REQUIRED),
+        (SEVEN_WINDOWS, api.WINDOWS_TOO_MANY),
+        (_windows(("09:00", "18:00"), ("10:00", "12:00")), api.WINDOWS_OVERLAP),
+        (_windows(("13:00", "04:00"), ("02:00", "05:00")), api.WINDOWS_OVERLAP),
+        (_windows(("9:00", "18:00")), api.CLOCK_INVALID),
+        (_windows(("09:00", "09:00")), api.CLOCK_EQUAL),
+    ],
+    ids=["empty", "seven", "overlap", "overlap-crossing", "bad-format", "closed"],
+)
+def test_validate_windows_rejections(raw: list[dict[str, str]], detail: str) -> None:
+    """Каждый отказ валидатора: текст из контракта и код `422`."""
+    with pytest.raises(HTTPException) as excinfo:
+        api.validate_windows(raw)
+
+    assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert excinfo.value.detail == detail
+
+
+def test_validate_windows_allows_touching_ends() -> None:
+    """`13:00–18:00` и `18:00–21:00` касаются концами, но не пересекаются."""
+    windows = api.validate_windows(_windows(("18:00", "21:00"), ("13:00", "18:00")))
+
+    assert windows == [
+        {"start_time": "13:00", "end_time": "18:00"},
+        {"start_time": "18:00", "end_time": "21:00"},
+    ]
