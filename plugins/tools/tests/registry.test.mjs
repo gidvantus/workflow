@@ -200,6 +200,38 @@ check('локальные ключи перечислены', merged.localKeys.s
 check('документ API не испорчен склейкой', fromApi.projects[0].departments[0].frontendPort, undefined)
 check('файла нет — склеивать не с чем', registry.overlay(fromApi, null).localKeys, [])
 
+console.log('\n=== склейка: бот есть с обеих сторон ===')
+// Веб присылает отдел с ботом (`token`, `chatId`), а `projects` (видимость бота) и
+// `voiceLang` живут только в файле: склейка обязана добрать их, присланное вебом
+// оставить как есть, иначе первая же синхронизация снимает сужение и язык.
+const botApi = {
+  version: 2,
+  projects: [
+    { id: 'vahta', departments: [{ kind: 'development', telegram: { token: 'web', chatId: 7 } }] },
+  ],
+}
+const botLocal = {
+  version: 2,
+  projects: [
+    {
+      id: 'vahta',
+      departments: [
+        {
+          kind: 'development',
+          telegram: { token: 'file', chatId: 1, projects: ['brain'], voiceLang: 'ru' },
+        },
+      ],
+    },
+  ],
+}
+const botMerged = registry.overlay(botApi, botLocal)
+check('бот: присланное вебом осталось из веба, локальные подполя добавлены', botMerged.document.projects[0].departments[0].telegram, { token: 'web', chatId: 7, projects: ['brain'], voiceLang: 'ru' })
+check('бот: сохранённые подполя перечислены', botMerged.localKeys.slice().sort(), [
+  'vahta.departments[development].telegram.projects',
+  'vahta.departments[development].telegram.voiceLang',
+].sort())
+check('бот: файл не испорчен склейкой', botLocal.projects[0].departments[0].telegram.token, 'file')
+
 console.log('\n=== запись кеша ===')
 const cacheFile = path.join(sandbox, 'state', 'projects.json')
 const first = registry.writeRegistryFile(cacheFile, fromApi)

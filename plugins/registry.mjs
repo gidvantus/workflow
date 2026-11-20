@@ -331,6 +331,11 @@ export function projectFields(project) {
  * те ключи, которых API не отдал — у документа, у проекта (по совпадению `id`) и у
  * отдела (по совпадению `kind`). Удаляются только те ключи, которые API отдал сам.
  *
+ * Исключение одно — блок `telegram`: API отдаёт `token` и `chatId`, а `projects`
+ * (видимость бота) и `voiceLang` живут только в файле. Поэтому, когда бот есть с
+ * обеих сторон, из файла добираются недостающие подполя, а присланные вебом
+ * остаются как есть.
+ *
  * Возвращает `{document, localKeys, droppedProjects}`:
  * `localKeys` — что сохранено и живёт только в файле (это печатается в статусе),
  * `droppedProjects` — проекты, которых в документе API нет вовсе: их ключи
@@ -374,6 +379,19 @@ export function overlay(apiDocument, localDocument) {
       if (!match) continue
       for (const key of Object.keys(match)) {
         if (key === 'kind') continue
+        // Бот — единственный блок, у которого часть полей приходит из веба
+        // (`token`, `chatId`), а часть живёт только в файле: `projects` сужает
+        // видимость бота, `voiceLang` задаёт язык голосовых. Присланный API блок
+        // склеиваем по подполям, иначе `tg-bridge` терял бы и то и другое с
+        // первой же синхронизации.
+        if (key === 'telegram' && isObject(match.telegram) && isObject(department.telegram)) {
+          for (const field of Object.keys(match.telegram)) {
+            if (hasKey(department.telegram, field)) continue
+            department.telegram[field] = clone(match.telegram[field])
+            localKeys.push(project.id + '.departments[' + department.kind + '].telegram.' + field)
+          }
+          continue
+        }
         if (hasKey(department, key)) continue
         department[key] = clone(match[key])
         localKeys.push(project.id + '.departments[' + department.kind + '].' + key)

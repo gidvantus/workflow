@@ -4113,7 +4113,7 @@ export default {
 
     const summaryTool = define(
       'dev_department_summary',
-      'Закрыть смены всех проектов, где они идут, и отправить их сводки в Telegram. Сводка уходит только боту проекта из реестра (projects.<id>.telegram): у проекта без бота она остаётся в журнале.',
+      'Закрыть смены всех проектов, где они идут, и отправить их сводки в Telegram. Сводка уходит только боту отдела разработки проекта из реестра (projects[].departments[].telegram): у проекта без бота она остаётся в журнале.',
       { type: 'object', properties: {}, additionalProperties: false },
       async () => {
         config = loadConfig()
