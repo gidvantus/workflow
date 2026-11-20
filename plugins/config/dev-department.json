@@ -12,6 +12,10 @@
   "maxRework": 3,
   "maxAttempts": 4,
   "stuckAfterMinutes": 30,
+  "registry": {
+    "apiUrl": "http://localhost:8096/api/registry",
+    "token": "<токен реестра из REGISTRY_TOKEN>"
+  },
   "usageRates": {
     "inputUsdPerM": 0.15,
     "cacheReadUsdPerM": 0.003,

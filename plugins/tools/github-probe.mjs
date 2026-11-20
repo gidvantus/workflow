@@ -39,7 +39,7 @@ import os from 'node:os'
 import path from 'node:path'
 import https from 'node:https'
 import { fileURLToPath } from 'node:url'
-import { statePathsModule } from './plugin-paths.mjs'
+import { statePathsModule, registryModule } from './plugin-paths.mjs'
 
 function dshHome() {
   return process.env.DSH_HOME || path.join(os.homedir(), '.dsh')
@@ -175,18 +175,20 @@ export function reportLines(rights) {
 // Реестр проектов: «не прочитан» и «пуст» — разные ответы, и оба не повод
 // подставлять репозитории, которых оператор не называл. Путь к реестру собирает
 // модуль состояния: файл переехал из корня каталога установки в каталог профиля.
+// Форму документа знает `registry.mjs`: repo лежит у отдела разработки проекта.
 export async function reposFromRegistry() {
   const state = await statePathsModule()
+  const registry = await registryModule()
   const file = state.readStateFile(state.STATE_FILES.projects)
-  let raw
+  let parsed
   try {
-    raw = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''))
+    parsed = registry.readRegistryFile(file)
   } catch (error) {
-    const why = error && error.message ? error.message : String(error)
-    return { repos: [], problem: 'не читается реестр проектов ' + file + ': ' + why }
+    return { repos: [], problem: error && error.message ? error.message : String(error) }
   }
-  const ids = Object.keys((raw && raw.projects) || {})
-  const repos = [...new Set(ids.map((id) => String((raw.projects[id] || {}).repo || '')).filter((r) => r !== ''))]
+  const repos = [...new Set(registry.projectsOf(parsed.document)
+    .map((project) => String((registry.developmentOf(project).department || {}).repo || ''))
+    .filter((repo) => repo !== ''))]
   if (repos.length === 0) return { repos: [], problem: 'в реестре ' + file + ' нет ни одного проекта с repo' }
   return { repos, problem: null }
 }

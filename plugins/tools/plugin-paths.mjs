@@ -135,10 +135,22 @@ export async function statePathsModule(options = {}) {
 }
 
 /**
+ * Модуль формы реестра проектов (`registry.mjs`) в любой раскладке. Инструменты
+ * не разбирают `projects` сами: версия документа, поля отдела и правило склейки
+ * известны одному модулю, и пятая копия формы разошлась бы с ним молча.
+ *
+ * Импорт отложенный по той же причине, что у `statePathsModule`: путь зависит от
+ * раскладки, а кэш импорта не должен закреплять первый найденный.
+ */
+export async function registryModule(options = {}) {
+  return import(pathToFileURL(pluginFile('registry', options)).href)
+}
+
+
+/**
  * Каталог установленного пакета надстройки или `null`. Это же место читает
  * патч бандла: `createRequire(baseUrl).resolve('dsh-dev-department/package.json')`.
- */
-export function bundlePackageDir(options = {}) {
+ */export function bundlePackageDir(options = {}) {
   const dir = bundleDir(settings(options))
   return fs.existsSync(dir) ? dir : null
 }

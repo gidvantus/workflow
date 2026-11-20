@@ -187,15 +187,26 @@ fs.writeFileSync(registryFile, '{ это не json')
 const registryBroken = await mod.reposFromRegistry()
 check('нечитаемый реестр назван проблемой', /не читается реестр проектов/.test(registryBroken.problem || ''), true)
 check('и репозиториев из него не берётся', registryBroken.repos, [])
-fs.writeFileSync(registryFile, JSON.stringify({ default: 'a', projects: { a: { repo: '' } } }))
+fs.writeFileSync(registryFile, JSON.stringify({ version: 2, default: 'a', projects: [{ id: 'a', departments: [{ kind: 'development' }] }] }))
 const registryEmpty = await mod.reposFromRegistry()
 check('реестр без repo — отдельная проблема', /нет ни одного проекта с repo/.test(registryEmpty.problem || ''), true)
 fs.writeFileSync(registryFile, JSON.stringify({
+  version: 2,
   default: 'a',
-  projects: { a: { repo: 'o/a' }, b: { repo: 'o/b' }, c: { repo: 'o/a' } },
+  projects: [
+    { id: 'a', departments: [{ kind: 'development', repo: 'o/a' }] },
+    { id: 'b', departments: [{ kind: 'development', repo: 'o/b' }] },
+    { id: 'c', departments: [{ kind: 'development', repo: 'o/a' }] },
+  ],
 }))
 const registryOk = await mod.reposFromRegistry()
 check('репозитории из реестра без повторов', [registryOk.repos, registryOk.problem], [['o/a', 'o/b'], null])
+// Версия 1 больше не читается: «чужой формат» — это отдельный ответ, а не
+// пустой список, иначе человек не поймёт, что файл надо перевести конвертером.
+fs.writeFileSync(registryFile, JSON.stringify({ version: 1, default: 'a', projects: { a: { repo: 'o/a' } } }))
+const registryOld = await mod.reposFromRegistry()
+check('реестр версии 1 назван нечитаемым', /переведите файл конвертером/.test(registryOld.problem || ''), true)
+check('и репозиториев из него не берётся', registryOld.repos, [])
 fs.rmSync(home, { recursive: true, force: true })
 if (prevHome === undefined) delete process.env.DSH_HOME
 else process.env.DSH_HOME = prevHome

@@ -28,7 +28,9 @@
 (`~/.dsh/profiles/desktop/dsh-dev-department/projects.json`, см. «Где живёт
 состояние отдела») он записан как
 проект `workflow` (`gidvantus/workflow`, рабочая копия отдела `D:\Agents\Workflow`,
-клон человека — этот каталог) с включённым отделом.
+клон человека — этот каталог) с включённым отделом. Реестр — документ версии 2:
+проект с вложенными отделами, настройки лежат на отделе `development`; источник
+правды — база веба (`GET /api/registry`), а файл — кеш диспетчера.
 
 ## Что лежит в репозитории
 
@@ -177,10 +179,21 @@ DSH собирается из композиций Cordis. Здесь их дв�
    входят (это настройки человека, а не
    содержимое надстройки): разложить их из репозитория можно командой
    `node plugins/sync.mjs apply` или написать файл руками.
-5. Создать `~/.dsh/profiles/desktop/dsh-dev-department/projects.json` по образцу
-   `config/projects.example.json` и
-   заполнить своими значениями: репозиторий, базовая ветка, каталог рабочей копии
-   отдела и каталог клона человека, имя compose-проекта, порты, каталог артефактов.
+5. Завести реестр проектов отдела — документ версии 2 («проект → вложенные
+   отделы»), образец `config/projects.example.json`. У проекта есть `id` и `title`,
+   а все настройки лежат на его отделе разработки (`kind: "development"`):
+   репозиторий, базовая ветка, каталог рабочей копии отдела и каталог клона
+   человека, имя compose-проекта, порты, каталог артефактов, окна смен, лимиты,
+   метки и бот. Источник правды — веб-приложение `app/` (`GET /api/registry`):
+   диспетчер забирает документ оттуда и кладёт кешем в
+   `~/.dsh/profiles/desktop/dsh-dev-department/projects.json`. Локальные ключи,
+   которых API не отдаёт (`default`, `labels`, `areas`, `frontendPort`, `apiPort`,
+   `enabled`), синхронизация сохраняет, прошлую версию файла — в
+   `projects.json.bak`. Адрес и токен ручки задаёт блок `registry` (`apiUrl`,
+   `token`) в `dev-department.json`, на стороне стенда — `REGISTRY_TOKEN` в
+   `app/.env`. Прежнюю форму v1 переводит
+   `node plugins/tools/registry-v1-to-v2.mjs` (по умолчанию dry-run, `--write`
+   пишет файл и оставляет бэкап).
    Каталог состояния отдела создаёт сам отдел — при первом запуске (перенос
    состояния и журнал смены) или командой `node plugins/sync.mjs apply`. Если
    пишете файл руками на чистой машине, сначала создайте каталог:
@@ -192,10 +205,11 @@ DSH собирается из композиций Cordis. Здесь их дв�
    | Файл | Что внутри |
    |---|---|
    | `~/.dsh/mcp/github-mcp-server/token` | токен GitHub для MCP-сервера (fine-grained; Issues, Contents, Pull requests read+write на нужные репозитории) |
-   | `<каталог состояния>/projects.json` | `telegram.token` и `telegram.chatId` каждого проекта |
+   | `<каталог состояния>/projects.json` | `telegram.token` и `telegram.chatId` отдела разработки каждого проекта |
 
-   Бот задаётся только в `projects.<id>.telegram` — та же тройка полей
-   `token`/`chatId`/`voiceLang`; у проекта без бота Telegram нет и это не ошибка.
+   Бот задаётся только в `telegram` **отдела разработки** проекта (`projects[]` →
+   `departments[]` с `kind: "development"`) — поля `token`/`chatId` и
+   необязательный `voiceLang`; у проекта без бота Telegram нет и это не ошибка.
    `chatId` — это id **пользователя**, а не чата: мост отсеивает чужие сообщения
    сравнением `from.id` с этим значением, поэтому бот слушает ровно одного
    человека (в приватном чате id пользователя и id чата совпадают) и строковое
@@ -249,10 +263,11 @@ DSH собирается из композиций Cordis. Здесь их дв�
 
 | Что | Где | Почему не в пакете |
 |---|---|---|
-| Реестр проектов | `~/.dsh/profiles/desktop/dsh-dev-department/projects.json` | адреса, ветки, порты и каталоги — свои у каждой машины |
-| Расписание смен и лимиты | `~/.dsh/profiles/desktop/dsh-dev-department/dev-department.json` | решение человека, а не содержимое надстройки |
+| Реестр проектов и отделов | `~/.dsh/profiles/desktop/dsh-dev-department/projects.json` | кеш документа из веба плюс локальные ключи: адреса, ветки, порты и каталоги — свои у каждой машины |
+| Расписание смен и лимиты, адрес и токен реестра | `~/.dsh/profiles/desktop/dsh-dev-department/dev-department.json` | решение человека, а не содержимое надстройки |
 | Токен GitHub | `~/.dsh/mcp/github-mcp-server/token` | секрет |
-| Бот Telegram | `projects.<id>.telegram` | секрет |
+| Токен реестра | `REGISTRY_TOKEN` в `app/.env` и `registry.token` в `dev-department.json` | секрет |
+| Бот Telegram | `telegram` отдела разработки проекта | секрет |
 | Метки конвейера | репозитории проектов | их создаёт `plugins/tools/pipeline-labels-create.mjs` по токену |
 | MCP GitHub и Playwright MCP | `plugins/profiles/desktop/cordis.patch.yml` | машинная настройка: пути к бинарникам и браузеру |
 | Перезапуск DSH | — | композиция профиля читается только на старте |
@@ -280,8 +295,9 @@ DSH собирается из композиций Cordis. Здесь их дв�
 
 ```
 ~/.dsh/profiles/desktop/dsh-dev-department/
-  projects.json                  реестр проектов (в т.ч. токены Telegram)
-  dev-department.json            расписание смен и лимиты
+  projects.json                  кеш реестра проектов и отделов (в т.ч. токены Telegram)
+  projects.json.bak              прошлая версия кеша перед синхронизацией
+  dev-department.json            расписание смен, лимиты, адрес и токен реестра
   dev-department-dialogs.json    карта диалогов роль↔тикет
   dev-department-usage.json      книга привязок «сессия → тикет»
   dev-department.log             журнал смены

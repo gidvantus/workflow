@@ -34,11 +34,21 @@
 ## Проекты
 
 Отдел многопроектный: и диспетчер, и пресеты не знают ни одного конкретного
-адреса. Всё проектное лежит в реестре проектов отдела —
+адреса. Документ проектов живёт в базе веба и отдаётся ручкой `GET /api/registry`
+(формат v2, «проект → вложенные отделы»); диспетчер на старте и в каждом тике
+забирает его и кладёт **кешем** в
 `<DSH_HOME>/profiles/desktop/dsh-dev-department/projects.json` (каталог состояния
-называет `plugins/state-paths.mjs`):
+называет `plugins/state-paths.mjs`). Адрес и токен ручки — `registry.apiUrl` и
+`registry.token` в `dev-department.json`; недоступный API, `401` и битый документ
+кеш не меняют и смену не останавливают, а состояние синхронизации видно в карточке
+`dev_department_status` полем `registrySync`.
 
-| Поле | Зачем |
+Проект — это `id` (стабильный ключ состояния: карта диалогов, `default`,
+`telegram.projects`) и `title`. Все настройки лежат на его **отделах**
+(`departments`), и диспетчер обслуживает проект по единственному отделу вида
+`development`; остальные отделы файл хранит, но конвейер их не трогает:
+
+| Поле отдела разработки | Зачем |
 |---|---|
 | `repo`, `base` | репозиторий GitHub и базовая ветка |
 | `workspace` | клон отдела, в нём работает роль |
@@ -46,14 +56,69 @@
 | `composeProject` | имя своего compose-стенда |
 | `frontendPort`, `apiPort` | порты стенда |
 | `artifacts` | каталог артефактов вне рабочей копии |
-| `department` | включённость, окна смен, `maxRework` |
+| `enabled`, `windows`, `maxRework`, `maxAttempts`, `stuckAfterMinutes` | включённость, окна смен и лимиты |
 | `labels` | переопределение имён меток конвейера, если проект их переименовал |
+| `areas` | каталоги половин работы: `backend` и `frontend` |
+| `telegram` | бот проекта: `token`, `chatId`, `projects`, `voiceLang` |
 
-Значения берутся из записи проекта в реестре по полю `workspace`: роль открывает
-`projects.json` и находит свою запись, поэтому в персонах и скиллах вместо адресов стоят
+`default`, `labels`, `areas`, `frontendPort`, `apiPort`, `enabled` и
+`telegram.projects` API не отдаёт — это локальные ключи файла. Синхронизация их
+сохраняет (`overlay` в `plugins/registry.mjs`), а остальное приходит из документа
+API: проект, которого нет в базе веба, из кеша пропадёт. Прошлая версия файла
+остаётся в `projects.json.bak`.
+
+Значения берутся из отдела разработки проекта по полю `workspace`: роль открывает
+`projects.json` и находит свой проект по рабочей области его отдела `development`,
+поэтому в персонах и скиллах вместо адресов стоят
 заполнители `<repo>`, `<base>`, `<workspace>`, `<humanClone>`, `<composeProject>`,
 `<frontendPort>`, `<apiPort>`, `<artifacts>`, `<id>` — один и тот же пресет
 работает в любом проекте реестра.
+
+Старую форму v1 (`projects` объектом, поля отдела прямо в записи) не читает больше
+никто: файл переводит один раз `plugins/tools/registry-v1-to-v2.mjs`.
+
+Сокращённый документ v2 — так он выглядит в API и в кеше (полный образец со всеми
+полями — `plugins/config/projects.example.json`):
+
+```json
+{
+  "version": 2,
+  "default": "vahta",
+  "projects": [
+    {
+      "id": "vahta",
+      "title": "Вахта",
+      "departments": [
+        {
+          "kind": "development",
+          "title": "Разработка",
+          "enabled": true,
+          "repo": "gidvantus/vahta",
+          "base": "develop-m",
+          "workspace": "D:\\Agents\\Vahta",
+          "humanClone": "D:\\Development\\VideCoding\\Vahta",
+          "artifacts": "D:\\Agents\\vahta-artifacts",
+          "composeProject": "vahta-agent",
+          "frontendPort": 8080,
+          "apiPort": 8001,
+          "areas": {"backend": ["operator/backend"], "frontend": ["operator/frontend"]},
+          "labels": {"dev": "ready-for-dev"},
+          "windows": [{"start": "13:00", "stop": "04:00"}],
+          "maxRework": 3,
+          "maxAttempts": 4,
+          "stuckAfterMinutes": 30,
+          "telegram": {"token": "<токен>", "chatId": 294292338, "projects": ["brain"]}
+        },
+        {"kind": "marketing", "title": "Маркетинг", "repo": "gidvantus/vahta", "base": "main"}
+      ]
+    }
+  ]
+}
+```
+
+`title` по умолчанию равен `id`; проект без отделов в документ не попадает; второй
+отдел `development` у проекта — это пропуск проекта с проблемой в
+`dev_department_status`, а не выбор «первого попавшегося».
 
 ## Конвейер меток
 
@@ -192,7 +257,7 @@
 
 Метки должны **существовать в репозитории**: поставить метку, которой там нет,
 GitHub не даст (422), и шаг конвейера упадёт. Набор меток один для всех ролей, его
-отдаёт `labels` записи проекта в реестре, а `projectRow` подставляет набор по
+отдаёт `labels` отдела разработки проекта в реестре, а `projectRow` подставляет набор по
 умолчанию. Проверяют и создают `plugins/tools/pipeline-labels-probe.mjs` и
 `plugins/tools/pipeline-labels-create.mjs`.
 

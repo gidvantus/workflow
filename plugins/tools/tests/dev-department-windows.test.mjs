@@ -15,14 +15,19 @@ if (missing.length > 0) { console.error('в модуле нет функций: 
 
 const moduleFile = path.join(process.cwd(), '.windows-under-test.mjs')
 fs.writeFileSync(moduleFile, source.slice(0, cut) + '\nexport { ' + present.join(', ') + ' }\n')
-// Модуль диспетчера берёт пути состояния относительным `./state-paths.mjs`, а
-// вырезанная копия лежит в каталоге набора: без копии рядом Node искал бы модуль
-// здесь же и не нашёл. Кладём рядом и убираем за собой тем же признаком, каким
-// положили.
-const statePathsSource = path.join(path.dirname(plugin), 'state-paths.mjs')
-const statePathsCopy = path.join(process.cwd(), 'state-paths.mjs')
-const copiedStatePaths = fs.existsSync(statePathsSource) && statePathsCopy !== statePathsSource
-if (copiedStatePaths) fs.copyFileSync(statePathsSource, statePathsCopy)
+// Модуль диспетчера берёт соседние модули относительными импортами
+// (`./state-paths.mjs`, `./registry.mjs`), а вырезанная копия лежит в каталоге
+// набора: без копий рядом Node искал бы модули здесь же и не нашёл. Кладём рядом
+// и убираем за собой тем же признаком, каким положили.
+const patched = ['state-paths', 'registry']
+const copied = []
+for (const name of patched) {
+  const source = path.join(path.dirname(plugin), name + '.mjs')
+  const copy = path.join(process.cwd(), name + '.mjs')
+  if (!fs.existsSync(source) || copy === source) continue
+  fs.copyFileSync(source, copy)
+  copied.push(copy)
+}
 const m = await import('file:///' + moduleFile.replace(/\\/g, '/') + '?v=' + Date.now())
 
 let failures = 0
@@ -71,5 +76,5 @@ check('в 04:00 — сегодня 07:00', m.nextWindowStart(WORK, at(2026, 10, 
 
 console.log(failures === 0 ? '\nВСЕ ПРОВЕРКИ ПРОШЛИ' : '\nПРОВАЛОВ: ' + failures)
 fs.rmSync(moduleFile, { force: true })
-if (copiedStatePaths) fs.rmSync(statePathsCopy, { force: true })
+for (const copy of copied) fs.rmSync(copy, { force: true })
 process.exit(failures === 0 ? 0 : 1)

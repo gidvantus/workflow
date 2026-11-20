@@ -96,7 +96,8 @@
 ## 3. Метки: кто ставит, при каком событии, кто снимает
 
 Имена по умолчанию; проект может переопределить их в реестре проектов отдела
-(`profiles/desktop/dsh-dev-department/projects.json`) → `projects.<id>.labels`.
+(`profiles/desktop/dsh-dev-department/projects.json`) → `labels` отдела разработки
+(`projects[].departments[]` с `kind: "development"`).
 
 | Метка | Ставит | Событие | Снимает |
 |---|---|---|---|
@@ -566,7 +567,7 @@ DevOps-инженера.
 | Строки плагинов отдела в композиции | `<пакет>/cordis.patch.yml` — патч бандла |
 | Роли: промт, описание, скиллы (`agent.cordis.yml`, `preset.yml`, `skills/`) | `<пакет>/agent-presets/<id>/` — карта ролей в разделе 2.1 |
 | Скилл макета (роль `design`) | `<пакет>/agent-presets/design/skills/mockup-delivery/SKILL.md` |
-| Проекты, ветки, каталоги, метки | `~/.dsh/profiles/desktop/dsh-dev-department/projects.json` |
+| Проекты, отделы, ветки, каталоги, метки | `~/.dsh/profiles/desktop/dsh-dev-department/projects.json` — кеш документа из `GET /api/registry` плюс локальные ключи файла |
 | Общие расписание и лимиты | `~/.dsh/profiles/desktop/dsh-dev-department/dev-department.json` |
 | Карта диалогов роль↔тикет | `~/.dsh/profiles/desktop/dsh-dev-department/dev-department-dialogs.json` |
 | Журнал смен | `~/.dsh/profiles/desktop/dsh-dev-department/dev-department.log` |
