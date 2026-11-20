@@ -725,9 +725,10 @@ SQLAlchemy не увидел бы изменения, а `updated_at` не сд�
 - Список читается с сервера: `GET /api/roles` относительным путём, запрос проксирует nginx
   на том же origin. Адрес API в коде не зашит — его задаёт окружение стенда.
 - Строка: название, под ним описание (пустое описание — пустая строка, без заглушки), код
-  моноширинным, число скиллов с правильным окончанием («1 скилл», «2 скилла», «5 скиллов»),
-  дата обновления и две названные кнопки — «Изменить» и «Удалить». Меню-«⋯», как у
-  проектов, здесь нет: у роли только два действия, и они помещаются в колонку.
+  моноширинным (`role-item-code`), число скиллов с правильным окончанием («1 скилл»,
+  «2 скилла», «5 скиллов»), дата обновления и две названные кнопки — «Изменить» и «Удалить».
+  Меню-«⋯», как у проектов, здесь нет: у роли только два действия, и они помещаются в
+  колонку.
 - Клик по строке открывает страницу роли. Название в строке — кнопка (`role-item-open`):
   до строки можно дойти клавиатурой, Enter/Space делают то же, что клик. Клик по кнопкам
   действий страницу **не** открывает: они останавливают всплывание.
@@ -793,7 +794,7 @@ SQLAlchemy не увидел бы изменения, а `updated_at` не сд�
 
 Элементы для тестов помечены `data-testid`: `nav-roles`, `roles-page`, `roles-list`,
 `roles-state`, `roles-error`, `roles-retry`, `roles-empty`, `role-create`, `role-item`,
-`role-item-open`, `role-item-skills`, `role-edit`, `role-delete`, `role-form`,
+`role-item-open`, `role-item-code`, `role-item-skills`, `role-edit`, `role-delete`, `role-form`,
 `role-form-code`, `role-form-title`, `role-form-description`, `role-form-submit`,
 `role-form-cancel`, `role-form-error`, `role-delete-confirm`,
 `role-delete-confirm-submit`, `role-delete-confirm-cancel`, `role-delete-confirm-error`,

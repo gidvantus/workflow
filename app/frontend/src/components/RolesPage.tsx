@@ -241,7 +241,9 @@ export default function RolesPage(): JSX.Element {
                       </p>
                       <p className="row__desc">{role.description}</p>
                     </div>
-                    <p className="row__repo">{role.code}</p>
+                    <p className="row__repo" data-testid="role-item-code">
+                      {role.code}
+                    </p>
                     <p className="row__date" data-testid="role-item-skills">
                       {skillsCount(role.skill_count)}
                     </p>
