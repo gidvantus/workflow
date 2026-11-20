@@ -28,6 +28,7 @@ import crypto from 'node:crypto'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 import { BUNDLE_PACKAGE, DEFAULT_PROFILE, bundlePackageDir, statePathsModule } from './tools/plugin-paths.mjs'
+import { readRegistryFile, projectsOf } from './registry.mjs'
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
 
@@ -318,12 +319,22 @@ function secrets() {
   }
   // Реестр проектов лежит в каталоге состояния отдела, а не в корне каталога
   // установки: путь спрашиваем у модуля, как и остальные файлы состояния.
+  // Форму документа знает только `registry.mjs`: здесь нужны токены ботов всех
+  // отделов, а не разбор `projects` своими руками. Нечитаемый реестр — не повод
+  // валить проверку секретов: остальные источники всё равно проверяются.
   const projects = state.readStateFile(state.STATE_FILES.projects)
   if (fs.existsSync(projects)) {
-    const data = JSON.parse(fs.readFileSync(projects, 'utf8'))
-    for (const [id, project] of Object.entries(data.projects || {})) {
-      const token = project.telegram && project.telegram.token
-      if (token) found.push({ where: 'projects.json: ' + id, value: token })
+    let document = null
+    try {
+      document = readRegistryFile(projects).document
+    } catch (error) {
+      document = null
+    }
+    for (const project of projectsOf(document)) {
+      for (const department of project.departments) {
+        const token = department.telegram && department.telegram.token
+        if (token) found.push({ where: 'projects.json: ' + project.id + '/' + department.kind, value: String(token) })
+      }
     }
   }
   return found

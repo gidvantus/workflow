@@ -32,21 +32,27 @@ fs.writeFileSync(path.join(home, 'mcp', 'github-mcp-server', 'token'), 'test-tok
 const stateDir = path.join(home, 'profiles', 'desktop', 'dsh-dev-department')
 fs.mkdirSync(stateDir, { recursive: true })
 // Бот проекта живёт только в реестре: сводку тест ловит поддельным Telegram,
-// поэтому бот задан полем telegram записи проекта, а не общим файлом.
+// поэтому бот задан полем telegram отдела разработки, а не общим файлом.
 fs.writeFileSync(path.join(stateDir, 'projects.json'), JSON.stringify({
-  version: 1,
+  version: 2,
   default: 'workflow',
-  projects: {
-    workflow: {
+  projects: [
+    {
+      id: 'workflow',
       title: 'Тест',
-      repo: 'gidvantus/workflow',
-      base: 'main',
-      workspace: WORKSPACE,
-      composeProject: 'workflow-agent',
-      department: { enabled: true },
-      telegram: { token: 't', chatId: '1' },
+      departments: [
+        {
+          kind: 'development',
+          enabled: true,
+          repo: 'gidvantus/workflow',
+          base: 'main',
+          workspace: WORKSPACE,
+          composeProject: 'workflow-agent',
+          telegram: { token: 't', chatId: '1' },
+        },
+      ],
     },
-  },
+  ],
 }, null, 2))
 const configFile = path.join(stateDir, 'dev-department.json')
 const writeConfig = (extra) => fs.writeFileSync(configFile, JSON.stringify(Object.assign({

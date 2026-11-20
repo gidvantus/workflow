@@ -4,14 +4,16 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import https from 'node:https'
-import { statePathsModule } from './plugin-paths.mjs'
+import { statePathsModule, registryModule } from './plugin-paths.mjs'
 
 const home = process.env.DSH_HOME || path.join(os.homedir(), '.dsh')
 const token = fs.readFileSync(path.join(home, 'mcp', 'github-mcp-server', 'token'), 'utf8').trim()
 // Реестр проектов лежит в каталоге состояния отдела, а не в корне каталога
-// установки: путь к нему собирает модуль состояния, а не этот скрипт.
+// установки: путь к нему собирает модуль состояния, а не этот скрипт. Форму
+// документа знает `registry.mjs`: repo живёт у отдела разработки проекта.
 const state = await statePathsModule({ dshHome: home })
-const registry = JSON.parse(fs.readFileSync(state.readStateFile(state.STATE_FILES.projects), 'utf8'))
+const registry = await registryModule({ dshHome: home })
+const document = registry.readRegistryFile(state.readStateFile(state.STATE_FILES.projects)).document
 
 function get(url) {
   return new Promise((resolve, reject) => {
@@ -54,15 +56,17 @@ const wanted = [
   'test-failed',
   'merged',
 ]
-for (const [id, project] of Object.entries(registry.projects || {})) {
-  if (!project.repo) { console.log(id + ': без GitHub'); continue }
-  const res = await get('/repos/' + project.repo + '/labels?per_page=100')
+for (const project of document.projects) {
+  const id = project.id
+  const repo = String((registry.developmentOf(project).department || {}).repo || '')
+  if (!repo) { console.log(id + ': без GitHub'); continue }
+  const res = await get('/repos/' + repo + '/labels?per_page=100')
   if (res.status !== 200) {
-    console.log(id + ' (' + project.repo + ') → ' + res.status + ' ' + JSON.parse(res.body).message)
+    console.log(id + ' (' + repo + ') → ' + res.status + ' ' + JSON.parse(res.body).message)
     continue
   }
   const names = JSON.parse(res.body).map((l) => l.name)
   const missing = wanted.filter((w) => names.indexOf(w) === -1)
-  console.log(id + ' (' + project.repo + '): есть ' + wanted.filter((w) => names.indexOf(w) !== -1).join(', ') +
+  console.log(id + ' (' + repo + '): есть ' + wanted.filter((w) => names.indexOf(w) !== -1).join(', ') +
     (missing.length ? ' | НЕТ: ' + missing.join(', ') : ' | все метки конвейера на месте'))
 }

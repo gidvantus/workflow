@@ -106,10 +106,25 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import http from 'node:http'
 import https from 'node:https'
+import crypto from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { STATE_FILES, dshHome, legacyFile, readStateFile, stateDir, stateFile } from './state-paths.mjs'
+// Форма реестра проектов известна одному модулю: диспетчер, мост Telegram,
+// `sync.mjs` и инструменты `plugins/tools/` берут её отсюда, а не разбирают
+// `projects` каждый по-своему.
+import {
+  developmentOf,
+  normalizePath,
+  overlay,
+  parseRegistry,
+  projectFields,
+  readRegistryFile,
+  stripBom,
+  writeRegistryFile,
+} from './registry.mjs'
 
 // ОБЩИЕ значения по умолчанию для проектов, которые своё не задали. Данных
 // конкретного проекта здесь нет и быть не должно: они в реестре проектов
@@ -122,14 +137,9 @@ const DEFAULTS = {
   maxRework: 3,
   maxAttempts: 4,
   stuckAfterMinutes: 30,
-}
-
-// BOM в начале файла (его пишут редакторы Windows и PowerShell) ломает
-// JSON.parse невидимым символом. Реестр — обычный файл, который человек
-// правит руками, поэтому читаем его снисходительно.
-function stripBom(text) {
-  const value = String(text)
-  return value.charCodeAt(0) === 0xFEFF ? value.slice(1) : value
+  // Откуда забирать документ реестра проектов. Живёт здесь, а не в реестре: токен
+  // — секрет, ему в файл проектов нельзя. Нет блока — нет синхронизации вовсе.
+  registry: null,
 }
 
 // "HH:MM" → минуты от полуночи; null, если это не время суток.
@@ -243,6 +253,27 @@ function loadConfig() {
     const parsedRates = parseUsageRates(raw.usageRates)
     for (const problem of parsedRates.problems) problems.push(problem)
     if (parsedRates.rates) values.usageRates = parsedRates.rates
+  }
+
+  // Откуда диспетчер забирает документ реестра проектов: `{"apiUrl": "…",
+  // "token": "…"}`. Нет блока — значит синхронизации нет вовсе, и `projects.json`
+  // остаётся единственным источником, как было до версии 2: установка без веба
+  // обязана работать.
+  if (raw.registry !== undefined) {
+    if (!raw.registry || typeof raw.registry !== 'object' || Array.isArray(raw.registry)) {
+      problems.push('registry: нужен объект с полями apiUrl и token')
+    } else {
+      const registry = {}
+      if (raw.registry.apiUrl !== undefined) {
+        if (typeof raw.registry.apiUrl === 'string' && raw.registry.apiUrl.trim() !== '') registry.apiUrl = raw.registry.apiUrl.trim()
+        else problems.push('registry.apiUrl: нужна непустая строка с адресом')
+      }
+      if (raw.registry.token !== undefined) {
+        if (typeof raw.registry.token === 'string' && raw.registry.token.trim() !== '') registry.token = raw.registry.token.trim()
+        else problems.push('registry.token: нужна непустая строка')
+      }
+      if (registry.apiUrl) values.registry = registry
+    }
   }
 
   // Общее расписание — запасное для проектов, которые своё не задали.
@@ -570,38 +601,52 @@ export function deployPresets(options = {}) {
 
 // ── Реестр проектов ─────────────────────────────────────────────────────────
 
-function normalizePath(value) {
-  return String(value || '').replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase()
-}
-
+// Реестр — документ версии 2 (см. `registry.mjs`). Диспетчер держит его разобранным
+// один раз на тик: `byId` — проект по id, `ids` — порядок документа, `problems` —
+// то, что разбор отбросил по дороге. Пустой или нечитаемый реестр по-прежнему
+// ошибка: без проектов смена невозможна.
 function readRegistry() {
   const file = readStateFile(STATE_FILES.projects)
-  let raw
-  try {
-    raw = JSON.parse(stripBom(fs.readFileSync(file, 'utf8')))
-  } catch (error) {
-    throw new Error('не читается реестр проектов ' + file + ': ' + (error && error.message ? error.message : String(error)))
-  }
-  const projects = (raw && raw.projects) || {}
-  const ids = Object.keys(projects)
-  if (ids.length === 0) throw new Error('реестр ' + file + ' пуст: в "projects" нет ни одного проекта')
-  const defaultId = typeof raw.default === 'string' && raw.default ? raw.default : ids[0]
-  return { projects, ids, defaultId }
+  const parsed = readRegistryFile(file)
+  const document = parsed.document
+  const projects = document.projects
+  const byId = new Map(projects.map((project) => [project.id, project]))
+  const ids = projects.map((project) => project.id)
+  // `default` — локальный ключ файла: веб его не отдаёт. Указывает в пустоту —
+  // берём первый проект и говорим об этом проблемой, а не молчим.
+  const defaultId = document.default !== undefined && byId.has(document.default)
+    ? document.default
+    : ids[0]
+  return { file, document, byId, ids, defaultId, problems: parsed.problems }
 }
 
-// Один проект вместе с его отделом. Значения, которых проект не задал, берутся
-// из общих; problems собирает всё, что помешает отделу работать.
+// Один проект вместе с его отделом разработки. Значения, которых проект не задал,
+// берутся из общих; problems собирает всё, что помешает отделу работать.
+//
+// Поля версии 1 лежали в записи проекта; в версии 2 они принадлежат отделу, а у
+// проекта остались `id`, `title` и `departments`. Проект без отдела разработки
+// (например, только маркетинг) диспетчер не обслуживает — он попадает в
+// `disabled`, но не в проблемы.
 function projectRow(registry, id, shared) {
-  const raw = registry.projects[id] || {}
-  const dept = (raw && typeof raw.department === 'object' && raw.department) || {}
-  const workspace = String(raw.workspace || '')
+  const project = (registry.byId && registry.byId.get(id)) || { id }
+  const found = developmentOf(project)
+  const dept = found.department || {}
+  // Поля проекта в прежней внутренней форме собирает `registry.mjs`: форма записи
+  // отдела — его достояние. Здесь добавляется только то, что принадлежит
+  // диспетчеру: расписание, лимиты и собранные проблемы.
+  const fields = projectFields(project)
   const problems = []
+  if (found.problem) problems.push(id + ': ' + found.problem)
 
   const ownWindows = dept.windows !== undefined ? parseWindows(dept.windows, 'department.windows') : { windows: null, problems: [] }
   for (const problem of ownWindows.problems) problems.push(id + ': ' + problem)
   const windows = ownWindows.windows || shared.windows
   const windowsSource = ownWindows.windows ? 'проект' : (shared.windows ? 'общее' : 'нет')
 
+  // Отдел может быть выключен двумя способами: ключом `enabled` и отсутствием
+  // отдела разработки вовсе. Второй — не «включён по умолчанию»: иначе проект
+  // чужого вида давал бы проблему «не задан repo» на каждом тике.
+  const enabled = found.department !== null && dept.enabled !== false
   const pick = (key, min, max) => {
     if (dept[key] === undefined) return shared[key]
     if (Number.isInteger(dept[key]) && dept[key] >= min && dept[key] <= max) return dept[key]
@@ -609,30 +654,14 @@ function projectRow(registry, id, shared) {
     return shared[key]
   }
 
-  const enabled = dept.enabled !== false
   if (enabled && !windows) {
     problems.push(id + ': отдел включён, но расписание не задано ни у проекта, ни в общих настройках')
   }
 
-  return {
+  return Object.assign({}, fields, {
     id,
-    title: typeof raw.title === 'string' && raw.title ? raw.title : id,
-    repo: String(raw.repo || ''),
-    base: typeof raw.base === 'string' && raw.base ? raw.base : 'main',
-    workspace,
-    humanClone: typeof raw.humanClone === 'string' ? raw.humanClone : '',
-    composeProject: typeof raw.composeProject === 'string' && raw.composeProject ? raw.composeProject : id,
-    frontendPort: Number.isInteger(raw.frontendPort) ? raw.frontendPort : 8080,
-    apiPort: Number.isInteger(raw.apiPort) ? raw.apiPort : 8001,
-    artifacts: typeof raw.artifacts === 'string' && raw.artifacts
-      ? raw.artifacts
-      : (workspace ? workspace.replace(/[\\/]+$/, '') + '-artifacts' : ''),
-    telegram: raw.telegram && typeof raw.telegram === 'object' && raw.telegram.token && raw.telegram.chatId
-      ? { token: String(raw.telegram.token), chatId: raw.telegram.chatId }
-      : undefined,
-    labels: Object.assign({}, PIPELINE_LABELS, raw.labels || {}),
-    // Каталоги половин работы. Необязательны: по умолчанию работают AREA_PREFIXES.
-    areas: raw.areas && typeof raw.areas === 'object' ? raw.areas : undefined,
+    title: typeof project.title === 'string' && project.title ? project.title : id,
+    labels: Object.assign({}, PIPELINE_LABELS, fields.labels || {}),
     problems,
     department: {
       enabled,
@@ -642,7 +671,7 @@ function projectRow(registry, id, shared) {
       maxAttempts: pick('maxAttempts', 1, 20),
       stuckAfterMinutes: pick('stuckAfterMinutes', 1, 1440),
     },
-  }
+  })
 }
 
 // Проекты, в которых отдел работает, и те, где он выключен. Ошибка реестра или
@@ -658,6 +687,9 @@ function loadProjects(shared) {
 
   const rows = registry.ids.map((id) => projectRow(registry, id, shared))
   const problems = []
+  // Всё, что разбор документа отбросил (дубль id, отдел без вида, неизвестный
+  // `default`), — тоже проблема: иначе проект молча перестал бы обслуживаться.
+  for (const problem of registry.problems || []) problems.push(problem)
 
   // Две сессии в одном каталоге — верный способ испортить работу друг друга,
   // а резолв проекта по рабочей области становится неоднозначным.
@@ -3633,11 +3665,148 @@ export default {
       return { action: 'finished-shift', project: project.id }
     }
 
+    // ── Кеш реестра проектов из веба ────────────────────────────────────────
+    // Источник правды — база веба (`GET /api/registry`), а `projects.json` — её
+    // кеш. Push из контейнера невозможен: контейнер не видит каталог состояния
+    // DSH, а монтировать его ради записи одного файла — хуже, чем один GET в
+    // несколько минут. Поэтому диспетчер тянет документ сам: склеивает ответ с
+    // локальными ключами (`overlay` в `registry.mjs`) и пишет файл, только если
+    // содержимое изменилось.
+    //
+    // Ошибка сети, `401` и невалидный документ файл не трогают: смена
+    // продолжается на прошлом кеше, а причина видна в `dev_department_status`.
+    // Нет блока `registry` в общих настройках — синхронизации нет вовсе, и файл
+    // остаётся единственным источником, как было до версии 2.
+    const REGISTRY_SYNC_MS = 5 * 60 * 1000
+    const REGISTRY_SYNC_TIMEOUT_MS = 10 * 1000
+    const registrySync = {
+      ok: false,
+      attemptedAt: null,   // последняя попытка — удачная или нет
+      fetchedAt: null,     // последний удачный ответ
+      changedAt: null,     // когда файл действительно переписан
+      revision: null,      // отпечаток применённого документа
+      localKeys: [],       // ключи, которые живут только в файле
+      droppedProjects: [], // проекты файла, которых нет в документе веба
+      error: null,
+    }
+
+    const messageOf = (error) => (error && error.message ? error.message : String(error))
+
+    // Отпечаток документа. Ревизию наружу отдаёт только запись (`PUT`/`rebuild`),
+    // а `GET` возвращает сам документ; поэтому «на какой ревизии стоит кеш»
+    // отвечает отпечаток содержимого: он меняется ровно тогда, когда меняется
+    // документ, и его видно в статусе рядом с `ok`.
+    function registryDigest(document) {
+      return crypto.createHash('sha1').update(JSON.stringify(document)).digest('hex').slice(0, 12)
+    }
+
+    // `registry.apiUrl` — полный адрес ручки (`http://localhost:8096/api/registry`),
+    // а не база приложения: путь `/api` — достояние веба, и собирать его здесь
+    // значило бы держать вторую копию контракта.
+    function fetchRegistry(url, token) {
+      return new Promise((resolve, reject) => {
+        let target
+        try {
+          target = new URL(url)
+        } catch (error) {
+          reject(new Error('адрес реестра не разобран: ' + url))
+          return
+        }
+        const transport = target.protocol === 'https:' ? https : http
+        const headers = { Accept: 'application/json' }
+        if (token) headers['X-Registry-Token'] = token
+        const request = transport.get(target, { headers }, (response) => {
+          let body = ''
+          response.setEncoding('utf8')
+          response.on('data', (chunk) => { body += chunk })
+          response.on('end', () => resolve({ status: response.statusCode, body }))
+        })
+        request.setTimeout(REGISTRY_SYNC_TIMEOUT_MS, () => request.destroy(new Error('таймаут ответа')))
+        request.on('error', reject)
+      })
+    }
+
+    async function syncRegistryFromApi(options) {
+      const opts = options || {}
+      const settings = config.values.registry
+      if (!settings || !settings.apiUrl) return { skipped: 'адрес реестра не задан' }
+      const attemptedAt = Date.now()
+      if (!opts.force && registrySync.attemptedAt !== null && attemptedAt - registrySync.attemptedAt < REGISTRY_SYNC_MS) {
+        return { skipped: 'рано: реестр забирается раз в ' + Math.round(REGISTRY_SYNC_MS / 60000) + ' мин' }
+      }
+      registrySync.attemptedAt = attemptedAt
+
+      let response
+      try {
+        response = await fetchRegistry(settings.apiUrl, settings.token)
+      } catch (error) {
+        registrySync.ok = false
+        registrySync.error = 'реестр из веба: ' + messageOf(error)
+        return { error: registrySync.error }
+      }
+      if (response.status !== 200) {
+        registrySync.ok = false
+        // 401 — токен не тот; 404 — ревизий ещё нет. Оба случая оставляют кеш
+        // как есть: документ собирают в вебе, а не подставляют из воздуха.
+        registrySync.error = response.status === 401
+          ? 'реестр из веба: токен реестра не принят'
+          : (response.status === 404
+            ? 'реестр из веба: реестр ещё не собран'
+            : 'реестр из веба: ' + settings.apiUrl + ' ответил кодом ' + response.status)
+        return { error: registrySync.error }
+      }
+      let raw
+      try {
+        raw = JSON.parse(response.body)
+      } catch (error) {
+        registrySync.ok = false
+        registrySync.error = 'реестр из веба: ответ не JSON — ' + messageOf(error)
+        return { error: registrySync.error }
+      }
+      const parsed = parseRegistry(raw, 'реестр из веба')
+      if (parsed.fatal) {
+        // Текст разбора уже начинается с «реестр из веба: …» — второй префикс не нужен.
+        registrySync.ok = false
+        registrySync.error = parsed.fatal
+        return { error: registrySync.error }
+      }
+
+      // Локальные ключи берутся из текущего файла. Файл есть, но не разобран —
+      // писать поверх нельзя: в нём лежит то, чего в вебе нет (telegram, labels),
+      // и молча стереть это дороже, чем один тик без обновления.
+      let local = null
+      const current = readStateFile(STATE_FILES.projects)
+      if (fs.existsSync(current)) {
+        try {
+          local = readRegistryFile(current).document
+        } catch (error) {
+          registrySync.ok = false
+          registrySync.error = 'реестр из веба: локальный файл не разобран, кеш не переписан — ' + messageOf(error)
+          return { error: registrySync.error }
+        }
+      }
+
+      const merged = overlay(parsed.document, local)
+      const written = writeRegistryFile(stateFile(STATE_FILES.projects), merged.document)
+      registrySync.ok = true
+      registrySync.error = null
+      registrySync.fetchedAt = new Date().toISOString()
+      registrySync.revision = registryDigest(merged.document)
+      registrySync.localKeys = merged.localKeys
+      registrySync.droppedProjects = merged.droppedProjects
+      if (written.changed) registrySync.changedAt = registrySync.fetchedAt
+      return { ok: true, changed: written.changed, revision: registrySync.revision, localKeys: merged.localKeys }
+    }
+
     async function step(options) {
       const opts = options || {}
       config = loadConfig()
       const now = new Date()
       state.lastTickAt = now.toISOString()
+
+      // Кеш реестра обновляется до чтения проектов: тик должен работать на том
+      // документе, который только что пришёл из веба.
+      await syncRegistryFromApi({ force: !!opts.forceRegistry })
 
       const loaded = loadProjects(config.values)
       state.projectProblem = loaded.problem
@@ -3830,12 +3999,35 @@ export default {
         state.disabledIds = loaded.disabled
         const report = {
           now: now.toISOString(),
-          sharedConfig: { values: config.values, problem: config.problem },
+          // Токен реестра — секрет: в ответ инструмента он не попадает, но факт
+          // его наличия виден (иначе не понять, почему 401).
+          sharedConfig: {
+            values: Object.assign({}, config.values, {
+              registry: config.values.registry
+                ? Object.assign({}, config.values.registry, { token: config.values.registry.token ? '***' : undefined })
+                : config.values.registry,
+            }),
+            problem: config.problem,
+          },
           registry: {
             problem: loaded.problem,
             defaultId: loaded.defaultId,
             serving: loaded.projects.map((p) => p.id),
             disabled: loaded.disabled,
+          },
+          // Состояние кеша: `ok` и `revision` — по контракту, остальное объясняет
+          // расхождение. `localKeys` — то, что живёт только в файле: человек
+          // должен видеть, что правка в вебе этих полей не задаёт.
+          registrySync: {
+            ok: registrySync.ok,
+            revision: registrySync.revision,
+            url: config.values.registry ? config.values.registry.apiUrl : null,
+            fetchedAt: registrySync.fetchedAt,
+            changedAt: registrySync.changedAt,
+            attemptedAt: registrySync.attemptedAt === null ? null : new Date(registrySync.attemptedAt).toISOString(),
+            localKeys: registrySync.localKeys,
+            droppedProjects: registrySync.droppedProjects,
+            error: registrySync.error,
           },
           lastTickAt: state.lastTickAt,
           lastError: state.lastError,
@@ -3914,7 +4106,7 @@ export default {
       'Немедленно выполнить один шаг отдела разработки по всем включённым проектам и вернуть, что он сделал. Для ручной проверки: расписание и лимит «раз в сутки» игнорируются.',
       { type: 'object', properties: {}, additionalProperties: false },
       async () => {
-        const result = await step({ ignoreWindow: true })
+        const result = await step({ ignoreWindow: true, forceRegistry: true })
         return { result, state: { projects: state.projects, disabled: state.disabledIds } }
       },
     )

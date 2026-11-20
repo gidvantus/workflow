@@ -39,19 +39,19 @@ fs.mkdirSync(path.join(WORKSPACE, '.git'), { recursive: true })
 // `token` И `chatId`, поэтому половина бота — тоже проект без бота.
 const FULL_BOT = { token: 't', chatId: '1' }
 function writeRegistry({ telegram }) {
-  const project = {
-    title: 'Тест',
+  const department = {
+    kind: 'development',
+    enabled: true,
     repo: 'gidvantus/vahta',
     base: 'develop-m',
     workspace: WORKSPACE,
     composeProject: 'vahta-agent',
-    department: { enabled: true },
   }
-  if (telegram) project.telegram = telegram
+  if (telegram) department.telegram = telegram
   fs.writeFileSync(path.join(stateDir, 'projects.json'), JSON.stringify({
-    version: 1,
+    version: 2,
     default: 'vahta',
-    projects: { vahta: project },
+    projects: [{ id: 'vahta', title: 'Тест', departments: [department] }],
   }, null, 2))
 }
 writeRegistry({ telegram: FULL_BOT })

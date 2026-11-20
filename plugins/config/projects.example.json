@@ -1,89 +1,117 @@
 {
-  "version": 1,
+  "version": 2,
   "default": "vahta",
-  "projects": {
-    "vahta": {
+  "projects": [
+    {
+      "id": "vahta",
       "title": "Вахта",
-      "repo": "gidvantus/vahta",
-      "base": "develop-m",
-      "workspace": "D:\\Agents\\Vahta",
-      "humanClone": "D:\\Development\\VideCoding\\Vahta",
-      "composeProject": "vahta-agent",
-      "frontendPort": 8080,
-      "apiPort": 8001,
-      "artifacts": "D:\\Agents\\vahta-artifacts",
-      "department": {
-        "enabled": true,
-        "windows": [
-          { "start": "13:00", "stop": "04:00" },
-          { "start": "07:00", "stop": "09:00" }
-        ],
-        "maxRework": 3
-      },
-      "telegram": {
-        "token": "<токен бота>",
-        "chatId": 0
-      }
+      "departments": [
+        {
+          "kind": "development",
+          "title": "Разработка",
+          "enabled": true,
+          "repo": "gidvantus/vahta",
+          "base": "develop-m",
+          "workspace": "D:\\Agents\\Vahta",
+          "humanClone": "D:\\Development\\VideCoding\\Vahta",
+          "artifacts": "D:\\Agents\\vahta-artifacts",
+          "composeProject": "vahta-agent",
+          "frontendPort": 8080,
+          "apiPort": 8001,
+          "areas": {
+            "backend": ["operator/backend"],
+            "frontend": ["operator/frontend"]
+          },
+          "windows": [
+            { "start": "13:00", "stop": "04:00" },
+            { "start": "07:00", "stop": "09:00" }
+          ],
+          "maxRework": 3,
+          "telegram": {
+            "token": "<токен бота>",
+            "chatId": 0
+          }
+        }
+      ]
     },
-    "cloudpass": {
+    {
+      "id": "cloudpass",
       "title": "CloudPass",
-      "repo": "gidvantus/cloudpass",
-      "base": "main",
-      "workspace": "D:\\Agents\\CloudPass",
-      "humanClone": "D:\\Development\\VideCoding\\CloudPass",
-      "composeProject": "cloudpass-agent",
-      "department": {
-        "enabled": true,
-        "windows": [
-          { "start": "13:00", "stop": "04:00" },
-          { "start": "07:00", "stop": "09:00" }
-        ],
-        "maxRework": 3
-      },
-      "telegram": {
-        "token": "<токен бота>",
-        "chatId": 0
-      }
+      "departments": [
+        {
+          "kind": "development",
+          "title": "Разработка",
+          "enabled": true,
+          "repo": "gidvantus/cloudpass",
+          "base": "main",
+          "workspace": "D:\\Agents\\CloudPass",
+          "humanClone": "D:\\Development\\VideCoding\\CloudPass",
+          "composeProject": "cloudpass-agent",
+          "areas": {
+            "backend": ["crates", "web/server"],
+            "frontend": ["web/client"]
+          },
+          "windows": [
+            { "start": "13:00", "stop": "04:00" },
+            { "start": "07:00", "stop": "09:00" }
+          ],
+          "maxRework": 3,
+          "telegram": {
+            "token": "<токен бота>",
+            "chatId": 0
+          }
+        }
+      ]
     },
-    "brain": {
+    {
+      "id": "brain",
       "title": "Brain",
-      "repo": "gidvantus/mybrain",
-      "base": "main",
-      "workspace": "D:\\Agents\\Brain",
-      "humanClone": "D:\\Development\\VideCoding\\Brain",
-      "department": {
-        "enabled": false,
-        "windows": [
-          { "start": "13:00", "stop": "04:00" },
-          { "start": "07:00", "stop": "09:00" }
-        ],
-        "maxRework": 3
-      },
-      "telegram": {
-        "token": "<токен бота>",
-        "chatId": 0,
-        "projects": ["brain"]
-      }
+      "departments": [
+        {
+          "kind": "development",
+          "title": "Разработка",
+          "enabled": false,
+          "repo": "gidvantus/mybrain",
+          "base": "main",
+          "workspace": "D:\\Agents\\Brain",
+          "humanClone": "D:\\Development\\VideCoding\\Brain",
+          "windows": [
+            { "start": "13:00", "stop": "04:00" },
+            { "start": "07:00", "stop": "09:00" }
+          ],
+          "maxRework": 3,
+          "telegram": {
+            "token": "<токен бота>",
+            "chatId": 0,
+            "projects": ["brain"]
+          }
+        }
+      ]
     },
-    "workflow": {
+    {
+      "id": "workflow",
       "title": "Workflow",
-      "repo": "gidvantus/workflow",
-      "base": "main",
-      "workspace": "D:\\Agents\\Workflow",
-      "humanClone": "D:\\Development\\VideCoding\\Workflow",
-      "composeProject": "workflow-agent",
-	  "areas": {
-  "backend":  ["tools/"],
-  "frontend": ["agent-presets/", "docs/", "profiles/"]
-},
-      "department": {
-        "enabled": true,
-        "windows": [
-          { "start": "13:00", "stop": "04:00" },
-          { "start": "07:00", "stop": "09:00" }
-        ],
-        "maxRework": 3
-      }
+      "departments": [
+        {
+          "kind": "development",
+          "title": "Разработка",
+          "enabled": true,
+          "repo": "gidvantus/workflow",
+          "base": "main",
+          "workspace": "D:\\Agents\\Workflow",
+          "humanClone": "D:\\Development\\VideCoding\\Workflow",
+          "composeProject": "workflow-agent",
+          "areas": {
+            "backend": ["tools/"],
+            "frontend": ["agent-presets/", "docs/", "profiles/"]
+          },
+          "windows": [
+            { "start": "13:00", "stop": "04:00" },
+            { "start": "07:00", "stop": "09:00" }
+          ],
+          "maxRework": 3
+        }
+      ]
     }
-  }
+  ]
 }

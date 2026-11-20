@@ -6,10 +6,15 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import https from 'node:https'
+import { developmentOf, projectsOf, readRegistryFile } from '../../registry.mjs'
+import { STATE_FILES, readStateFile } from '../../state-paths.mjs'
 
 const home = process.env.DSH_HOME || path.join(os.homedir(), '.dsh')
 const token = fs.readFileSync(path.join(home, 'mcp', 'github-mcp-server', 'token'), 'utf8').trim()
-const registry = JSON.parse(fs.readFileSync(path.join(home, 'projects.json'), 'utf8'))
+// Форму реестра знает только `registry.mjs`: файл версии 2 читается им, а проект
+// ищется отделом разработки. Старый путь `~/projects.json` брошен вместе с
+// версией 1 — реестр живёт в каталоге состояния отдела.
+const registry = readRegistryFile(readStateFile(STATE_FILES.projects)).document
 
 function post(url, payload) {
   return new Promise((resolve, reject) => {
@@ -47,12 +52,14 @@ const LABELS = [
   { name: 'merged', color: '0B615E', description: 'PR слит DevOps-инженером, задача закрыта' },
 ]
 
-for (const [id, project] of Object.entries(registry.projects || {})) {
-  if (!project.repo) continue
+for (const project of projectsOf(registry)) {
+  const repo = String((developmentOf(project).department || {}).repo || '')
+  if (!repo) continue
+  const id = project.id
   for (const label of LABELS) {
-    const res = await post('/repos/' + project.repo + '/labels', label)
-    if (res.status === 201) console.log(id + ' (' + project.repo + '): ' + label.name + ' создана')
-    else if (res.status === 422) console.log(id + ' (' + project.repo + '): ' + label.name + ' уже есть')
-    else console.log(id + ' (' + project.repo + '): ' + label.name + ' → ' + res.status + ' ' + JSON.parse(res.body).message)
+    const res = await post('/repos/' + repo + '/labels', label)
+    if (res.status === 201) console.log(id + ' (' + repo + '): ' + label.name + ' создана')
+    else if (res.status === 422) console.log(id + ' (' + repo + '): ' + label.name + ' уже есть')
+    else console.log(id + ' (' + repo + '): ' + label.name + ' → ' + res.status + ' ' + JSON.parse(res.body).message)
   }
 }
