@@ -121,6 +121,7 @@ import {
   overlay,
   parseRegistry,
   projectFields,
+  projectsOf,
   readRegistryFile,
   stripBom,
   telegramOf,
@@ -747,38 +748,45 @@ function loadProjects(shared) {
 // одинаковых блоков в журнале ничего не добавляют. Возврат в норму — одно `✅`.
 const ALARM_REPEAT_MS = 30 * 60 * 1000
 
-const ALARM_TAIL = 'Проверьте projects.json в каталоге состояния отдела: его форма должна совпадать ' +
+// Подсказка приклеена не к любой причине: «форма файла» и `.bak` — совет только
+// тогда, когда причина в самом файле. Первый запуск на новой машине («сначала
+// склонируйте репозиторий») или пустой документ не должны заканчиваться
+// предложением восстановить `.bak` поверх целого реестра.
+const ALARM_FORM_TAIL = 'Проверьте projects.json в каталоге состояния отдела: его форма должна совпадать ' +
   'с версией установленного пакета. Файл предыдущей версии лежит рядом как projects.json.bak.'
+const ALARM_PLAIN_TAIL = 'Проверьте projects.json в каталоге состояния отдела.'
 
 function alarmText(problem) {
   return '🛑 Отдел разработки: не обслуживается ни один проект\n' +
-    'Причина: ' + problem + '\n' + ALARM_TAIL
+    'Причина: ' + problem + '\n' + (problem.includes('реестр') ? ALARM_FORM_TAIL : ALARM_PLAIN_TAIL)
 }
 
 // Бот для тревоги — бот проекта, названного полем `default` того же файла реестра.
 // Файл при этом может быть как раз в чужой форме (потому отдел и молчит), так что
 // читаем его здесь ещё раз и снисходительно: нужна одна запись, и её отсутствие —
-// не ошибка, а «тревога остаётся в журнале». Второй разбор формы это не заводит:
-// документ v2 читает `registry.mjs`, а здесь просматриваются только бот проекта по
-// умолчанию — сначала у отдела вида `development` (v2), затем в записи проекта (v1).
+// не ошибка, а «тревога остаётся в журнале». Форму документа разбирает
+// `registry.mjs` — `parseRegistry`, `projectsOf`, `developmentOf`, `telegramOf`:
+// своей копии разбора здесь нет, иначе правка формы там молча разошлась бы с
+// копией здесь. Руками читается только запись проекта формы v1 — её
+// установленный пакет не разбирает вовсе, а бота из неё взять можно.
 function alarmBot() {
+  const file = readStateFile(STATE_FILES.projects)
   let raw
   try {
-    raw = JSON.parse(stripBom(fs.readFileSync(readStateFile(STATE_FILES.projects), 'utf8')))
+    raw = JSON.parse(stripBom(fs.readFileSync(file, 'utf8')))
   } catch (error) {
     return undefined
   }
   if (!raw || typeof raw !== 'object') return undefined
   const wanted = typeof raw.default === 'string' && raw.default.trim() !== '' ? raw.default.trim() : null
   if (wanted === null) return undefined
-  const projects = raw.projects
-  if (Array.isArray(projects)) {
-    const project = projects.find((item) => item && typeof item === 'object' && item.id === wanted)
-    const departments = project && Array.isArray(project.departments) ? project.departments : []
-    const department = departments.find((item) => item && typeof item === 'object' && item.kind === 'development')
-    return telegramOf(department)
+  const parsed = parseRegistry(raw, file)
+  if (parsed.document) {
+    const project = projectsOf(parsed.document).find((item) => item.id === wanted)
+    return project ? telegramOf(developmentOf(project).department) : undefined
   }
-  if (projects && typeof projects === 'object') return telegramOf(projects[wanted])
+  const projects = raw.projects
+  if (projects && typeof projects === 'object' && !Array.isArray(projects)) return telegramOf(projects[wanted])
   return undefined
 }
 
@@ -793,7 +801,6 @@ const registryAlarm = { active: false, since: null, lastSentAt: null, channel: n
 // возвращается текстом ошибки: `lastError` принадлежит диспетчеру, а не этому
 // разделу, и ставит его вызывающий.
 async function alarmEmit(problem, now) {
-  if (!problem) return null
   const text = alarmText(problem)
   appendShiftLog(text)
   const bot = alarmBot()
@@ -809,11 +816,14 @@ async function alarmEmit(problem, now) {
   return { text, error: null }
 }
 
-// Обслуживаемых проектов нет. Тревога включается на первом же таком тике,
-// молчит, пока причина та же и не прошло 30 минут, и повторяется сразу, если
-// причина сменилась: новая причина — новая новость.
+// Обслуживаемых проектов нет. Причина всегда названа: `loaded.problem` — если
+// виноват файл или рабочая область, и «нет ни одного проекта с включённым отделом»
+// — если отдел выключен везде. Тревоги без причины не бывает: иначе `active: true`
+// без единого сообщения, а потом `✅` без предшествующего `🛑`.
+// Тревога включается на первом же таком тике, молчит, пока причина та же и не
+// прошло 30 минут, и повторяется сразу, если причина сменилась.
 async function noteRegistrySilent(loaded, now) {
-  const problem = loaded.problem || null
+  const problem = loaded.problem || 'нет ни одного проекта с включённым отделом'
   if (!registryAlarm.active) {
     registryAlarm.active = true
     registryAlarm.since = now.toISOString()
@@ -830,13 +840,17 @@ async function noteRegistrySilent(loaded, now) {
 }
 
 // Отдел снова обслуживает проекты: одно `✅` на переход, и только если тревога
-// была включена (после перезапуска приложения сравнивать не с чем).
-async function noteRegistryServing(loaded, now) {
+// была включена (после перезапуска приложения сравнивать не с чем). `lastSentAt` и
+// `channel` в статусе относятся к тревоге, а не к `✅`: после возврата они снова
+// `null`, иначе поле «момент последней отправки» показывало бы время снятой тревоги.
+async function noteRegistryServing(loaded) {
   if (!registryAlarm.active) return null
   const text = '✅ Отдел разработки снова обслуживает проекты: ' + loaded.projects.map((project) => project.id).join(', ')
   registryAlarm.active = false
   registryAlarm.since = null
   registryAlarm.reason = null
+  registryAlarm.lastSentAt = null
+  registryAlarm.channel = null
   const bot = alarmBot()
   if (!bot) return { text, error: null }
   try {
@@ -3942,7 +3956,7 @@ export default {
           projects: [],
         }
       }
-      const recovered = await noteRegistryServing(loaded, now)
+      const recovered = await noteRegistryServing(loaded)
       if (recovered && recovered.error) state.lastError = 'Telegram: ' + recovered.error
 
       // Каждый проект двигается своим шагом и своей сменой. Ошибка одного
@@ -4129,7 +4143,7 @@ export default {
         // не только в пустом `serving`. Троттлинг общий с тиком.
         const alarm = loaded.projects.length === 0
           ? await noteRegistrySilent(loaded, now)
-          : await noteRegistryServing(loaded, now)
+          : await noteRegistryServing(loaded)
         if (alarm && alarm.error) state.lastError = 'Telegram: ' + alarm.error
         const report = {
           now: now.toISOString(),

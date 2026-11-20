@@ -57,7 +57,8 @@ const BOT = { token: 'token-registry-format', chatId: '777' }
 function writeV2(options = {}) {
   const department = {
     kind: 'development',
-    enabled: true,
+    kind: options.kind || 'development',
+    enabled: options.enabled !== false,
     repo: 'gidvantus/vahta',
     base: 'develop-m',
     workspace: options.workspace || WORKSPACE,
@@ -223,6 +224,12 @@ function check(name, actual, expected) {
 // Блоки тревоги в журнале смены: заголовок тревоги встречается один раз на блок.
 const alarmBlocks = () => (fs.existsSync(LOG_FILE) ? fs.readFileSync(LOG_FILE, 'utf8') : '').split('🛑 Отдел разработки: не обслуживается ни один проект').length - 1
 const logText = () => (fs.existsSync(LOG_FILE) ? fs.readFileSync(LOG_FILE, 'utf8') : '')
+// Последний блок тревоги: по нему видно, какую подсказку получил человек.
+const lastAlarmBlock = () => {
+  const text = logText()
+  const at = text.lastIndexOf('🛑 Отдел разработки: не обслуживается ни один проект')
+  return at < 0 ? '' : text.slice(at)
+}
 
 const app = await boot()
 
@@ -247,6 +254,7 @@ check('в блоке сказано, что поддерживается', logTe
 check('в блоке абсолютный путь к файлу', logText().includes('Причина: ' + PROJECTS_FILE), true)
 check('в блоке сказано, чем помочь', logText().includes('projects.json в каталоге состояния отдела'), true)
 check('в блоке сказано про .bak', logText().includes('projects.json.bak'), true)
+check('подсказка про форму — в блоке последней тревоги', lastAlarmBlock().includes('projects.json.bak'), true)
 check('одна отправка в Telegram', telegram.length, 1)
 check('отправлено то же, что в журнале', telegram[0].includes('Причина: ' + PROJECTS_FILE), true)
 
@@ -298,6 +306,10 @@ step = await app.tick()
 check('тик вернул config-error', step.result.action, 'config-error')
 check('причина названа', String(step.result.note).includes('не существует'), true)
 check('в журнале блок тревоги', alarmBlocks(), 4)
+// Причина не про файл: совет искать `.bak` увёл бы человека восстанавливать
+// реестр поверх целого — в таком блоке остаётся только нейтральная подсказка.
+check('подсказка про .bak не приклеена к чужой причине', lastAlarmBlock().includes('projects.json.bak'), false)
+check('нейтральная подсказка на месте', lastAlarmBlock().includes('Проверьте projects.json в каталоге состояния отдела.'), true)
 check('в Telegram ничего не ушло', telegram.length, 2)
 status = await app.status()
 check('канал тревоги — журнал', status.registry.alarm.channel, 'log')
@@ -315,10 +327,38 @@ check('проект снова обслуживается', status.registry.serv
 check('причины нет', status.registry.problem, null)
 check('тревога снята', status.registry.alarm.active, false)
 check('since снят', status.registry.alarm.since, null)
+// `lastSentAt` и `channel` — про тревогу, а не про `✅`: после возврата в статусе
+// они снова пусты, иначе поле «момент последней отправки» показывало бы время
+// снятой тревоги.
+check('lastSentAt снят', status.registry.alarm.lastSentAt, null)
+check('channel снят', status.registry.alarm.channel, null)
 advance(MINUTE)
 await app.tick()
 await app.status()
 check('повторного ✅ нет', telegram.length, 3)
+
+console.log('\n=== сценарий 8: все отделы выключены — тревога с названной причиной ===')
+// Отдел выключен в единственном проекте: `loadProjects` отдаёт `projects: []` без
+// причины. Тревога всё равно должна сказать, что случилось, — иначе `active: true`
+// без канала и без единого сообщения, а потом `✅` без предшествующего `🛑`.
+// Вид отдела записан с хвостовым пробелом: форму и вид разбирает `registry.mjs`
+// (он их обрезает), поэтому бот проекта по умолчанию обязан найтись, а канал —
+// остаться `telegram`. Свой разбор формы в диспетчере этот пробел потерял бы.
+writeV2({ kind: 'development ', enabled: false })
+advance(MINUTE)
+step = await app.tick()
+check('тик вернул config-error', step.result.action, 'config-error')
+check('причина названа словами', String(step.result.note).includes('нет ни одного проекта с включённым отделом'), true)
+check('в журнале блок тревоги', alarmBlocks(), 5)
+check('в блоке причина «отдел выключен»', lastAlarmBlock().includes('Причина: нет ни одного проекта с включённым отделом'), true)
+check('подсказка про .bak не приклеена', lastAlarmBlock().includes('projects.json.bak'), false)
+check('тревога ушла в Telegram', telegram.length, 4)
+status = await app.status()
+check('serving пуст', status.registry.serving, [])
+check('причины у реестра нет', status.registry.problem, null)
+check('тревога активна', status.registry.alarm.active, true)
+check('канал — Telegram, хотя kind записан с пробелом', status.registry.alarm.channel, 'telegram')
+check('отдел числится выключенным', status.registry.disabled, ['vahta'])
 
 console.log('\n' + (failures === 0 ? 'ПРОВЕРКИ ПРОШЛИ' : 'ПРОВАЛЕНО ПРОВЕРОК: ' + failures))
 process.exit(failures === 0 ? 0 : 1)
