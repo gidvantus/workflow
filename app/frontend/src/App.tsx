@@ -1,19 +1,29 @@
 /**
- * Оболочка приложения: бренд, меню с единственным разделом «Проекты» и подвал.
+ * Оболочка приложения: бренд, меню из двух разделов — «Проекты» и «Роли» — и подвал.
  *
- * Раздел один: отделы живут внутри проекта вкладкой на его странице, отдельного пункта
- * меню и отдельного экрана у них больше нет. Роутера и отдельных URL в приложении нет,
- * поэтому F5 всегда открывает «Проекты».
+ * Роутера и отдельных URL в приложении нет: раздел переключается состоянием, а F5 всегда
+ * открывает «Проекты». Отделы живут внутри проекта вкладкой на его странице, отдельного
+ * пункта меню и отдельного экрана у них по-прежнему нет.
  *
- * Раздел смонтирован постоянно, и состояние страницы проекта живёт в нём: бейдж меню
- * показывает то же число, что счётчик списка, и появляется, когда список прочитан.
+ * Оба раздела смонтированы постоянно, невыбранный скрыт атрибутом `hidden` — так переход в
+ * другой раздел и обратно не теряет состояние: список проектов, открытая страница проекта и
+ * открытая роль остаются там, где их оставили. Своего `display` у обёртки нет, поэтому
+ * пользовательское `[hidden] { display: none }` работает без отдельного правила.
+ *
+ * Бейдж меню показывает то же число, что счётчик списка проектов, и появляется, когда
+ * список прочитан.
  */
 
 import { useCallback, useState } from 'react';
 
 import ProjectsPage from './components/ProjectsPage';
+import RolesPage from './components/RolesPage';
+
+/** Раздел оболочки; порядок в меню совпадает с порядком объявления. */
+type Section = 'projects' | 'roles';
 
 export default function App(): JSX.Element {
+  const [section, setSection] = useState<Section>('projects');
   const [projectsCount, setProjectsCount] = useState<number | null>(null);
 
   // Обработчик стабилен: раздел зовёт его из эффекта, и новая ссылка на каждой
@@ -50,9 +60,12 @@ export default function App(): JSX.Element {
           <a
             className="nav__item"
             href="#"
-            aria-current="page"
+            aria-current={section === 'projects' ? 'page' : undefined}
             data-testid="nav-projects"
-            onClick={(event) => event.preventDefault()}
+            onClick={(event) => {
+              event.preventDefault();
+              setSection('projects');
+            }}
           >
             <svg
               width="16"
@@ -68,11 +81,40 @@ export default function App(): JSX.Element {
             Проекты
             {projectsCount !== null && <span className="nav__count">{projectsCount}</span>}
           </a>
+          <a
+            className="nav__item"
+            href="#"
+            aria-current={section === 'roles' ? 'page' : undefined}
+            data-testid="nav-roles"
+            onClick={(event) => {
+              event.preventDefault();
+              setSection('roles');
+            }}
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.4"
+              aria-hidden="true"
+            >
+              <path d="M8 2.5a2.75 2.75 0 1 1 0 5.5 2.75 2.75 0 0 1 0-5.5z" />
+              <path d="M2.75 13.5c0-2.4 2.35-4 5.25-4s5.25 1.6 5.25 4" />
+            </svg>
+            Роли
+          </a>
         </nav>
       </aside>
 
       <div className="main">
-        <ProjectsPage onCountChange={handleProjectsCount} />
+        <div className="view" hidden={section !== 'projects'}>
+          <ProjectsPage onCountChange={handleProjectsCount} />
+        </div>
+        <div className="view" hidden={section !== 'roles'}>
+          <RolesPage />
+        </div>
 
         <footer className="footbar">
           <p className="footbar__note">© 2026 Workflow</p>

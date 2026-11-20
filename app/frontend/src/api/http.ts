@@ -39,9 +39,20 @@ export async function readDetail(response: Response): Promise<string> {
   return UNREACHABLE_TEXT;
 }
 
-/** Запрос с общим таймаутом; сетевой сбой и таймаут — это «Сервер не отвечает». */
-export async function send(path: string, init: RequestInit): Promise<Response> {
-  const headers: Record<string, string> = { Accept: 'application/json' };
+/**
+ * Запрос с общим таймаутом; сетевой сбой и таймаут — это «Сервер не отвечает».
+ *
+ * `extraHeaders` — для ручек, у которых доступ не браузерный, а машинный: манифест и
+ * документы пресетов закрыты заголовком `X-Registry-Token`. Заголовок задаёт вызывающая
+ * сторона, клиент его не выдумывает: у браузерной сессии токена нет, и она получает
+ * штатный `401`, а не подставленный «свой».
+ */
+export async function send(
+  path: string,
+  init: RequestInit,
+  extraHeaders?: Record<string, string>,
+): Promise<Response> {
+  const headers: Record<string, string> = { Accept: 'application/json', ...extraHeaders };
   if (init.body !== undefined) {
     headers['Content-Type'] = 'application/json';
   }

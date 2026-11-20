@@ -1252,6 +1252,80 @@ body {
   }
 }
 
+/* ---------- раздел «Роли» ---------- */
+
+/* Строка роли: название с описанием, код, скиллы, дата, действия. Код — отдельная
+   колонка моноширинного текста: по нему роль находят в `~/.dsh/.agent-presets`, и он не
+   меняется. Действия шире, чем у проектов: там меню-«⋯», здесь две названные кнопки,
+   потому что строка роли ведёт на страницу, а не в меню. */
+.table__head--role,
+.row--role {
+  grid-template-columns:
+    minmax(0, 2.1fr) minmax(0, 1.1fr) 6.5rem 7rem
+    10.5rem;
+}
+
+/* Строка скилла: название с кодом, число разделов, дата, действия. */
+.table__head--skill,
+.row--skill {
+  grid-template-columns: minmax(0, 2.3fr) 7rem 7rem 10.5rem;
+}
+
+/* Действия страницы роли стоят в шапке рядом с заголовком: правка и удаление относятся к
+   этой роли целиком, а не к списку скиллов под ними. */
+.page-head__tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* Секция «Разделы» внутри окна скилла: у окна уже есть свои отступы, поэтому секция идёт
+   без собственных полей и без верхней границы. */
+.dialog__form .form-section {
+  padding: 0;
+  border-top: 0;
+}
+
+/* Блок одного раздела: рамка держит вместе заголовок, текст и кнопки перестановки —
+   без неё непонятно, к какому разделу относится «Ниже». */
+.skill-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.875rem;
+  background-color: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+}
+
+.skill-section__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+/* Номер раздела: он же порядок `##` в файле. Кружок вместо цифры в тексте — иначе
+   «1» сливается с началом заголовка. */
+.skill-section__index {
+  display: grid;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--muted);
+  background-color: var(--band);
+  border-radius: 50%;
+  font-variant-numeric: tabular-nums;
+}
+
+.skill-section__tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+
 /* ---------- ≤ 900 px: меню полосой, таблица строками ---------- */
 
 @media (max-width: 900px) {
