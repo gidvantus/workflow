@@ -153,10 +153,14 @@ class Department(Base):
     # вторым запросом на каждую строку списка.
     kind: Mapped[DepartmentKind] = relationship(DepartmentKind, lazy="joined")
     # `selectin`: роли приезжают одним дополнительным запросом, а не по строке на отдел,
-    # и порядок ответа задаёт `id`, а не порядок в таблице связи.
+    # и порядок ответа задаёт `id`, а не порядок в таблице связи. `secondaryjoin` с
+    # `Role.deleted_at IS NULL` — потому что мягко удалённая роль из списка отдела
+    # исчезает, как и из `GET /api/roles`: строка связи при этом остаётся в базе.
     roles: Mapped[list[Role]] = relationship(
         Role,
         secondary=department_roles,
+        primaryjoin="Department.id == department_roles.c.department_id",
+        secondaryjoin="and_(Role.id == department_roles.c.role_id, Role.deleted_at.is_(None))",
         order_by=Role.id,
         lazy="selectin",
     )
