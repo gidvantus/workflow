@@ -1,6 +1,7 @@
 /**
  * Страница проекта: крошки, кнопка «← К проектам», паспорт проекта, полоса подразделов
- * с двумя вкладками — «Задачи» и «Отделы» — и карточка выбранного подраздела под ней.
+ * с тремя вкладками — «Задачи», «Отделы» и «Расходы» — и карточка выбранного подраздела
+ * под ней.
  *
  * Адреса у страницы нет: это состояние раздела «Проекты», а не маршрут. Поэтому объект
  * проекта приходит со списка, а ручки чтения одного проекта (`GET /api/projects/{id}`)
@@ -17,6 +18,13 @@
  * диалоги этой страницы, правка — отдельная страница (`DepartmentPage`): полей у отдела
  * десять плюс уведомления, в окно они не влезают. После сохранения список отделов
  * перечитывается, оптимистичных обновлений нет.
+ *
+ * Вкладка «Расходы» — журнал расхода смен (`ProjectExpenses`). Его данные живут не в
+ * справочнике проектов, а в отдельном журнале, который ключуется `project_ref` — id
+ * проекта из реестра отдела. Реестр, собранный ручкой `rebuild`, берёт этот id из
+ * `projects.id` (#54), поэтому ссылка журнала — `String(project.id)`. Свой запрос
+ * вкладка делает сама, как только страница открылась: списки задач и отделов читаются
+ * так же, и переключение вкладки запросов не повторяет.
  */
 
 import { useCallback, useEffect, useId, useState } from 'react';
@@ -29,6 +37,7 @@ import ConfirmDialog from './ConfirmDialog';
 import DepartmentCreateDialog from './DepartmentCreateDialog';
 import DepartmentList from './DepartmentList';
 import DepartmentPage from './DepartmentPage';
+import ProjectExpenses from './ProjectExpenses';
 import TaskFormDialog from './TaskFormDialog';
 import TaskList from './TaskList';
 
@@ -62,7 +71,7 @@ function formatDate(iso: string): string {
 }
 
 /** Открытая вкладка подразделов. */
-type Tab = 'tasks' | 'departments';
+type Tab = 'tasks' | 'departments' | 'expenses';
 
 /** Состояние списка задач: загрузка, готовые данные или ошибка загрузки. */
 type TasksState =
@@ -160,6 +169,12 @@ export default function ProjectPage({ project, onBack }: ProjectPageProps): JSX.
 
   const tasksPanelId = `${tabsId}-panel-tasks`;
   const departmentsPanelId = `${tabsId}-panel-departments`;
+  const expensesPanelId = `${tabsId}-panel-expenses`;
+
+  // Журнал расхода ключуется id проекта из реестра отдела, а не `projects.id` базы.
+  // Реестр, собранный `rebuild`, берёт этот id из `projects.id` (#54), поэтому строка
+  // от числового id — это и есть ссылка журнала.
+  const projectRef = String(project.id);
 
   // Правка отдела — отдельная страница вместо содержимого проекта: так же, как
   // `ProjectsPage` показывает `ProjectPage`. Возврат из неё состояние вкладки не трогает —
@@ -213,7 +228,7 @@ export default function ProjectPage({ project, onBack }: ProjectPageProps): JSX.
           </div>
         </div>
 
-        {/* Полоса подразделов: две вкладки одного уровня, у выбранной `aria-selected`.
+        {/* Полоса подразделов: три вкладки одного уровня, у выбранной `aria-selected`.
             Подписи без счётчиков и пилюль — это переключатель содержимого, а не
             украшение шапки. */}
         <div className="tabs" role="tablist" aria-label="Подразделы проекта">
@@ -241,9 +256,21 @@ export default function ProjectPage({ project, onBack }: ProjectPageProps): JSX.
           >
             Отделы
           </button>
+          <button
+            className="tab"
+            type="button"
+            role="tab"
+            id={`${tabsId}-expenses`}
+            aria-selected={activeTab === 'expenses'}
+            aria-controls={expensesPanelId}
+            data-testid="project-tab-expenses"
+            onClick={() => setActiveTab('expenses')}
+          >
+            Расходы
+          </button>
         </div>
 
-        {/* Обе панели есть в разметке всегда, невыбранная скрыта атрибутом `hidden`:
+        {/* Все три панели есть в разметке всегда, невыбранная скрыта атрибутом `hidden`:
             так `aria-controls` у каждой вкладки ссылается на существующую область, а не
             в пустоту (`aria-valid-attr-value`), и скрытая панель недоступна ни глазу, ни
             скринридеру. Своего `display` у панели нет, поэтому пользовательское
@@ -278,6 +305,15 @@ export default function ProjectPage({ project, onBack }: ProjectPageProps): JSX.
             onEdit={(department) => setEditor(department)}
             onDelete={(department) => setDepartmentDialog({ kind: 'delete', department })}
           />
+        </div>
+
+        <div
+          role="tabpanel"
+          id={expensesPanelId}
+          aria-labelledby={`${tabsId}-expenses`}
+          hidden={activeTab !== 'expenses'}
+        >
+          <ProjectExpenses projectRef={projectRef} />
         </div>
       </main>
 
