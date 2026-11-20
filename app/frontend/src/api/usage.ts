@@ -105,6 +105,21 @@ function readNullableText(value: unknown): string | null | undefined {
   return typeof value === 'string' ? value : undefined;
 }
 
+/**
+ * Номер тикета сессии: число, `null` или отсутствие поля — всё это «тикет есть/нет».
+ *
+ * Текстовым разбором число гонять нельзя: `readNullableText` вернул бы на числе
+ * `undefined`, и настоящая тикетная сессия (`issue_number: 57`) браковала бы весь ответ
+ * детализации — экран показывал бы «Сервер не отвечает» вместо списка сессий. Поэтому
+ * число проверяется числом, а `undefined` значит «поле не по контракту».
+ */
+function readIssueNumber(value: unknown): number | null | undefined {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  return isCount(value) ? value : undefined;
+}
+
 /** Токены из ответа; `null` — форма не по контракту. */
 function readTokens(payload: unknown): UsageTokens | null {
   if (!isRecord(payload)) {
@@ -173,8 +188,8 @@ function readSession(payload: unknown): UsageSession | null {
   }
   const { role, session, turns } = payload;
   const source = readNullableText(payload.source);
-  const issueNumber = readNullableText(payload.issue_number);
   const issueTitle = readNullableText(payload.issue_title);
+  const issueNumber = readIssueNumber(payload.issue_number);
   const tokens = readTokens(payload.tokens);
   const cost = payload.cost_usd;
   if (
@@ -184,13 +199,9 @@ function readSession(payload: unknown): UsageSession | null {
     tokens === null ||
     !isMoney(cost) ||
     source === undefined ||
-    issueTitle === undefined
+    issueTitle === undefined ||
+    issueNumber === undefined
   ) {
-    return null;
-  }
-  // Тикет приходит либо числом, либо `null`: отдельного «пустого» значения в контракте
-  // нет, поэтому всё, что не число и не `null`, — ответ не по контракту.
-  if (issueNumber !== null && typeof issueNumber !== 'number') {
     return null;
   }
   return {

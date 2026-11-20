@@ -18,7 +18,7 @@
  * страница проекта передаёт сюда `String(project.id)`.
  */
 
-import { useCallback, useEffect, useId, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 
 import { ApiError, UNREACHABLE_TEXT } from '../api/http';
 import {
@@ -210,6 +210,8 @@ export default function ProjectExpenses({ projectRef }: ProjectExpensesProps): J
   const detailTitleId = useId();
   const [usage, setUsage] = useState<UsageState>({ status: 'loading' });
   const [detail, setDetail] = useState<DetailState>({ status: 'closed' });
+  /** id смены, ответ на которую сейчас ждём: чужие ответы отбрасываются. */
+  const pendingShift = useRef<number | null>(null);
 
   /** Журнал проекта всегда читается с сервера: «Повторить» — это повторный запрос. */
   const loadUsage = useCallback(async (): Promise<void> => {
@@ -234,18 +236,39 @@ export default function ProjectExpenses({ projectRef }: ProjectExpensesProps): J
     void loadUsage();
   }, [loadUsage]);
 
-  /** Детализация читается отдельным запросом: в списке сессий нет. */
+  /**
+   * Детализация читается отдельным запросом: в списке сессий нет.
+   *
+   * Открыть смену, вернуться и открыть другую можно быстрее, чем придёт первый ответ
+   * (таймаут запроса — 5 с). Без памяти о том, чей ответ ждём, опоздавший ответ первой
+   * смены подменил бы экран второй, поэтому `pendingShift` хранит последний запрошенный
+   * id, а чужие ответы отбрасываются — и данные, и отказ.
+   */
   const loadDetail = useCallback(async (shiftId: number): Promise<void> => {
+    pendingShift.current = shiftId;
     setDetail({ status: 'loading' });
     try {
-      setDetail({ status: 'ready', shift: await loadShiftDetail(shiftId) });
+      const loaded = await loadShiftDetail(shiftId);
+      if (pendingShift.current !== shiftId) {
+        return;
+      }
+      setDetail({ status: 'ready', shift: loaded });
     } catch (error) {
+      if (pendingShift.current !== shiftId) {
+        return;
+      }
       setDetail({
         status: 'error',
         errorText: error instanceof ApiError ? error.message : UNREACHABLE_TEXT,
       });
     }
   }, []);
+
+  /** Возврат к журналу: запрошенная смена забывается, опоздавший ответ уже не нужен. */
+  function closeDetail(): void {
+    pendingShift.current = null;
+    setDetail({ status: 'closed' });
+  }
 
   function handleOpen(shift: UsageShift): void {
     void loadDetail(shift.id);
@@ -275,7 +298,7 @@ export default function ProjectExpenses({ projectRef }: ProjectExpensesProps): J
             className="btn"
             type="button"
             data-testid="expense-detail-back"
-            onClick={() => setDetail({ status: 'closed' })}
+            onClick={closeDetail}
           >
             ← К проекту
           </button>
@@ -387,6 +410,12 @@ export default function ProjectExpenses({ projectRef }: ProjectExpensesProps): J
           </p>
           <p className="state__hint">
             Журнал пополнится, когда смена проекта закроется и пришлёт свой расход.
+          </p>
+          {/* Ссылку журнала видно глазами: `404` у смен не отличается от «журнал пуст», и
+              при расхождении id проекта веба и id реестра отдела это единственный признак,
+              что смотрим не на тот проект. */}
+          <p className="state__hint" data-testid="expenses-ref">
+            {`Запрошен журнал проекта «${projectRef}»`}
           </p>
         </div>
       )}

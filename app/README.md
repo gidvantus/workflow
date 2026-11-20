@@ -733,11 +733,14 @@ cacheRead, cacheWrite}, cost_usd}`. Деньги в ответах — стро�
 только когда есть хотя бы одна смена — за пустой журнал «0,00 $» не рисуется.
 Детализация — отдельный запрос `GET /api/usage/shifts/{id}` со своими состояниями:
 «Загрузка…», текст отказа дословно (`404 Смена не найдена`) и возврат «← К проекту».
+В пустом состоянии вкладка называет ссылку, которую спросила (`expenses-ref`): `404` у
+смен проекта не отличается от «журнал пуст», и при расхождении id проекта веба и id
+реестра отдела это единственный признак, что смотрим не на тот проект.
 
 | Что | `data-testid` |
 |---|---|
 | вкладка и итог | `project-tab-expenses`, `expense-total`, `expense-total-shifts`, `expense-total-sessions`, `expense-total-cost` |
-| состояния вкладки | `expenses-state`, `expenses-empty`, `expense-error`, `expenses-retry` |
+| состояния вкладки | `expenses-state`, `expenses-empty`, `expenses-ref`, `expense-error`, `expenses-retry` |
 | список смен | `expenses-list`, `expense-item`, `expense-item-period`, `expense-item-reason`, `expense-item-sessions`, `expense-item-tokens`, `expense-item-cost`, `expense-open` |
 | детализация | `expense-detail`, `expense-detail-period`, `expense-detail-back`, `expense-detail-state`, `expense-detail-error`, `expense-detail-empty`, `expense-session`, `expense-session-role`, `expense-session-issue`, `expense-session-tokens`, `expense-session-cost` |
 
@@ -745,9 +748,14 @@ cacheRead, cacheWrite}, cost_usd}`. Деньги в ответах — стро�
 `ProjectResponse`, поэтому страница подставляет `String(project.id)`: реестр, собранный
 ручкой `rebuild`, берёт `id` проекта из `projects.id` (#54). Если реестр написан руками
 с буквенными id (как `workflow` в реестре отдела этого репозитория), пары
-«проект веба → проект реестра» в API нет, и вкладка покажет пустой журнал; чтобы такая
-связка работала, `ProjectResponse` (или отдельная ручка реестра без токена) должен
-отдавать `project_ref` — это вопрос к бэкенду, а не решение фронта.
+«проект веба → проект реестра» в API нет, и вкладка покажет пустой журнал (с названной
+ссылкой в `expenses-ref`); чтобы такая связка работала, `ProjectResponse` (или отдельная
+ручка реестра без токена) должен отдавать `project_ref` — это вопрос к бэкенду, а не
+решение фронта.
+
+Детализация помнит, какую смену ждёт: открыть смену A, вернуться и открыть B можно
+быстрее таймаута запроса, и опоздавший ответ A иначе подменил бы экран B. Чужие ответы
+(и данные, и отказы) отбрасываются.
 
 ## Оболочка приложения
 
