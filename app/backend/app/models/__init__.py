@@ -9,6 +9,7 @@ from app.models.department_kind import (
 from app.models.project import Project
 from app.models.registry import RegistryDocument
 from app.models.role import DEFAULT_ROLES, Role
+from app.models.role_skill import RoleSkill
 from app.models.task import Task
 
 __all__ = [
@@ -20,6 +21,7 @@ __all__ = [
     "Project",
     "RegistryDocument",
     "Role",
+    "RoleSkill",
     "Task",
     "department_roles",
 ]

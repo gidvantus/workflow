@@ -16,10 +16,10 @@ if (missing.length > 0) { console.error('в модуле нет функций: 
 const moduleFile = path.join(process.cwd(), '.windows-under-test.mjs')
 fs.writeFileSync(moduleFile, source.slice(0, cut) + '\nexport { ' + present.join(', ') + ' }\n')
 // Модуль диспетчера берёт соседние модули относительными импортами
-// (`./state-paths.mjs`, `./registry.mjs`), а вырезанная копия лежит в каталоге
-// набора: без копий рядом Node искал бы модули здесь же и не нашёл. Кладём рядом
-// и убираем за собой тем же признаком, каким положили.
-const patched = ['state-paths', 'registry']
+// (`./state-paths.mjs`, `./registry.mjs`, `./presets.mjs`), а вырезанная копия
+// лежит в каталоге набора: без копий рядом Node искал бы модули здесь же и не
+// нашёл. Кладём рядом и убираем за собой тем же признаком, каким положили.
+const patched = ['state-paths', 'registry', 'presets']
 const copied = []
 for (const name of patched) {
   const source = path.join(path.dirname(plugin), name + '.mjs')

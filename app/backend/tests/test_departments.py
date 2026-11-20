@@ -167,7 +167,12 @@ def _links(session_factory: sessionmaker[Session]) -> list[tuple[int, int]]:
 
 
 def test_roles_are_seeded_in_contract_order(client: TestClient) -> None:
-    """`GET /api/roles` — ровно десять ролей в порядке таблицы контракта."""
+    """`GET /api/roles` — ровно десять ролей в порядке таблицы контракта.
+
+    Поля `description`, `skill_count` и `updated_at` появились вместе с разделом «Роли»:
+    первые две роли ниже сверяются по `id`/`code`/`title`, потому что остальные поля
+    заводятся вместе с ролью и проверяются в `test_roles.py`.
+    """
     response = client.get("/api/roles")
 
     assert response.status_code == status.HTTP_200_OK
@@ -175,8 +180,13 @@ def test_roles_are_seeded_in_contract_order(client: TestClient) -> None:
     assert len(body) == 10
     assert [item["code"] for item in body] == [code for code, _ in DEFAULT_ROLES]
     assert [item["id"] for item in body] == list(range(1, 11))
-    assert body[0] == {"id": 1, "code": "analyst", "title": "Аналитик"}
-    assert body[9] == {"id": 10, "code": "jev", "title": "Jev (System One)"}
+    assert [item["title"] for item in body] == [title for _code, title in DEFAULT_ROLES]
+    assert set(body[0]) == {"id", "code", "title", "description", "skill_count", "updated_at"}
+    assert body[0]["id"] == 1
+    assert body[0]["code"] == "analyst"
+    assert body[0]["title"] == "Аналитик"
+    assert body[9]["code"] == "jev"
+    assert body[9]["title"] == "Jev (System One)"
 
 
 def test_create_returns_created_department(client: TestClient, project_id: int) -> None:

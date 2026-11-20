@@ -179,16 +179,21 @@ def validate_times(start: str, end: str) -> tuple[time, time]:
 
 
 def validate_role_ids(db: Session, role_ids: list[int]) -> list[Role]:
-    """Набор ролей: без повторов, каждая роль есть в справочнике.
+    """Набор ролей: без повторов, каждая роль есть в справочнике и жива.
 
     Пустой набор допустим и означает «ролей нет»: требование «хотя бы одна роль» из
     контракта ушло. Повтор схлопывается молча — это не ошибка ввода. Порядок ответа
     задаёт `id` роли, а не порядок в присланном списке.
+
+    Мягко удалённая роль из набора выбрасывается тем же `422 ROLE_UNKNOWN`: её нет в
+    списке ролей, который видит человек, и отдел не должен ссылаться на неё молча.
     """
     unique_ids = list(dict.fromkeys(role_ids))
     if not unique_ids:
         return []
-    roles = db.scalars(select(Role).where(Role.id.in_(unique_ids)).order_by(Role.id)).all()
+    roles = db.scalars(
+        select(Role).where(Role.id.in_(unique_ids), Role.deleted_at.is_(None)).order_by(Role.id)
+    ).all()
     if len(roles) != len(unique_ids):
         raise _reject(ROLE_UNKNOWN)
     return list(roles)

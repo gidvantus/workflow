@@ -112,6 +112,10 @@ import crypto from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { STATE_FILES, dshHome, legacyFile, readStateFile, stateDir, stateFile } from './state-paths.mjs'
+// Роли и скиллы правятся в вебе, а раскладываются в `~/.dsh/.agent-presets`:
+// сверку источника с раскладкой держит отдельный модуль, чтобы у диспетчера не
+// было второй копии разбора `SKILL.md` и сборки композиции.
+import { readRemovedRoles, syncPresets } from './presets.mjs'
 // Форма реестра проектов известна одному модулю: диспетчер, мост Telegram,
 // `sync.mjs` и инструменты `plugins/tools/` берут её отсюда, а не разбирают
 // `projects` каждый по-своему.
@@ -439,6 +443,30 @@ const PRESETS_SOURCE = ['./agent-presets/', '../../../agent-presets/']
   .find((dir) => fs.existsSync(dir)) ||
   fileURLToPath(new URL('./agent-presets/', import.meta.url))
 
+// Шаблон композиции для роли, у которой в пакете нет `agent.cordis.yml`: роль,
+// заведённая в вебе, не лежит в пакете вовсе, и раскладка собирает её из шаблона —
+// иначе новая роль не запустилась бы ни разу.
+const PRESETS_TEMPLATE = fileURLToPath(
+  new URL('./agent-presets-template/agent.cordis.yml', import.meta.url)
+)
+
+// База API из адреса ручки реестра: `registry.apiUrl` — это
+// `http://localhost:8096/api/registry`, а пресетам нужен `http://localhost:8096`.
+// Путь отрезаем разбором URL, а не склейкой строк: хвостовые слэши и подкаталог
+// стенда не должны давать двойной `/api`.
+function presetsApiBase(url) {
+  let target
+  try {
+    target = new URL(url)
+  } catch (error) {
+    return ''
+  }
+  const pathname = target.pathname.replace(/\/+$/, '')
+    .replace(/\/api\/registry$/, '')
+    .replace(/\/api$/, '')
+  return target.origin + pathname
+}
+
 // Файлы каталога рекурсивно, путями относительно него: источник и цель
 // сравниваются одним словарём, и «чего в источнике больше нет» видно сразу.
 function listPresetFiles(dir, prefix = '') {
@@ -500,11 +528,15 @@ function pruneEmptyDirs(dir, root) {
 export function deployPresets(options = {}) {
   const source = options.source || PRESETS_SOURCE
   const target = options.target || path.join(dshHome(), '.agent-presets')
+  // Коды, которые раскладывать НЕЛЬЗЯ: их удалили в вебе, и пакет не должен их
+  // воскрешать. Список ведёт `syncPresets` в `.department-roles.json` (`readRemovedRoles`).
+  const skip = new Set(Array.isArray(options.skip) ? options.skip : [])
   const result = {
     source,
     target,
     presets: [],
     foreign: [],
+    skipped: [],
     written: 0,
     updated: 0,
     removed: 0,
@@ -526,6 +558,10 @@ export function deployPresets(options = {}) {
     result.problem = 'каталог пресетов пуст: ' + source
     return result
   }
+  // Пропуск считается после проверки «каталог пакета не пуст»: пустой пакет — беда
+  // установки, а не повод молчать.
+  result.skipped = ids.filter((id) => skip.has(id))
+  ids = ids.filter((id) => !skip.has(id))
 
   if (fs.existsSync(target)) {
     let stat = null
@@ -549,6 +585,22 @@ export function deployPresets(options = {}) {
   } catch (error) {
     result.problem = 'не создаётся корень пресетов ' + target + ': ' + (error && error.message ? error.message : String(error))
     return result
+  }
+
+  // Каталоги удалённых в вебе ролей. Слаг наш — отдел его и раскладывал, — поэтому
+  // остаток убираем здесь: иначе роль, которую человек удалил в вебе, продолжала бы
+  // подгружаться у агентов до следующего тика.
+  for (const id of result.skipped) {
+    const dir = path.join(target, id)
+    if (!fs.existsSync(dir)) continue
+    try {
+      if (fs.lstatSync(dir).isSymbolicLink()) continue
+      fs.rmSync(dir, { recursive: true, force: true })
+    } catch (error) {
+      result.problem = 'удалённая в вебе роль ' + id + ' не убирается из ' + target + ': ' +
+        (error && error.message ? error.message : String(error))
+      return result
+    }
   }
 
   for (const id of ids) {
@@ -590,7 +642,7 @@ export function deployPresets(options = {}) {
   }
 
   // Что лежит в корне помимо ролей отдела: это человеково, не наше дело.
-  const known = new Set(ids)
+  const known = new Set([...ids, ...skip])
   try {
     for (const entry of fs.readdirSync(target, { withFileTypes: true })) {
       if (entry.isDirectory() && !known.has(entry.name)) result.foreign.push(entry.name)
@@ -1424,6 +1476,20 @@ export default {
       disabledIds: [],
       lastError: null,
       lastTickAt: null,
+      // Раскладка пресетов ролей: `applied` — что уже разложено в этом процессе
+      // (`{revision, roles}`), остальное — то, что видно в статусе.
+      presets: {
+        ok: null,             // null — синхронизации ещё не было
+        revision: null,
+        applied: { revision: null, roles: {} },
+        roles: [],
+        removed: [],
+        deployed: false,
+        written: 0,
+        updated: 0,
+        at: null,
+        error: null,
+      },
     }
 
     // Переезд состояния со старого места (корень каталога установки) в каталог
@@ -1509,8 +1575,13 @@ export default {
     // диалога, а человек видит это как «поставил метку, а агент задачу не взял».
     // Раскладка идёт на загрузке плагина, то есть при старте приложения и после
     // установки новой версии пакета.
+    //
+    // Роли, удалённые в вебе, пакет не возвращает: их коды лежат в `.department-roles.json`
+    // (поле `removed`) и передаются раскладке как список пропуска. Без этого удаление
+    // роли жило бы до первого перезапуска приложения.
     try {
-      const deployed = deployPresets()
+      const presetsRoot = path.join(dshHome(), '.agent-presets')
+      const deployed = deployPresets({ skip: readRemovedRoles(presetsRoot) })
       if (deployed.problem) {
         state.lastError = 'пресеты ролей: ' + deployed.problem
       } else if (deployed.written + deployed.updated + deployed.removed > 0) {
@@ -1518,6 +1589,7 @@ export default {
           deployed.presets.join(', ') +
           ' (новых файлов ' + deployed.written + ', обновлено ' + deployed.updated +
           ', убрано ' + deployed.removed + ').' +
+          (deployed.skipped.length > 0 ? ' Удалены в вебе и пропущены: ' + deployed.skipped.join(', ') + '.' : '') +
           (deployed.foreign.length > 0 ? ' Свои пресеты не тронуты: ' + deployed.foreign.join(', ') + '.' : ''))
       }
     } catch (error) {
@@ -3926,6 +3998,76 @@ export default {
       return { ok: true, changed: written.changed, revision: registrySync.revision, localKeys: merged.localKeys }
     }
 
+    // ── раскладка пресетов ролей из веба ───────────────────────────────────
+    //
+    // Раскладка при загрузке плагина ставит ПАКЕТ (`deployPresets`): до первого
+    // ответа веба роли уже на месте. Тик сверяет раскладку с базой: правка роли
+    // в браузере доезжает до `~/.dsh/.agent-presets` здесь. Пока ревизия набора
+    // не менялась, сети — один запрос манифеста и ни одной записи файлов.
+    //
+    // Сбой не откатывает раскладку и не останавливает смену: `syncPresets`
+    // трогает `target` только после того, как все документы собраны, поэтому
+    // неудача оставляет прежние роли рабочими и называет себя в статусе.
+    async function syncRolePresets() {
+      const settings = config.values.registry
+      if (!settings || !settings.apiUrl) {
+        state.presets.error = null
+        return { skipped: 'адрес API не задан' }
+      }
+      const apiUrl = presetsApiBase(settings.apiUrl)
+      if (!apiUrl) {
+        state.presets.ok = false
+        state.presets.error = 'пресеты ролей: адрес API не разобран: ' + settings.apiUrl
+        state.lastError = state.presets.error
+        return { error: state.presets.error }
+      }
+
+      const result = await syncPresets({
+        apiUrl,
+        token: settings.token,
+        source: PRESETS_SOURCE,
+        template: PRESETS_TEMPLATE,
+        target: path.join(dshHome(), '.agent-presets'),
+        deploy: (options) => deployPresets(options),
+        applied: state.presets.applied,
+      })
+
+      state.presets.at = new Date().toISOString()
+      if (!result.ok) {
+        state.presets.ok = false
+        state.presets.error = result.error || 'пресеты ролей: синхронизация не удалась'
+        state.presets.deployed = false
+        state.lastError = state.presets.error
+        return { error: state.presets.error }
+      }
+
+      state.presets.ok = true
+      state.presets.error = null
+      state.presets.revision = result.revision || null
+      state.presets.roles = Array.isArray(result.roles) ? result.roles : []
+      state.presets.removed = Array.isArray(result.removed) ? result.removed : []
+      state.presets.deployed = !!result.deployed
+      state.presets.written = Number.isInteger(result.written) ? result.written : 0
+      state.presets.updated = Number.isInteger(result.updated) ? result.updated : 0
+      // Ревизия, на которой стоит раскладка: следующий тик сравнит её с манифестом
+      // и не станет ни читать документы, ни писать файлы без надобности.
+      state.presets.applied = {
+        revision: result.revision || null,
+        roles: result.roleRevisions && typeof result.roleRevisions === 'object'
+          ? result.roleRevisions
+          : {},
+      }
+      if (state.presets.deployed || state.presets.removed.length > 0) {
+        appendShiftLog('🛠 Пресеты ролей из веба разложены в ' + path.join(dshHome(), '.agent-presets') +
+          ': ' + (state.presets.roles.length > 0 ? state.presets.roles.join(', ') : 'ни одной роли') +
+          ' (новых файлов ' + state.presets.written + ', обновлено ' + state.presets.updated + ')' +
+          (state.presets.removed.length > 0
+            ? '. Убраны роли, которых нет в вебе: ' + state.presets.removed.join(', ')
+            : '') + '.')
+      }
+      return { ok: true, revision: state.presets.revision }
+    }
+
     async function step(options) {
       const opts = options || {}
       config = loadConfig()
@@ -3935,6 +4077,18 @@ export default {
       // Кеш реестра обновляется до чтения проектов: тик должен работать на том
       // документе, который только что пришёл из веба.
       await syncRegistryFromApi({ force: !!opts.forceRegistry })
+
+      // Роли и скиллы правятся в вебе, а читаются из `~/.dsh/.agent-presets`,
+      // поэтому раскладка сверяется с базой до первого хода проекта: иначе агент
+      // взял бы тикет с устаревшим скиллом. Сбой синхронизации раскладку не
+      // стирает — та, что была, остаётся рабочей.
+      try {
+        await syncRolePresets()
+      } catch (error) {
+        state.presets.ok = false
+        state.presets.error = 'пресеты ролей: ' + messageOf(error)
+        state.lastError = state.presets.error
+      }
 
       const loaded = loadProjects(config.values)
       state.projectProblem = loaded.problem
@@ -4186,6 +4340,21 @@ export default {
             localKeys: registrySync.localKeys,
             droppedProjects: registrySync.droppedProjects,
             error: registrySync.error,
+          },
+          // Раскладка пресетов ролей: `ok: null` — синхронизации в этом процессе
+          // ещё не было. `roles` — что разложено, `removed` — роли, которых в вебе
+          // больше нет; ошибка называется рядом, а не только в `lastError`, потому
+          // что она не останавливает смену и живёт до следующего тика.
+          // Имя `presetsSync` — из контракта задачи (#56): по нему тестировщик и
+          // человек смотрят, на какой ревизии стоит раскладка.
+          presetsSync: {
+            ok: state.presets.ok,
+            revision: state.presets.revision,
+            roles: state.presets.roles,
+            removed: state.presets.removed,
+            deployed: state.presets.deployed,
+            attemptedAt: state.presets.at,
+            error: state.presets.error,
           },
           lastTickAt: state.lastTickAt,
           lastError: state.lastError,
