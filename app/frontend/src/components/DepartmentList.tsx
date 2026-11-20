@@ -10,11 +10,12 @@
  * только у отделов, заведённых выбором, а у переживших миграцию `0006` оно прежнее
  * («Поддержка» при виде «Разработка»), и различить их иначе нечем.
  *
- * Время — главный элемент раздела: значение приходит с сервера строкой `"ЧЧ:ММ"` и
- * показывается как `13:00–04:00`, под ним длительность смены. Переход через полночь
- * (`end` раньше `start`) — штатный случай: длительность считается по кругу суток,
- * а слова «через полночь» снимают вопрос «почему конец раньше начала». Расписания может
- * не быть вовсе: тогда в значении «нет расписания», а длительность пуста.
+ * Время — главный элемент раздела: набор окон приходит с сервера массивом строк `"ЧЧ:ММ"`
+ * в порядке возрастания начала и показывается как `13:00–04:00, 07:00–09:00`; под ним —
+ * суммарная длительность всех окон. Переход через полночь (`end` раньше `start`) — штатный
+ * случай: длительность каждого окна считается по кругу суток, а слова «через полночь»
+ * снимают вопрос «почему конец раньше начала». Расписания может не быть вовсе — пустой
+ * набор: тогда в значении «нет расписания», а длительность пуста.
  *
  * Роли — текст через запятую по названиям из справочника сервера, не чипы; пустой набор
  * ролей допустим и показывается прочерком.
@@ -22,7 +23,7 @@
 
 import { useEffect, useId, useRef, useState } from 'react';
 
-import type { Department } from '../api/departments';
+import type { Department, DepartmentWindow } from '../api/departments';
 
 const MONTHS = [
   'янв',
@@ -51,12 +52,10 @@ function formatDate(iso: string): string {
 
 /**
  * Минуты с начала суток из `"ЧЧ:ММ"`; неразборчивое время — `null`, без выдумок.
- * `null` на входе — расписания нет, это тоже `null`, а не полночь.
+ * Своего формата фронт не требует: время в этом поле пришло от сервера, а `null` здесь
+ * значит «строку не разобрать», а не «расписания нет» — расписание приходит массивом.
  */
-function minutesOf(time: string | null): number | null {
-  if (time === null) {
-    return null;
-  }
+function minutesOf(time: string): number | null {
   const match = /^(\d{2}):(\d{2})$/.exec(time);
   if (match === null) {
     return null;
@@ -69,18 +68,49 @@ function minutesOf(time: string | null): number | null {
   return hours * 60 + minutes;
 }
 
-/** Длительность смены: `9 ч`, `15 ч`, `9 ч 30 мин`. Конец раньше начала — через полночь. */
-function shiftText(startTime: string | null, endTime: string | null): string {
-  const start = minutesOf(startTime);
-  const end = minutesOf(endTime);
+/**
+ * Длительность одного окна в минутах и признак перехода через полночь. Конец раньше
+ * начала — окно идёт до конца суток и продолжается с нуля, это норма, а не опечатка.
+ */
+function windowLength(
+  window: DepartmentWindow,
+): { minutes: number; overnight: boolean } | null {
+  const start = minutesOf(window.start_time);
+  const end = minutesOf(window.end_time);
   if (start === null || end === null) {
-    return '';
+    return null;
   }
   const overnight = end < start;
-  const total = (overnight ? end + 24 * 60 : end) - start;
-  const hours = Math.floor(total / 60);
-  const minutes = total % 60;
-  const length = minutes === 0 ? `${hours} ч` : `${hours} ч ${minutes} мин`;
+  return { minutes: (overnight ? end + 24 * 60 : end) - start, overnight };
+}
+
+/** Длительность в прежнем формате: `9 ч`, `15 ч`, `9 ч 30 мин`. */
+function formatDuration(minutes: number): string {
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest === 0 ? `${hours} ч` : `${hours} ч ${rest} мин`;
+}
+
+/**
+ * Суммарная длительность набора и «· через полночь», если хотя бы одно окно переходит
+ * полночь. Сумма честная: окна не пересекаются — это правило сервера, а не допущение
+ * фронта, поэтому сумма длительностей равна времени работы отдела в сутках.
+ */
+function scheduleText(windows: DepartmentWindow[]): string {
+  if (windows.length === 0) {
+    return '';
+  }
+  let total = 0;
+  let overnight = false;
+  for (const window of windows) {
+    const length = windowLength(window);
+    if (length === null) {
+      return '';
+    }
+    total += length.minutes;
+    overnight = overnight || length.overnight;
+  }
+  const length = formatDuration(total);
   return overnight ? `${length} · через полночь` : length;
 }
 
@@ -145,12 +175,9 @@ function DepartmentRow({
   }, [menuOpen]);
 
   const menuLabel = `Действия с отделом ${department.name}`;
-  // Расписание — пара: одна половина без второй расписанием не является, сервер такую
-  // пару и не отдаст, но «нет расписания» честнее пустого прочерка.
-  const hasSchedule = department.start_time !== null && department.end_time !== null;
-  const time = hasSchedule
-    ? `${department.start_time}–${department.end_time}`
-    : 'нет расписания';
+  // Расписание — набор окон: пустой набор значит «расписания нет». Окна идут как пришли
+  // с сервера (по возрастанию начала), фронт их не сортирует и время не переписывает.
+  const hasSchedule = department.windows.length > 0;
   const rolesText =
     department.roles.length === 0
       ? '—'
@@ -167,15 +194,25 @@ function DepartmentRow({
         </p>
       </div>
       <div className="dept-time">
+        {/*
+          Окна — отдельными спанами: на широком экране каждое занимает свою строку
+          (запятая остаётся концом предыдущей), на узком встают в строку через запятую.
+          Текст ячейки при этом один и тот же: `13:00–04:00, 07:00–09:00`.
+        */}
         <span
           className={hasSchedule ? 'dept-time__value' : 'dept-time__value dept-time__value--empty'}
           data-testid="department-item-time"
         >
-          {time}
+          {hasSchedule
+            ? department.windows.map((window, index) => (
+                <span className="dept-time__window" key={index}>
+                  {`${window.start_time}–${window.end_time}`}
+                  {index < department.windows.length - 1 ? ', ' : ''}
+                </span>
+              ))
+            : 'нет расписания'}
         </span>
-        <span className="dept-time__note">
-          {shiftText(department.start_time, department.end_time)}
-        </span>
+        <span className="dept-time__note">{scheduleText(department.windows)}</span>
       </div>
       <p className="row__roles" data-testid="department-item-roles">
         {rolesText}

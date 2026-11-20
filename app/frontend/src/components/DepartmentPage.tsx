@@ -18,8 +18,15 @@
  *
  * **Валидации здесь нет.** Длины строк и диапазон лимита возврата проверяет сервер, его
  * текст отказа показывается дословно; своих формулировок страница не придумывает.
- * Единственная подсказка от фронта — «Пустое поле — 3» у лимита и «через полночь»
- * у времени.
+ * Единственная подсказка от фронта — «Пустое поле — 3» у лимита и «окно идёт через
+ * полночь» у времени.
+ *
+ * **Время работы — список окон, а не пара.** Рядов от одного до шести: «Добавить окно»
+ * добавляет ряд, крестик убирает свой. Границы `1..6` держат сами кнопки — седьмого ряда
+ * не добавить, а последний не удалить, — но это удобство, а не замена серверной проверке:
+ * пересечения, формат и предел проверяет сервер и отвечает своим текстом, который
+ * страница показывает дословно. Порядок окон — серверный: массив уходит как есть, а в
+ * ответе приходит отсортированным по возрастанию начала.
  */
 
 import { useCallback, useEffect, useId, useState, type FormEvent } from 'react';
@@ -29,10 +36,17 @@ import {
   updateDepartment,
   type Department,
   type DepartmentPatch,
+  type DepartmentWindow,
   type Role,
 } from '../api/departments';
 import { ApiError, UNREACHABLE_TEXT } from '../api/http';
 import type { Project } from '../api/projects';
+
+/** Предел окон: тот же `WINDOWS_MAX`, что у сервера. Фронт лишь не даёт добавить седьмое. */
+const WINDOWS_MAX = 6;
+
+/** Пустое окно нового ряда: время выбирается из `<input type="time">`, а не набирается. */
+const EMPTY_WINDOW: DepartmentWindow = { start_time: '', end_time: '' };
 
 const MONTHS = [
   'янв',
@@ -125,6 +139,12 @@ type InvalidTarget =
  * Поле, к которому относится текст отказа. Контракт адресует отказ текстом, а не именем
  * поля, поэтому связь «текст → поле» живёт здесь: у каждой строки таблицы отказов свой
  * узнаваемый оборот, и подпись поля совпадает с началом текста.
+ *
+ * У окон времени работы подпись одна на список, а отказов у них четыре формы
+ * («Укажите хотя бы одно окно времени работы», «Окон времени работы не может быть больше
+ * шести», «Время работы указывается как ЧЧ:ММ…», «Окна времени работы пересекаются»),
+ * поэтому ловится общий корень «врем»: все они про расписание, и `aria-invalid` встаёт на
+ * все поля окон сразу — какое именно виновато, контракт не говорит.
  */
 function invalidTargetFor(text: string): InvalidTarget {
   const lower = text.toLowerCase();
@@ -155,7 +175,7 @@ function invalidTargetFor(text: string): InvalidTarget {
   if (lower.includes('лимит возврата')) {
     return 'max_rework';
   }
-  if (lower.includes('время работы') || lower.includes('рабочего времени')) {
+  if (lower.includes('врем')) {
     return 'schedule';
   }
   if (lower.includes('роль')) {
@@ -219,8 +239,14 @@ export default function DepartmentPage({
     artifacts_dir: department.artifacts_dir ?? '',
     compose_project: department.compose_project ?? '',
   }));
-  const [startTime, setStartTime] = useState(department.start_time ?? '');
-  const [endTime, setEndTime] = useState(department.end_time ?? '');
+  /**
+   * Окна работы. В серверном порядке, как пришли; у отдела без расписания (создан видом,
+   * вид без `schedule`) — один пустой ряд, потому что расписание заполняется здесь, а не
+   * в окне создания. Пустой набор в базу не уходит: сервер отказывает своим текстом.
+   */
+  const [windows, setWindows] = useState<DepartmentWindow[]>(() =>
+    department.windows.length > 0 ? department.windows : [{ ...EMPTY_WINDOW }],
+  );
   const [selectedRoleIds, setSelectedRoleIds] = useState<number[]>(() =>
     department.roles.map((role) => role.id),
   );
@@ -272,6 +298,39 @@ export default function DepartmentPage({
   }
 
   /**
+   * Правка одного поля одного окна. Список заменяется новым массивом, а не мутируется:
+   * так состояние React видит изменение, и так же ведёт себя сервер (набор целиком).
+   */
+  function setWindowPart(
+    index: number,
+    part: keyof DepartmentWindow,
+    value: string,
+  ): void {
+    setWindows((previous) =>
+      previous.map((window, current) =>
+        current === index ? { ...window, [part]: value } : window,
+      ),
+    );
+  }
+
+  /** «Добавить окно»: седьмого ряда нет, предел тот же, что у сервера. */
+  function addWindow(): void {
+    setWindows((previous) =>
+      previous.length >= WINDOWS_MAX ? previous : [...previous, { ...EMPTY_WINDOW }],
+    );
+  }
+
+  /**
+   * Крестик убирает свой ряд. У единственного окна кнопки нет вовсе, но проверка остаётся:
+   * пустой список — это отказ сервера, а не состояние, которого добивается фронт.
+   */
+  function removeWindow(index: number): void {
+    setWindows((previous) =>
+      previous.length <= 1 ? previous : previous.filter((_, current) => current !== index),
+    );
+  }
+
+  /**
    * `PATCH` уходит только отрисованными полями: состав берётся из `department.fields`,
    * поэтому «Маркетинг» не присылает время и уведомления, а выключенный флажок не стирает
    * сохранённый токен — его поля в теле просто нет.
@@ -287,8 +346,13 @@ export default function DepartmentPage({
     const patch: DepartmentPatch = {};
     for (const key of department.fields) {
       if (key === 'schedule') {
-        patch.start_time = emptyToNull(startTime);
-        patch.end_time = emptyToNull(endTime);
+        // Набор уходит целиком и в том порядке, в каком стоит на экране: сервер заменит
+        // его и отсортирует ответ сам. Пустое поле окна не выбрасывается — его формат
+        // проверяет сервер и отвечает текстом контракта.
+        patch.windows = windows.map((window) => ({
+          start_time: window.start_time,
+          end_time: window.end_time,
+        }));
       } else if (key === 'roles') {
         // Пока справочник не прочитан, набор ролей не отправляется: на экране его нет,
         // и переписывать его вслепую нельзя.
@@ -345,44 +409,89 @@ export default function DepartmentPage({
 
   function renderSchedule(): JSX.Element {
     const invalid = invalidTarget === 'schedule';
+    /**
+     * Подпись «Время работы» одна на весь список: прежние «с» и «по» у каждого ряда дали
+     * бы двенадцать подписей на шесть окон. Поле узнаётся по месту в ряду «начало — тире —
+     * конец», а программе подписи хватает `aria-label` у самого поля.
+     */
     return (
       <div className="time-block" key="schedule">
-        <div className="time-row">
-          <div className="field">
-            <label className="field__label" htmlFor={`${idPrefix}-start`}>
-              Время работы с
-            </label>
-            <input
-              className="field__input"
-              id={`${idPrefix}-start`}
-              type="time"
-              value={startTime}
-              data-testid="department-field-start"
-              aria-invalid={invalid}
-              aria-describedby={invalid ? errorId : undefined}
-              onChange={(event) => setStartTime(event.target.value)}
-            />
-          </div>
-          <span className="time-row__dash" aria-hidden="true">
-            —
-          </span>
-          <div className="field">
-            <label className="field__label" htmlFor={`${idPrefix}-end`}>
-              по
-            </label>
-            <input
-              className="field__input"
-              id={`${idPrefix}-end`}
-              type="time"
-              value={endTime}
-              data-testid="department-field-end"
-              aria-invalid={invalid}
-              aria-describedby={invalid ? errorId : undefined}
-              onChange={(event) => setEndTime(event.target.value)}
-            />
-          </div>
+        <span className="field__label">Время работы</span>
+
+        <div
+          className="windows"
+          role="group"
+          aria-label="Время работы"
+          data-testid="department-field-windows"
+        >
+          {windows.map((window, index) => (
+            <div className="window-row" key={index}>
+              <input
+                className="field__input"
+                type="time"
+                value={window.start_time}
+                aria-label={`Окно ${index + 1}: начало`}
+                aria-invalid={invalid}
+                aria-describedby={invalid ? errorId : undefined}
+                data-testid={`department-field-window-start-${index}`}
+                onChange={(event) => setWindowPart(index, 'start_time', event.target.value)}
+              />
+              <span className="window-row__dash" aria-hidden="true">
+                —
+              </span>
+              <input
+                className="field__input"
+                type="time"
+                value={window.end_time}
+                aria-label={`Окно ${index + 1}: конец`}
+                aria-invalid={invalid}
+                aria-describedby={invalid ? errorId : undefined}
+                data-testid={`department-field-window-end-${index}`}
+                onChange={(event) => setWindowPart(index, 'end_time', event.target.value)}
+              />
+              {/* У единственного окна крестика нет: удалять нечего, и пустого места в
+                  ряду тоже не остаётся — колонка кнопки `auto`. */}
+              {windows.length > 1 && (
+                <button
+                  className="kebab"
+                  type="button"
+                  aria-label={`Удалить окно ${index + 1}`}
+                  data-testid={`department-field-window-remove-${index}`}
+                  disabled={busy}
+                  onClick={() => removeWindow(index)}
+                >
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 16 16"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.6"
+                    aria-hidden="true"
+                  >
+                    <path d="M4 4l8 8M12 4l-8 8" />
+                  </svg>
+                </button>
+              )}
+            </div>
+          ))}
         </div>
-        <p className="field__hint">Если конец раньше начала, отдел работает через полночь.</p>
+
+        {/* «Добавить окно» — обычная кнопка под списком. При шести окнах она неактивна:
+            предел `WINDOWS_MAX` виден по самой кнопке, а не по отказу сервера. */}
+        <button
+          className="btn windows__add"
+          type="button"
+          data-testid="department-field-window-add"
+          disabled={busy || windows.length >= WINDOWS_MAX}
+          onClick={addWindow}
+        >
+          Добавить окно
+        </button>
+
+        <p className="field__hint">
+          Если конец раньше начала, окно идёт через полночь. Окон может быть до шести.
+        </p>
       </div>
     );
   }
