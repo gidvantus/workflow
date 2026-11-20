@@ -19,6 +19,7 @@
 //   <DSH_HOME>/profiles/desktop/dsh-dev-department/dev-department.json      — общие настройки
 //   <DSH_HOME>/profiles/desktop/dsh-dev-department/dev-department-dialogs.json
 //   <DSH_HOME>/profiles/desktop/dsh-dev-department/dev-department-usage.json
+//   <DSH_HOME>/profiles/desktop/dsh-dev-department/dev-department-usage-queue.json
 //   <DSH_HOME>/profiles/desktop/dsh-dev-department/dev-department.log
 //   <DSH_HOME>/profiles/desktop/dsh-dev-department/dev-department-mcp.log
 //   <DSH_HOME>/profiles/desktop/dsh-dev-department/role-sessions.log
@@ -45,7 +46,7 @@ import path from 'node:path'
 export const STATE_PROFILE = 'desktop'
 
 /**
- * Восемь имён состояния отдела. Ключ — для кода, значение — имя файла на диске:
+ * Девять имён состояния отдела. Ключ — для кода, значение — имя файла на диске:
  * имена знают и плагины, и инструменты, поэтому переименование здесь — смена
  * контракта, а не косметика.
  */
@@ -58,6 +59,9 @@ export const STATE_FILES = {
   mcpLog: 'dev-department-mcp.log',
   roleSessions: 'role-sessions.log',
   rolePermissions: 'role-permissions.log',
+  // Приём смен журнала расхода отвечает не всегда: стенд может быть не поднят, и
+  // посчитанный расход надо где-то придержать до следующего тика (#57).
+  usageQueue: 'dev-department-usage-queue.json',
 }
 
 /**
