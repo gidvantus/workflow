@@ -65,13 +65,24 @@ export function roundMoney(value) {
  * Адрес приёма смен из адреса ручки реестра.
  *
  * `registry.apiUrl` — это полный адрес (`http://localhost:8096/api/registry`), поэтому
- * база берётся разбором URL, а не склейкой строк: подкаталог стенда и хвостовые слэши
- * не должны давать двойной `/api`.
+ * из него выбрасывается всё, что начинается с `/api`: ручка журнала живёт на том же
+ * хосте, а подкаталог стенда и хвостовой слэш должны сохраниться. Простой склейкой
+ * строк нельзя: прямой вызов с `registry.apiUrl` дал бы `/api/api/usage/shifts`.
  */
-export function shiftReportUrl(apiBase) {
-  const base = typeof apiBase === 'string' ? apiBase.trim().replace(/\/+$/, '') : ''
-  if (base === '') return ''
-  return base + '/api/usage/shifts'
+export function shiftReportUrl(apiUrl) {
+  const raw = typeof apiUrl === 'string' ? apiUrl.trim() : ''
+  if (raw === '') return ''
+  let parsed = null
+  try {
+    parsed = new URL(raw)
+  } catch (error) {
+    // Не разобран — значит и ручки журнала из него не вывести: пустая строка
+    // отправляет смену в очередь, а не в никуда.
+    return ''
+  }
+  const cut = parsed.pathname.indexOf('/api')
+  const base = (cut >= 0 ? parsed.pathname.slice(0, cut) : parsed.pathname).replace(/\/+$/, '')
+  return parsed.origin + base + '/api/usage/shifts'
 }
 
 /**
@@ -202,11 +213,19 @@ export function queueLength() {
   return readQueue().length
 }
 
-/** Ответ `2xx` — отправлено; `4xx` по существу — повторять нечего. */
+/**
+ * Ответ `2xx` — отправлено; `4xx` по существу — повторять нечего.
+ *
+ * `409` — исключение: его бэкенд отдаёт в штатной гонке двух одновременных `POST`
+ * («Смену не удалось записать: одновременная отправка»). Повтор того же тела пройдёт:
+ * сессии из первого запроса уже в базе и просто уйдут в `skipped`. Поэтому `409`
+ * временный — выбросить смену из-за него значило бы потерять расход навсегда.
+ */
 export function isRetryable(status) {
   if (typeof status !== 'number') return false
   if (status >= 200 && status < 300) return false
-  if (status >= 400 && status < 500 && status !== 401 && status !== 408 && status !== 429) return false
+  if (status === 401 || status === 408 || status === 409 || status === 429) return true
+  if (status >= 400 && status < 500) return false
   return true
 }
 
@@ -271,15 +290,18 @@ export async function sendReport(report, options) {
 export async function deliverShift(report, options) {
   const result = await sendReport(report, options)
   const count = Array.isArray(report && report.sessions) ? report.sessions.length : 0
+  // Ключ смены называем всегда: по нему человек в сводке видит, какая именно смена
+  // уехала, а какая осталась, — без него две смены одного дня неразличимы.
+  const key = report && report.shift_key ? 'смена ' + report.shift_key + ' ' : 'смена '
   if (result.ok) {
     const accepted = result.accepted === null ? count : result.accepted
     const skipped = result.skipped === null ? 0 : result.skipped
-    const head = result.changed === false ? 'смена уже была в журнале' : 'смена сохранена'
+    const head = result.changed === false ? 'уже была в журнале' : 'сохранена в вебе'
     return {
       ok: true,
       queued: queueLength(),
       error: null,
-      line: REPORT_PREFIX + head + ' (принято сессий: ' + accepted + ', пропущено: ' + skipped + ')',
+      line: REPORT_PREFIX + key + head + ' (принято сессий: ' + accepted + ', пропущено: ' + skipped + ')',
       result,
     }
   }
@@ -290,7 +312,7 @@ export async function deliverShift(report, options) {
       ok: false,
       queued: queueLength(),
       error: result.error,
-      line: REPORT_PREFIX + 'не принят — ' + result.error,
+      line: REPORT_PREFIX + key + 'не принята — ' + result.error,
       result,
     }
   }
@@ -299,7 +321,7 @@ export async function deliverShift(report, options) {
     ok: false,
     queued: queued.queued,
     error: result.error,
-    line: REPORT_PREFIX + 'не отправлен — ' + result.error + '; останется в очереди',
+    line: REPORT_PREFIX + key + 'не отправлена — ' + result.error + '; останется в очереди',
     result,
   }
 }

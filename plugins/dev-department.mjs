@@ -4151,13 +4151,25 @@ export default {
       if (cards.length === 0) {
         return { line: REPORT_PREFIX + 'данных о расходе нет', skipped: 'нет сессий' }
       }
+      // Ключ смены — дата её НАЧАЛА (контракт `shiftKey`). Считать его от закрытия
+      // нельзя: смена ночного окна 13:00–04:00, закрывшаяся 21.11 в 04:00, получила бы
+      // ключ 21.11 и совпала с утренней сменой того же дня — второй POST вернул бы
+      // `changed:false`, и расход утренней смены пропал бы. `startedAt` здесь —
+      // ISO-строка из состояния проекта.
+      const key = shiftKey(
+        project.department.windows,
+        options.startedAt ? new Date(options.startedAt) : options.endedAt,
+      )
       const rates = (config.values && config.values.usageRates) || null
       if (!rates) {
-        return { line: REPORT_PREFIX + 'не отправлен — не заданы тарифы расчёта', skipped: 'нет тарифов' }
+        return {
+          line: REPORT_PREFIX + 'смена ' + key + ' не отправлена — не заданы тарифы расчёта',
+          skipped: 'нет тарифов',
+        }
       }
       const report = buildShiftReport({
         project,
-        shiftKey: shiftKey(project.department.windows, options.endedAt),
+        shiftKey: key,
         startedAt: options.startedAt,
         endedAt: options.endedAt,
         reason: options.reason,
@@ -4174,7 +4186,7 @@ export default {
         state.usageSync.error = 'адрес веба не задан'
         state.usageSync.queue = waiting
         return {
-          line: REPORT_PREFIX + 'не отправлен — адрес веба не задан; останется в очереди',
+          line: REPORT_PREFIX + 'смена ' + key + ' не отправлена — адрес веба не задан; останется в очереди',
           skipped: 'нет адреса',
         }
       }
@@ -4189,12 +4201,14 @@ export default {
         state.usageSync.ok = true
         state.usageSync.error = null
       } else {
-        // Отказ по существу (`422`) в очередь не ложится — это потерянный расход, и
-        // счётчик `dropped` показывает её в статусе. Смена, которая ждёт канал, —
-        // временная беда: она остаётся в очереди и досылается тиком.
+        // Отказ по существу (`422`, `409` после всех попыток) в очередь не ложится —
+        // это потерянный расход, и счётчик `dropped` показывает её в статусе. Смена,
+        // которая ждёт канал, — временная беда: она остаётся в очереди. Считаем по
+        // `retryable`, а не по пустоте очереди: при непустой очереди `422` тоже
+        // теряет смену, и раньше это пропадало из счётчика.
         state.usageSync.ok = false
         state.usageSync.error = result.error
-        if (result.queued === 0) state.usageSync.dropped += 1
+        if (result.result && result.result.retryable === false) state.usageSync.dropped += 1
       }
       return result
     }

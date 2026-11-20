@@ -96,8 +96,13 @@ class UsageShift(Base):
     )
 
     # Сессии смены: каскада нет, потому что смены не удаляются вовсе.
+    #
+    # Загрузка ленивая, а не `selectin`: списки смен (`GET /api/projects/{ref}/usage`
+    # и `GET /api/usage/projects`) детализацию не отдают, а `selectin` тянул бы
+    # сессии всех смен проекта на каждое открытие страницы — тысячи строк, которые
+    # тут же выбрасываются. Детализации (`GET /api/usage/shifts/{id}`) хватает
+    # одной ленивой загрузки внутри запроса.
     sessions: Mapped[list[UsageSession]] = relationship(
         back_populates="shift",
         order_by="UsageSession.id",
-        lazy="selectin",
     )

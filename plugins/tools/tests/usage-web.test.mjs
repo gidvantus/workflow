@@ -42,6 +42,11 @@ check('из базы API', usage.shiftReportUrl('http://localhost:8096'), 'http:
 check('хвостовой слэш не даёт двойного слэша', usage.shiftReportUrl('http://localhost:8096/'), 'http://localhost:8096/api/usage/shifts')
 check('подкаталог стенда сохраняется', usage.shiftReportUrl('http://host/dsh'), 'http://host/dsh/api/usage/shifts')
 check('пустая база — пустой адрес', usage.shiftReportUrl(''), '')
+// Прямой `registry.apiUrl` — тоже законный вход: `/api` и его хвост отбрасываются.
+check('адрес ручки реестра не даёт /api/api', usage.shiftReportUrl('http://localhost:8096/api/registry'), 'http://localhost:8096/api/usage/shifts')
+check('подкаталог стенда и ручка реестра', usage.shiftReportUrl('http://host/dsh/api/registry'), 'http://host/dsh/api/usage/shifts')
+check('слэш после /api', usage.shiftReportUrl('http://host/dsh/api/'), 'http://host/dsh/api/usage/shifts')
+check('мусор вместо URL не роняет', usage.shiftReportUrl('  '), '')
 
 // ── деньги ──────────────────────────────────────────────────────────────────
 
@@ -167,16 +172,19 @@ const ok = await usage.deliverShift(report, {
 check('адрес и токен дошли', [sent.url, sent.token], [URL_OK, 't'])
 check('тело — то, что собрано', sent.body.shift_key, '2024-05-01')
 check('успех', [ok.ok, ok.queued], [true, 0])
-check('строка об успехе', ok.line, 'Журнал расхода: смена сохранена (принято сессий: 3, пропущено: 0)')
+check('строка об успехе', ok.line,
+  'Журнал расхода: смена 2024-05-01 сохранена в вебе (принято сессий: 3, пропущено: 0)')
 
 const repeat = await usage.deliverShift(report, { url: URL_OK, request: answer(200, { changed: false, accepted: 0, skipped: 3 }) })
 check('повтор смены — успех, а не отказ', [repeat.ok, repeat.queued], [true, 0])
-check('строка о повторе', repeat.line, 'Журнал расхода: смена уже была в журнале (принято сессий: 0, пропущено: 3)')
+check('строка о повторе', repeat.line,
+  'Журнал расхода: смена 2024-05-01 уже была в журнале (принято сессий: 0, пропущено: 3)')
 
 // Сеть лежит: смена ждёт в очереди, строка говорит, что она не потеряна.
 const offline = await usage.deliverShift(report, { url: URL_OK, request: async () => { throw new Error('ECONNREFUSED') } })
 check('сеть лежит — в очередь', [offline.ok, offline.queued], [false, 1])
-check('строка о недоставке', offline.line, 'Журнал расхода: не отправлен — ECONNREFUSED; останется в очереди')
+check('строка о недоставке', offline.line,
+  'Журнал расхода: смена 2024-05-01 не отправлена — ECONNREFUSED; останется в очереди')
 usage.writeQueue([])
 
 const rejected = await usage.deliverShift(report, {
@@ -184,17 +192,36 @@ const rejected = await usage.deliverShift(report, {
   request: answer(422, { detail: 'Не переданы тарифы расчёта' }),
 })
 check('отказ по существу в очередь не ложится', [rejected.ok, rejected.queued], [false, 0])
-check('строка об отказе', rejected.line, 'Журнал расхода: не принят — Не переданы тарифы расчёта')
+check('строка об отказе', rejected.line,
+  'Журнал расхода: смена 2024-05-01 не принята — Не переданы тарифы расчёта')
 check('очередь пуста после отказа', usage.readQueue().length, 0)
 
 const unprocessable = await usage.deliverShift(report, { url: URL_OK, request: answer(500, '') })
 check('5xx — временный отказ, в очередь', [unprocessable.ok, unprocessable.queued], [false, 1])
 usage.writeQueue([])
 
+// `409` — штатная гонка двух отправок (одновременная запись смены в вебе): повтор тем
+// же телом проходит, потому что сессии уже в базе и уйдут в `skipped`. Выбросить
+// смену из-за него — потерять расход навсегда.
+const raced = await usage.deliverShift(report, {
+  url: URL_OK,
+  request: answer(409, { detail: 'Смену не удалось записать: одновременная отправка' }),
+})
+check('409 — временный отказ, смена в очереди', [raced.ok, raced.queued], [false, 1])
+check('409 назван в строке сводки', raced.line,
+  'Журнал расхода: смена 2024-05-01 не отправлена — Смену не удалось записать: одновременная отправка; останется в очереди')
+const racedAgain = await usage.flushQueue({
+  url: URL_OK,
+  request: async () => ({ status: 201, body: JSON.stringify({ changed: true, accepted: 3, skipped: 0 }) }),
+})
+check('после 409 смена досылается повтором', [racedAgain.sent, racedAgain.left], [1, 0])
+usage.writeQueue([])
+
 console.log('\n=== что считается временным ===')
 check('2xx — не повторять', usage.isRetryable(200), false)
 check('401 — повторять', usage.isRetryable(401), true)
 check('408 — повторять', usage.isRetryable(408), true)
+check('409 — повторять', usage.isRetryable(409), true)
 check('429 — повторять', usage.isRetryable(429), true)
 check('500 — повторять', usage.isRetryable(500), true)
 check('422 — не повторять', usage.isRetryable(422), false)
