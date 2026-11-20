@@ -6,6 +6,7 @@
   "exports": {
     "./plugins/state-paths.mjs": "./plugins/state-paths.mjs",
     "./plugins/registry.mjs": "./plugins/registry.mjs",
+    "./plugins/presets.mjs": "./plugins/presets.mjs",
     "./plugins/dev-department.mjs": "./plugins/dev-department.mjs",
     "./plugins/role-sessions.mjs": "./plugins/role-sessions.mjs",
     "./plugins/role-permissions.mjs": "./plugins/role-permissions.mjs",
@@ -18,11 +19,13 @@
     "/plugins/cordis.patch.yml",
     "/plugins/state-paths.mjs",
     "/plugins/registry.mjs",
+    "/plugins/presets.mjs",
     "/plugins/dev-department.mjs",
     "/plugins/role-sessions.mjs",
     "/plugins/role-permissions.mjs",
     "/plugins/tg-bridge.mjs",
     "/plugins/usage-ledger.mjs",
+    "/plugins/agent-presets-template",
     "/plugins/agent-presets"
   ],
   "dsh": {

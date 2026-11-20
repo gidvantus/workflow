@@ -112,6 +112,10 @@ import crypto from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { STATE_FILES, dshHome, legacyFile, readStateFile, stateDir, stateFile } from './state-paths.mjs'
+// Роли и скиллы правятся в вебе, а раскладываются в `~/.dsh/.agent-presets`:
+// сверку источника с раскладкой держит отдельный модуль, чтобы у диспетчера не
+// было второй копии разбора `SKILL.md` и сборки композиции.
+import { syncPresets } from './presets.mjs'
 // Форма реестра проектов известна одному модулю: диспетчер, мост Telegram,
 // `sync.mjs` и инструменты `plugins/tools/` берут её отсюда, а не разбирают
 // `projects` каждый по-своему.
@@ -438,6 +442,30 @@ const PRESETS_SOURCE = ['./agent-presets/', '../../../agent-presets/']
   .map((rel) => fileURLToPath(new URL(rel, import.meta.url)))
   .find((dir) => fs.existsSync(dir)) ||
   fileURLToPath(new URL('./agent-presets/', import.meta.url))
+
+// Шаблон композиции для роли, у которой в пакете нет `agent.cordis.yml`: роль,
+// заведённая в вебе, не лежит в пакете вовсе, и раскладка собирает её из шаблона —
+// иначе новая роль не запустилась бы ни разу.
+const PRESETS_TEMPLATE = fileURLToPath(
+  new URL('./agent-presets-template/agent.cordis.yml', import.meta.url)
+)
+
+// База API из адреса ручки реестра: `registry.apiUrl` — это
+// `http://localhost:8096/api/registry`, а пресетам нужен `http://localhost:8096`.
+// Путь отрезаем разбором URL, а не склейкой строк: хвостовые слэши и подкаталог
+// стенда не должны давать двойной `/api`.
+function presetsApiBase(url) {
+  let target
+  try {
+    target = new URL(url)
+  } catch (error) {
+    return ''
+  }
+  const pathname = target.pathname.replace(/\/+$/, '')
+    .replace(/\/api\/registry$/, '')
+    .replace(/\/api$/, '')
+  return target.origin + pathname
+}
 
 // Файлы каталога рекурсивно, путями относительно него: источник и цель
 // сравниваются одним словарём, и «чего в источнике больше нет» видно сразу.
@@ -1424,6 +1452,20 @@ export default {
       disabledIds: [],
       lastError: null,
       lastTickAt: null,
+      // Раскладка пресетов ролей: `applied` — что уже разложено в этом процессе
+      // (`{revision, roles}`), остальное — то, что видно в статусе.
+      presets: {
+        ok: null,             // null — синхронизации ещё не было
+        revision: null,
+        applied: { revision: null, roles: {} },
+        roles: [],
+        removed: [],
+        deployed: false,
+        written: 0,
+        updated: 0,
+        at: null,
+        error: null,
+      },
     }
 
     // Переезд состояния со старого места (корень каталога установки) в каталог
@@ -3926,6 +3968,76 @@ export default {
       return { ok: true, changed: written.changed, revision: registrySync.revision, localKeys: merged.localKeys }
     }
 
+    // ── раскладка пресетов ролей из веба ───────────────────────────────────
+    //
+    // Раскладка при загрузке плагина ставит ПАКЕТ (`deployPresets`): до первого
+    // ответа веба роли уже на месте. Тик сверяет раскладку с базой: правка роли
+    // в браузере доезжает до `~/.dsh/.agent-presets` здесь. Пока ревизия набора
+    // не менялась, сети — один запрос манифеста и ни одной записи файлов.
+    //
+    // Сбой не откатывает раскладку и не останавливает смену: `syncPresets`
+    // трогает `target` только после того, как все документы собраны, поэтому
+    // неудача оставляет прежние роли рабочими и называет себя в статусе.
+    async function syncRolePresets() {
+      const settings = config.values.registry
+      if (!settings || !settings.apiUrl) {
+        state.presets.error = null
+        return { skipped: 'адрес API не задан' }
+      }
+      const apiUrl = presetsApiBase(settings.apiUrl)
+      if (!apiUrl) {
+        state.presets.ok = false
+        state.presets.error = 'пресеты ролей: адрес API не разобран: ' + settings.apiUrl
+        state.lastError = state.presets.error
+        return { error: state.presets.error }
+      }
+
+      const result = await syncPresets({
+        apiUrl,
+        token: settings.token,
+        source: PRESETS_SOURCE,
+        template: PRESETS_TEMPLATE,
+        target: path.join(dshHome(), '.agent-presets'),
+        deploy: (options) => deployPresets(options),
+        applied: state.presets.applied,
+      })
+
+      state.presets.at = new Date().toISOString()
+      if (!result.ok) {
+        state.presets.ok = false
+        state.presets.error = result.error || 'пресеты ролей: синхронизация не удалась'
+        state.presets.deployed = false
+        state.lastError = state.presets.error
+        return { error: state.presets.error }
+      }
+
+      state.presets.ok = true
+      state.presets.error = null
+      state.presets.revision = result.revision || null
+      state.presets.roles = Array.isArray(result.roles) ? result.roles : []
+      state.presets.removed = Array.isArray(result.removed) ? result.removed : []
+      state.presets.deployed = !!result.deployed
+      state.presets.written = Number.isInteger(result.written) ? result.written : 0
+      state.presets.updated = Number.isInteger(result.updated) ? result.updated : 0
+      // Ревизия, на которой стоит раскладка: следующий тик сравнит её с манифестом
+      // и не станет ни читать документы, ни писать файлы без надобности.
+      state.presets.applied = {
+        revision: result.revision || null,
+        roles: result.roleRevisions && typeof result.roleRevisions === 'object'
+          ? result.roleRevisions
+          : {},
+      }
+      if (state.presets.deployed || state.presets.removed.length > 0) {
+        appendShiftLog('🛠 Пресеты ролей из веба разложены в ' + path.join(dshHome(), '.agent-presets') +
+          ': ' + (state.presets.roles.length > 0 ? state.presets.roles.join(', ') : 'ни одной роли') +
+          ' (новых файлов ' + state.presets.written + ', обновлено ' + state.presets.updated + ')' +
+          (state.presets.removed.length > 0
+            ? '. Убраны роли, которых нет в вебе: ' + state.presets.removed.join(', ')
+            : '') + '.')
+      }
+      return { ok: true, revision: state.presets.revision }
+    }
+
     async function step(options) {
       const opts = options || {}
       config = loadConfig()
@@ -3935,6 +4047,18 @@ export default {
       // Кеш реестра обновляется до чтения проектов: тик должен работать на том
       // документе, который только что пришёл из веба.
       await syncRegistryFromApi({ force: !!opts.forceRegistry })
+
+      // Роли и скиллы правятся в вебе, а читаются из `~/.dsh/.agent-presets`,
+      // поэтому раскладка сверяется с базой до первого хода проекта: иначе агент
+      // взял бы тикет с устаревшим скиллом. Сбой синхронизации раскладку не
+      // стирает — та, что была, остаётся рабочей.
+      try {
+        await syncRolePresets()
+      } catch (error) {
+        state.presets.ok = false
+        state.presets.error = 'пресеты ролей: ' + messageOf(error)
+        state.lastError = state.presets.error
+      }
 
       const loaded = loadProjects(config.values)
       state.projectProblem = loaded.problem
@@ -4186,6 +4310,21 @@ export default {
             localKeys: registrySync.localKeys,
             droppedProjects: registrySync.droppedProjects,
             error: registrySync.error,
+          },
+          // Раскладка пресетов ролей: `ok: null` — синхронизации в этом процессе
+          // ещё не было. `roles` — что разложено, `removed` — роли, которых в вебе
+          // больше нет; ошибка называется рядом, а не только в `lastError`, потому
+          // что она не останавливает смену и живёт до следующего тика.
+          // Имя `presetsSync` — из контракта задачи (#56): по нему тестировщик и
+          // человек смотрят, на какой ревизии стоит раскладка.
+          presetsSync: {
+            ok: state.presets.ok,
+            revision: state.presets.revision,
+            roles: state.presets.roles,
+            removed: state.presets.removed,
+            deployed: state.presets.deployed,
+            attemptedAt: state.presets.at,
+            error: state.presets.error,
           },
           lastTickAt: state.lastTickAt,
           lastError: state.lastError,
