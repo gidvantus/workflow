@@ -213,6 +213,10 @@ syncBuiltinESMExports()
 // ходит туда же — на адрес `registry.apiUrl`, поэтому тела смен складываются в
 // `usagePosts`: по ним видно, с каким ключом смена уехала в веб (Б1).
 const usagePosts = []
+// Занятые пары `(project_ref, shift_key)` — то же, что хранит настоящий веб.
+// Без этого подделка отвечала `changed:true` на любой ключ, и совпавшие ключи двух
+// смен одного дня проходили мимо теста: расход второй смены терялся молча.
+const usageShifts = new Map()
 function respondTelegram(options, payload) {
   if (options.host === 'api.telegram.org') {
     telegram.push(JSON.parse(payload).text)
@@ -224,9 +228,19 @@ function respondTelegram(options, payload) {
       const body = JSON.parse(payload)
       usagePosts.push(body)
       const count = (body.sessions || []).length
+      const pair = String(body.project_ref) + '\u0000' + String(body.shift_key)
+      // Контракт `POST /api/usage/shifts`: ключ пары уже занят — `200 changed:false`,
+      // `accepted: 0`, все сессии тела в `skipped`, а не `201`.
+      if (usageShifts.has(pair)) {
+        return {
+          statusCode: 200,
+          body: JSON.stringify({ shift_id: usageShifts.get(pair), accepted: 0, skipped: count, sessions_count: count, cost_usd: '0.000000', changed: false }),
+        }
+      }
+      usageShifts.set(pair, usageShifts.size + 1)
       return {
         statusCode: 201,
-        body: JSON.stringify({ shift_id: usagePosts.length, accepted: count, skipped: 0, sessions_count: count, cost_usd: '0.000000', changed: true }),
+        body: JSON.stringify({ shift_id: usageShifts.get(pair), accepted: count, skipped: 0, sessions_count: count, cost_usd: '0.000000', changed: true }),
       }
     }
     // Реестр отдаётся тем же документом, что лежит в кеше: адрес ручки задан, значит
@@ -913,7 +927,7 @@ check('Б3: числа карточки равны числам отчёта',
 // смены того же дня: второй POST возвращал `200 changed:false`, все сессии уходили
 // в `skipped`, и расход утренней смены не попадал в журнал никогда.
 
-console.log('\n=== сценарий 11: ключ смены считается от начала ===')
+console.log('\n=== сценарий 11: ключ смены — дата начала и время окна ===')
 usagePosts.length = 0
 // Прошлые сценарии закрывали смены без адреса веба — их смены лежат в очереди и
 // ушли бы первыми. Очередь чистится: предмет проверки — ключ новой смены.
@@ -946,14 +960,14 @@ telegram.length = 0
 await app.summary()
 check('смена ушла в веб одним телом', usagePosts.length, 1)
 const night = usagePosts[0] || {}
-check('Б1: ключ смены — дата её начала', night.shift_key, '2026-11-20')
+check('Б1: ключ смены — дата её начала и время окна', night.shift_key, '2026-11-20T13:00')
 check('Б1: начало смены — предыдущий день', new RealDate(night.started_at).toISOString().slice(0, 10), '2026-11-20')
 check('Б1: конец смены — уже следующие сутки', new RealDate(night.ended_at).toISOString().slice(0, 10), '2026-11-21')
 check('Б1: интервал не нулевой длины', night.started_at === night.ended_at, false)
 check('Б1: тарифы уехали снимком', Object.keys(night.rates || {}).sort(),
   ['cacheReadUsdPerM', 'cacheWriteUsdPerM', 'inputUsdPerM', 'outputUsdPerM'])
 check('Б1: сессия ночной смены в теле', (night.sessions || []).length, 1)
-checkText('Б1: строка сводки называет ключ смены', telegram.join('\n'), 'смена 2026-11-20')
+checkText('Б1: строка сводки называет ключ смены', telegram.join('\n'), 'смена 2026-11-20T13:00 сохранена в вебе')
 
 // Утренняя смена того же дня — свой ключ, а не тот же, что у ночной.
 setLabels(60, ['ready-for-dev', 'area:frontend'])
@@ -967,9 +981,52 @@ advance(new RealDate('2026-11-21T09:05:00+03:00').getTime() - Date.now())
 telegram.length = 0
 await app.summary()
 check('утренняя смена ушла отдельным телом', usagePosts.length, 2)
-check('Б1: у утренней смены свой ключ', usagePosts[1] && usagePosts[1].shift_key, '2026-11-21')
+check('Б1: у утренней смены свой ключ', usagePosts[1] && usagePosts[1].shift_key, '2026-11-21T07:00')
 check('Б1: ключи смен различаются', usagePosts[0].shift_key === usagePosts[1].shift_key, false)
-checkText('Б1: сводка называет утренний ключ', telegram.join('\n'), 'смена 2026-11-21')
+checkText('Б1: сводка называет утренний ключ', telegram.join('\n'), 'смена 2026-11-21T07:00 сохранена в вебе')
+
+// Две смены ОДНИХ суток в порядке «утренняя → ночная»: раньше ключом была одна
+// дата, утренняя занимала пару `(project_ref, shift_key)`, и ночная — самая дорогая
+// смена суток — приходила с `200 changed:false`, все её сессии уходили в `skipped`,
+// а `deliverShift` считал это успехом. Подделка веба здесь отвечает по контракту:
+// занятая пара — `changed:false`, поэтому потеря видна строкой «уже была в журнале».
+console.log('\n=== сценарий 12: утренняя и ночная смены одних суток не делят ключ ===')
+usagePosts.length = 0
+fs.rmSync(path.join(stateDir, 'dev-department-usage-queue.json'), { force: true })
+const dayMorning = new RealDate('2026-11-24T07:10:00+03:00').getTime()
+advance(dayMorning - Date.now())
+app = await boot()
+setLabels(60, ['ready-for-dev', 'area:frontend'])
+step = await app.tick()
+check('утренняя смена одних суток выдала роль', step.action + ':' + step.role, 'dispatched:dev-frontend')
+const morningSession = step.sessionId
+surfaces.set(morningSession, [msg(1, 1, 1000, 100)])
+endTurn(morningSession)
+advance(new RealDate('2026-11-24T09:05:00+03:00').getTime() - Date.now())
+telegram.length = 0
+await app.summary()
+check('утренняя смена записалась в журнал', usagePosts.length, 1)
+const morning = usagePosts[0] || {}
+check('утренняя смена: ключ с временем утреннего окна', morning.shift_key, '2026-11-24T07:00')
+checkText('утренняя смена принята новым телом', telegram.join('\n'), 'смена 2026-11-24T07:00 сохранена в вебе')
+
+// Ночная смена того же дня: она обязана получить ДРУГОЙ ключ и записаться.
+setLabels(60, ['ready-for-dev', 'area:frontend'])
+surfaces.set(morningSession, [msg(1, 1, 1000, 100), msg(2, 1, 2000, 200)])
+advance(new RealDate('2026-11-24T13:05:00+03:00').getTime() - Date.now())
+step = await app.tick()
+if (step.action === 'finished-session') step = await app.tick()
+check('ночная смена одних суток выдала роль', step.action + ':' + step.role, 'dispatched:dev-frontend')
+endTurn(step.sessionId)
+advance(new RealDate('2026-11-25T04:05:00+03:00').getTime() - Date.now())
+telegram.length = 0
+await app.summary()
+check('ночная смена ушла отдельным телом', usagePosts.length, 2)
+const sameDayNight = usagePosts[1] || {}
+check('ночная смена: ключ с временем ночного окна', sameDayNight.shift_key, '2026-11-24T13:00')
+check('ключи двух смен одних суток различаются', morning.shift_key === sameDayNight.shift_key, false)
+checkText('ночная смена принята новым телом', telegram.join('\n'), 'смена 2026-11-24T13:00 сохранена в вебе')
+check('ни одна из смен суток не ушла в «уже была в журнале»', telegram.join('\n').includes('уже была в журнале'), false)
 
 console.log(failures === 0 ? '\nВСЕ ПРОВЕРКИ ПРОШЛИ' : '\nПРОВАЛОВ: ' + failures)
 fs.rmSync(home, { recursive: true, force: true })

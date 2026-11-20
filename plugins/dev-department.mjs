@@ -1399,6 +1399,26 @@ function shiftKey(windows, date) {
   return dateKey(d)
 }
 
+// Метка смены: дата её начала и время начала окна — `2026-11-21T13:00`.
+//
+// Одной даты мало: окон в расписании может быть два, и обе смены суток получают
+// одну дату. Утренняя (07:00–09:00) уходит в веб в 09:00 и занимает пару
+// `(project_ref, shift_key)`, а ночная (13:00–04:00) закрывается на следующие
+// сутки с тем же ключом — веб отвечает `200 changed:false`, все её сессии уходят
+// в `skipped`, и расход самой дорогой смены суток теряется молча.
+//
+// Время берётся из окна, а не из фактического старта смены: ключ обязан быть
+// воспроизводимым, иначе повторная отправка того же тела (очередь) дала бы другой
+// ключ и записала бы смену дважды. Дата по-прежнему считается `shiftKey`, со
+// сдвигом на сутки назад для окна, переходящего полночь.
+function shiftStamp(windows, date) {
+  const w = openWindow(windows, date) || (windows && windows[0])
+  const day = shiftKey(windows, date)
+  if (!w) return day
+  const pad = (n) => String(n).padStart(2, '0')
+  return day + 'T' + pad(Math.floor(w.start / 60)) + ':' + pad(w.start % 60)
+}
+
 // Ближайшее открытие диапазона: нужно, чтобы в статусе было видно, чего ждать,
 // когда работы сейчас нет.
 function nextWindowStart(windows, date) {
@@ -3659,9 +3679,12 @@ export default {
       const windows = project.department.windows
       const inWin = inWindow(windows, now)
 
-      // Смена начинается сама в окне и только один раз на смену.
-      if (!st.run && inWin && st.lastShiftKey !== shiftKey(windows, now)) {
-        st.lastShiftKey = shiftKey(windows, now)
+      // Смена начинается сама в окне и только один раз на смену. Смена здесь —
+      // это окно суток (`shiftStamp`: дата + время начала окна), а не календарный
+      // день: утренняя и ночная смены одного дня — разные смены, и вторая не
+      // должна считаться повтором первой.
+      if (!st.run && inWin && st.lastShiftKey !== shiftStamp(windows, now)) {
+        st.lastShiftKey = shiftStamp(windows, now)
         st.attempts = {} // попытки не переезжают из смены в смену
         st.run = { startedAt: now.toISOString(), entries: [], sessions: 0 }
       }
@@ -4151,12 +4174,13 @@ export default {
       if (cards.length === 0) {
         return { line: REPORT_PREFIX + 'данных о расходе нет', skipped: 'нет сессий' }
       }
-      // Ключ смены — дата её НАЧАЛА (контракт `shiftKey`). Считать его от закрытия
-      // нельзя: смена ночного окна 13:00–04:00, закрывшаяся 21.11 в 04:00, получила бы
-      // ключ 21.11 и совпала с утренней сменой того же дня — второй POST вернул бы
-      // `changed:false`, и расход утренней смены пропал бы. `startedAt` здесь —
-      // ISO-строка из состояния проекта.
-      const key = shiftKey(
+      // Ключ смены — дата её НАЧАЛА и время начала окна (`shiftStamp`). Одной даты
+      // мало: утренняя и ночная смены одного дня дали бы одинаковый ключ, второй
+      // POST вернул бы `changed:false`, и расход второй смены пропал бы молча.
+      // Считать ключ от закрытия тоже нельзя: ночная смена, закрывшаяся после
+      // полуночи, назвалась бы днём окончания. `startedAt` здесь — ISO-строка из
+      // состояния проекта.
+      const key = shiftStamp(
         project.department.windows,
         options.startedAt ? new Date(options.startedAt) : options.endedAt,
       )
@@ -4197,7 +4221,11 @@ export default {
       state.usageSync.queue = result.queued
       state.usageSync.line = result.line
       if (result.ok) {
-        state.usageSync.sent += 1
+        // `sent` — это «смена записана в журнал», а не «веб ответил 2xx»: ответ
+        // `changed:false` значит, что смена с таким ключом уже лежит в журнале и
+        // расход не записан. Считать её отправленной — показывать в статусе
+        // доставку, которой нет; потерянный расход виден только по `dropped`.
+        if (!result.result || result.result.changed !== false) state.usageSync.sent += 1
         state.usageSync.ok = true
         state.usageSync.error = null
       } else {

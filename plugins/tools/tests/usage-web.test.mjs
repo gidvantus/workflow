@@ -95,7 +95,21 @@ const report = usage.buildShiftReport({
 })
 
 check('проект', [report.project_ref, report.project_title], ['workflow', 'Workflow'])
+// Ключ смены — метка от harness: дата начала и время начала окна (`2026-11-21T13:00`).
+// Веб ключ не разбирает и не переформатирует — проверяем, что он доехал символ в символ:
+// иначе две смены одних суток могли бы снова сойтись в одну пару идемпотентности.
 check('ключ смены и причина', [report.shift_key, report.reason], ['2024-05-01', 'window'])
+const stamped = usage.buildShiftReport({
+  project: { id: 'workflow' },
+  shiftKey: '2026-11-21T13:00',
+  startedAt: '2026-11-21T13:05:00Z',
+  endedAt: '2026-11-22T01:05:00Z',
+  reason: 'window',
+  rates: RATES,
+  costOf,
+  cards: [{ issue: 57, title: 'Журнал расхода', sessions: [session({})] }],
+})
+check('метка смены доезжает как есть', stamped.shift_key, '2026-11-21T13:00')
 check('интервал — ISO', [report.started_at, report.ended_at], ['2024-05-01T10:00:00.000Z', '2024-05-01T18:00:00.000Z'])
 check('тарифы уехали как есть', report.rates, RATES)
 check('сессий столько же, сколько в карточках', report.sessions.length, 3)

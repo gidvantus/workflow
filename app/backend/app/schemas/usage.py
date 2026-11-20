@@ -104,7 +104,9 @@ class UsageShiftRow(BaseModel):
     """Смена в списке смен проекта: без сессий, но с итогами по ним."""
 
     id: int
-    shift_key: str
+    shift_key: str = Field(
+        description="Метка смены: дата начала и время начала окна, пример 2026-11-21T13:00",
+    )
     started_at: datetime
     ended_at: datetime
     reason: str
