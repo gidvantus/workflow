@@ -131,6 +131,18 @@ import {
   telegramOf,
   writeRegistryFile,
 } from './registry.mjs'
+// Журнал расхода: смена уезжает в веб снимком (сессии, тарифы, итог), а не
+// пересчитывается там. Модуль держит и очередь недоотправленного: смена
+// закрывается по часам, в том числе когда стенда нет.
+import {
+  REPORT_PREFIX,
+  buildShiftReport,
+  deliverShift,
+  enqueue,
+  flushQueue,
+  queueLength,
+  shiftReportUrl,
+} from './usage-web.mjs'
 
 // ОБЩИЕ значения по умолчанию для проектов, которые своё не задали. Данных
 // конкретного проекта здесь нет и быть не должно: они в реестре проектов
@@ -1489,6 +1501,18 @@ export default {
         updated: 0,
         at: null,
         error: null,
+      },
+      // Журнал расхода в вебе (#57): `ok: null` — отправок в этом процессе ещё не
+      // было. `queue` — сколько смен ждёт канал, `sent`/`dropped` — счётчики
+      // процесса, `line` — что последняя отправка сказала человеку.
+      usageSync: {
+        ok: null,
+        at: null,
+        error: null,
+        queue: 0,
+        sent: 0,
+        dropped: 0,
+        line: null,
       },
     }
 
@@ -4068,6 +4092,113 @@ export default {
       return { ok: true, revision: state.presets.revision }
     }
 
+    // ── журнал расхода в вебе (#57) ─────────────────────────────────────────
+    //
+    // Смена уезжает в веб снимком: тарифы, сессии и итог одним телом. Цена считается
+    // здесь (`costOf` книги учёта), веб её только складывает и хранит — пересчёт
+    // прошлых смен при смене тарифов недопустим.
+    //
+    // Отправка идёт в конце смены, а не по тику: журнал — это отчёт о смене, и
+    // промежуточный POST дал бы строки, которых в смене ещё не было. Исключение —
+    // очередь: смена, которую канал не взял, досылается на ближайшем тике.
+    //
+    // Адрес ручки собирается из `registry.apiUrl` — второго адреса надстройки нет.
+    function usageEndpoint() {
+      const settings = config.values.registry
+      if (!settings || !settings.apiUrl) return ''
+      return shiftReportUrl(presetsApiBase(settings.apiUrl))
+    }
+
+    async function flushShiftQueue() {
+      state.usageSync.at = new Date().toISOString()
+      const waiting = queueLength()
+      state.usageSync.queue = waiting
+      if (waiting === 0) {
+        // Пустая очередь — не событие: `ok` остаётся прежним, чтобы статус не
+        // показывал «всё хорошо» после сбоя, о котором ещё не дослали.
+        return { skipped: 'очередь пуста' }
+      }
+      const settings = config.values.registry
+      const url = usageEndpoint()
+      const result = await flushQueue({ url, token: settings ? settings.token : null })
+      state.usageSync.queue = result.left
+      state.usageSync.sent += result.sent
+      state.usageSync.dropped += result.dropped
+      if (result.left > 0) {
+        state.usageSync.ok = false
+        state.usageSync.error = result.error || 'смены не уходят'
+        state.lastError = 'журнал расхода: ' + state.usageSync.error
+      } else {
+        state.usageSync.ok = true
+        state.usageSync.error = null
+      }
+      // Молчать нельзя: выброшенная смена — это потерянный расход, и узнать о ней
+      // человек может только отсюда.
+      if (result.sent > 0 || result.dropped > 0) {
+        appendShiftLog('🛠 Журнал расхода: дослано смен — ' + result.sent +
+          ', выброшено — ' + result.dropped + ', осталось в очереди — ' + result.left +
+          (result.error ? ' (' + result.error + ')' : '') + '.')
+      }
+      return result
+    }
+
+    // Отправить закрытую смену проекта и вернуть строку для сводки. Смена без
+    // тарифов не отправляется вовсе: цена — часть снимка, а нули в журнале хуже
+    // честного «не отправлен».
+    async function pushShiftReport(project, options) {
+      const usageModule = options.usageModule
+      const cards = options.cards
+      if (cards.length === 0) {
+        return { line: REPORT_PREFIX + 'данных о расходе нет', skipped: 'нет сессий' }
+      }
+      const rates = (config.values && config.values.usageRates) || null
+      if (!rates) {
+        return { line: REPORT_PREFIX + 'не отправлен — не заданы тарифы расчёта', skipped: 'нет тарифов' }
+      }
+      const report = buildShiftReport({
+        project,
+        shiftKey: shiftKey(project.department.windows, options.endedAt),
+        startedAt: options.startedAt,
+        endedAt: options.endedAt,
+        reason: options.reason,
+        rates,
+        costOf: usageModule.costOf,
+        cards,
+      })
+      state.usageSync.at = new Date().toISOString()
+      const url = usageEndpoint()
+      if (!url) {
+        // Канал ещё не настроен, но смена посчитана: она ждёт в очереди, а не теряется.
+        const waiting = enqueue(report, { error: 'адрес веба не задан' }).queued
+        state.usageSync.ok = false
+        state.usageSync.error = 'адрес веба не задан'
+        state.usageSync.queue = waiting
+        return {
+          line: REPORT_PREFIX + 'не отправлен — адрес веба не задан; останется в очереди',
+          skipped: 'нет адреса',
+        }
+      }
+      const result = await deliverShift(report, {
+        url,
+        token: config.values.registry ? config.values.registry.token : null,
+      })
+      state.usageSync.queue = result.queued
+      state.usageSync.line = result.line
+      if (result.ok) {
+        state.usageSync.sent += 1
+        state.usageSync.ok = true
+        state.usageSync.error = null
+      } else {
+        // Отказ по существу (`422`) в очередь не ложится — это потерянный расход, и
+        // счётчик `dropped` показывает её в статусе. Смена, которая ждёт канал, —
+        // временная беда: она остаётся в очереди и досылается тиком.
+        state.usageSync.ok = false
+        state.usageSync.error = result.error
+        if (result.queued === 0) state.usageSync.dropped += 1
+      }
+      return result
+    }
+
     async function step(options) {
       const opts = options || {}
       config = loadConfig()
@@ -4088,6 +4219,18 @@ export default {
         state.presets.ok = false
         state.presets.error = 'пресеты ролей: ' + messageOf(error)
         state.lastError = state.presets.error
+      }
+
+      // Смены, которые веб не взял в прошлый раз, досылаются до первого хода
+      // проекта: журнал расхода не должен зависеть от того, был ли стенд поднят
+      // ровно в минуту закрытия смены. Сбой досылки смену в конвейере не
+      // останавливает — очередь переживёт и это.
+      try {
+        await flushShiftQueue()
+      } catch (error) {
+        state.usageSync.ok = false
+        state.usageSync.error = 'журнал расхода: ' + messageOf(error)
+        state.lastError = state.usageSync.error
       }
 
       const loaded = loadProjects(config.values)
@@ -4190,6 +4333,9 @@ export default {
         const rates = (config.values && config.values.usageRates) || null
         const shiftTotals = { in: 0, out: 0, cacheRead: 0, cacheWrite: 0 }
         const usageLines = []
+        // Карточки, которые вошли в смену: их сессии и уезжают в веб. Одна карточка
+        // на тикет — так строка журнала получает номер и заголовок тикета.
+        const cards = []
         let counted = 0
         for (const number of numbers) {
           const title = (inShift.filter((entry) => entry.number === number)[0] || {}).title || ''
@@ -4212,6 +4358,7 @@ export default {
             continue
           }
           counted += 1
+          cards.push({ issue: number, title, sessions: card.sessions })
           shiftTotals.in += card.totals.in
           shiftTotals.out += card.totals.out
           shiftTotals.cacheRead += card.totals.cacheRead
@@ -4230,6 +4377,24 @@ export default {
           usageLines.push('Итого за смену: ' + usageModule.usageLine(shiftTotals) +
             (shiftPrice === null ? '' : ' · цена ' + shiftPrice))
         }
+        // Журнал в веб — после итогов и до сборки текста: строка о нём должна попасть
+        // и в журнал смены, и в Telegram. Отправка не бросает: её собственный сбой
+        // называется строкой сводки, а смена в очередь.
+        let pushed = null
+        try {
+          pushed = await pushShiftReport(project, {
+            usageModule,
+            cards,
+            startedAt: run ? run.startedAt : null,
+            endedAt: now,
+            reason: reason === FINISH.manual ? 'manual' : 'window',
+          })
+        } catch (error) {
+          state.usageSync.ok = false
+          state.usageSync.error = 'журнал расхода: ' + messageOf(error)
+          pushed = { line: REPORT_PREFIX + 'не отправлен — ' + messageOf(error) + '; останется в очереди' }
+        }
+        if (pushed && pushed.line) usageLines.push(pushed.line)
         if (usageLines.length > 0) {
           lines.push('')
           for (const line of usageLines) lines.push(line)
@@ -4355,6 +4520,22 @@ export default {
             deployed: state.presets.deployed,
             attemptedAt: state.presets.at,
             error: state.presets.error,
+          },
+          // Журнал расхода в веб (#57): `ok: null` — отправок в этом процессе ещё не
+          // было (и очередь пуста). `queue` — сколько смен ждёт канал; `dropped` —
+          // сколько не принято и уже выброшено: это потерянный расход, и его видно
+          // здесь, а не только в журнале смены.
+          usageSync: {
+            ok: state.usageSync.ok,
+            url: config.values.registry && config.values.registry.apiUrl
+              ? shiftReportUrl(presetsApiBase(config.values.registry.apiUrl))
+              : null,
+            queue: state.usageSync.queue,
+            sent: state.usageSync.sent,
+            dropped: state.usageSync.dropped,
+            attemptedAt: state.usageSync.at,
+            lastLine: state.usageSync.line,
+            error: state.usageSync.error,
           },
           lastTickAt: state.lastTickAt,
           lastError: state.lastError,

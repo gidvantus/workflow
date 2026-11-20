@@ -12,6 +12,7 @@
     "./plugins/role-permissions.mjs": "./plugins/role-permissions.mjs",
     "./plugins/tg-bridge.mjs": "./plugins/tg-bridge.mjs",
     "./plugins/usage-ledger.mjs": "./plugins/usage-ledger.mjs",
+    "./plugins/usage-web.mjs": "./plugins/usage-web.mjs",
     "./cordis.patch.yml": "./plugins/cordis.patch.yml",
     "./package.json": "./package.json"
   },
@@ -25,6 +26,7 @@
     "/plugins/role-permissions.mjs",
     "/plugins/tg-bridge.mjs",
     "/plugins/usage-ledger.mjs",
+    "/plugins/usage-web.mjs",
     "/plugins/agent-presets-template",
     "/plugins/agent-presets"
   ],
