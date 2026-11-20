@@ -290,28 +290,34 @@ async function press(app, botId, data) {
 }
 
 // ── реестры проектов ────────────────────────────────────────────────────────
+// Документ — версия 2: проект это название плюс массив отделов, а все адреса и
+// секреты бота живут на отделе разработки.
 function projectRow(id, title, workspace, humanClone, telegram) {
-  const row = { title, repo: 'gidvantus/' + id, base: 'main', workspace }
-  if (humanClone) row.humanClone = humanClone
-  if (telegram) row.telegram = telegram
-  return row
+  const department = { kind: 'development', repo: 'gidvantus/' + id, base: 'main', workspace }
+  if (humanClone) department.humanClone = humanClone
+  if (telegram) department.telegram = telegram
+  return { id, title, departments: [department] }
 }
 
 const telegramBot = (id, extra) => ({ token: tokenOf(id), chatId: 1, ...(extra || {}) })
+
+// Проект и его отдел разработки по id — то, что сценарии правят перед запуском.
+const projectOf = (registry, id) => registry.projects.find((project) => project.id === id)
+const developmentOf = (registry, id) => projectOf(registry, id).departments[0]
 
 // Реестр основного сценария: вахта — проект default без явного списка, workflow
 // перечисляет вахту явно, cloudpass — обычный бот, brain и crm — без ботов.
 function registryMain() {
   return {
-    version: 1,
+    version: 2,
     default: 'vahta',
-    projects: {
-      vahta: projectRow('vahta', 'Вахта', P.vahta, P.vahtaHuman, telegramBot('vahta')),
-      workflow: projectRow('workflow', 'Workflow', P.workflow, null, telegramBot('workflow', { projects: ['vahta'] })),
-      cloudpass: projectRow('cloudpass', 'CloudPass', P.cloudpass, null, telegramBot('cloudpass')),
-      brain: projectRow('brain', 'Brain', P.brain),
-      crm: projectRow('crm', 'CRMDormitory', P.crm),
-    },
+    projects: [
+      projectRow('vahta', 'Вахта', P.vahta, P.vahtaHuman, telegramBot('vahta')),
+      projectRow('workflow', 'Workflow', P.workflow, null, telegramBot('workflow', { projects: ['vahta'] })),
+      projectRow('cloudpass', 'CloudPass', P.cloudpass, null, telegramBot('cloudpass')),
+      projectRow('brain', 'Brain', P.brain),
+      projectRow('crm', 'CRMDormitory', P.crm),
+    ],
   }
 }
 
@@ -355,7 +361,7 @@ console.log('\n=== сценарий 3б: у проекта из default явны
 // `default` — вахта, и у неё же непустой список: по README бот сужается до
 // своего проекта плюс перечисленных, то есть перестаёт быть обзорным.
 const registryNarrowDefault = registryMain()
-registryNarrowDefault.projects.vahta.telegram.projects = ['workflow']
+developmentOf(registryNarrowDefault, 'vahta').telegram.projects = ['workflow']
 app = await boot(registryNarrowDefault)
 await command(app, 'vahta', '/projects')
 check('обзорный бот сужен до своего и перечисленного', textOf('vahta').split('\n')[0], '📂 Проекты (3):')
@@ -411,7 +417,7 @@ check('возврат к списку остался', foreignButtons.includes('
 // ── сценарий 4: неизвестный id в telegram.projects ────────────────────────
 console.log('\n=== сценарий 4: неизвестный id в telegram.projects не роняет старт ===')
 const registryUnknown = registryMain()
-registryUnknown.projects.workflow.telegram.projects = ['vahta', 'nope', '', 'vahta']
+developmentOf(registryUnknown, 'workflow').telegram.projects = ['vahta', 'nope', '', 'vahta']
 warnings.length = 0
 app = await boot(registryUnknown)
 check('предупреждение названо один раз', warnings.filter((w) => w.includes('неизвестные проекты')), [
@@ -425,12 +431,12 @@ check('неизвестный id выброшен, повторы схлопну
 // ── сценарий 9: /new без своей рабочей области ────────────────────────────
 console.log('\n=== сценарий 9: /new у бота без своей рабочей области ===')
 app = await boot({
-  version: 1,
+  version: 2,
   default: 'vahta',
-  projects: {
-    vahta: projectRow('vahta', 'Вахта', P.vahta, P.vahtaHuman, telegramBot('vahta')),
-    solo: projectRow('solo', 'Solo', P.solo, null, telegramBot('solo')),
-  },
+  projects: [
+    projectRow('vahta', 'Вахта', P.vahta, P.vahtaHuman, telegramBot('vahta')),
+    projectRow('solo', 'Solo', P.solo, null, telegramBot('solo')),
+  ],
 })
 await command(app, 'solo', '/new dev')
 check('честный отказ вместо чужого каталога', textOf('solo'), '❌ Не нашёл проект для новой сессии.')

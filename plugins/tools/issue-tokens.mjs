@@ -37,7 +37,7 @@ import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { readTranscript } from './zstd-frames.mjs'
-import { statePathsModule } from './plugin-paths.mjs'
+import { statePathsModule, registryModule } from './plugin-paths.mjs'
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url))
 // Скрипт лежит в plugins/tools: корень репозитория — двумя уровнями выше.
@@ -130,8 +130,13 @@ export function parseArgs(argv) {
 }
 
 // Реестр проектов: каталог рабочей области и клон человека → имя проекта.
-// Оба каталога — один проект: сессия в клоне человека тоже его.
-export function workspaceIndex(projectsFile) {
+// Оба каталога — один проект: сессия в клоне человека тоже его. Каталоги живут у
+// отдела разработки проекта; проект без такого отдела пропускается.
+//
+// Модуль формы реестра берётся помощником раскладок (`registryModule`), а не
+// относительным импортом: отчёт запускают и копией из другого каталога, и тогда
+// соседний `../registry.mjs` не находится.
+export async function workspaceIndex(projectsFile) {
   const index = new Map()
   let data
   try {
@@ -139,12 +144,13 @@ export function workspaceIndex(projectsFile) {
   } catch (error) {
     return { index, problems: ['реестр проектов не читается: ' + projectsFile + ' — ' + error.message] }
   }
-  const projects = data && typeof data.projects === 'object' && data.projects !== null ? data.projects : {}
-  for (const [id, project] of Object.entries(projects)) {
+  const registry = await registryModule()
+  for (const project of registry.projectsOf(data)) {
+    const department = registry.developmentOf(project).department || {}
     for (const key of ['workspace', 'humanClone']) {
-      const value = project && project[key]
+      const value = department[key]
       if (typeof value === 'string' && value.trim() !== '') {
-        index.set(workspaceDirName(value).toLowerCase(), id)
+        index.set(workspaceDirName(value).toLowerCase(), project.id)
       }
     }
   }
@@ -478,7 +484,7 @@ export async function buildReport({ dshHome, project, issue } = {}) {
   }
   const book = normalizeLedger(rawLedger)
 
-  const registry = workspaceIndex(state.readStateFile(state.STATE_FILES.projects))
+  const registry = await workspaceIndex(state.readStateFile(state.STATE_FILES.projects))
   problems.push(...registry.problems)
 
   const collected = collectSessions(home, ledger.module, registry.index)

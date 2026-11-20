@@ -19,8 +19,11 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { STATE_FILES, readStateFile } from './state-paths.mjs'
+// Форма реестра проектов живёт в одном модуле: мост не разбирает `projects` сам,
+// иначе его копия формы разошлась бы с диспетчером молча.
+import { normalizePath, readRegistryFile, projectRoots, telegramOf, developmentOf, findProjectByRoots } from './registry.mjs'
 
-// Боты берутся ТОЛЬКО из реестра проектов: поле telegram записи проекта в
+// Боты берутся ТОЛЬКО из реестра проектов: поле telegram отдела разработки в
 // `<DSH_HOME>/profiles/desktop/dsh-dev-department/projects.json`. Другого источника
 // нет — общего файла бота плагин не читает. Проект без своего бота работает без
 // Telegram: события, разрешения и вопросы его сессий остаются в GUI, и это
@@ -28,23 +31,6 @@ import { STATE_FILES, readStateFile } from './state-paths.mjs'
 //
 // Секрета в исходнике нет намеренно: токен, зашитый в код, уезжает вместе с
 // плагином. Нет настроенного бота — нет моста, и об этом пишется в лог.
-
-function stripBom(text) {
-  const value = String(text)
-  return value.charCodeAt(0) === 0xFEFF ? value.slice(1) : value
-}
-
-function readJsonConfig(file) {
-  try {
-    return JSON.parse(stripBom(fs.readFileSync(file, 'utf8')))
-  } catch (error) {
-    return undefined
-  }
-}
-
-function normalizePath(value) {
-  return String(value || '').replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase()
-}
 
 // Проекты: id, название, рабочая область и, если задан, свой бот. Путь реестра
 // называет модуль состояния: он же читает легаси-место в корне каталога установки,
@@ -54,31 +40,43 @@ function normalizePath(value) {
 // всеми, и `telegram.projects` — необязательный массив id проектов, которые видит
 // конкретный бот. Это свойства записи реестра, а не кода: привязку «проект → бот»
 // человек расширяет правкой projects.json.
+//
+// Разбор документа — дело `registry.mjs`: мост берёт оттуда проект, его корни и
+// бота отдела разработки. Нечитаемый или чужой версии файл — это «проектов нет»:
+// падать на старте мост не должен, событие сессии просто останется в GUI.
 function readProjectsRegistry() {
-  const raw = readJsonConfig(readStateFile(STATE_FILES.projects))
-  const source = (raw && raw.projects) || {}
-  const defaultId = raw && typeof raw.default === 'string' && raw.default ? raw.default : undefined
-  const projects = Object.keys(source).map((id) => {
-    const row = source[id] || {}
-    const tg = row.telegram && typeof row.telegram === 'object' ? row.telegram : undefined
-    const bot = tg && tg.token && tg.chatId
-      ? { token: String(tg.token), chatId: tg.chatId, voiceLang: tg.voiceLang ? String(tg.voiceLang) : undefined }
-      : undefined
+  let parsed
+  try {
+    parsed = readRegistryFile(readStateFile(STATE_FILES.projects))
+  } catch (error) {
+    console.error('[tg-bridge] реестр проектов не читается: ' + (error && error.message ? error.message : String(error)))
+    return { projects: [], defaultId: undefined, problem: error && error.message ? error.message : String(error) }
+  }
+  const document = parsed.document
+  const projects = document.projects.map((project) => {
+    const found = developmentOf(project).department || {}
+    const tg = found.telegram && typeof found.telegram === 'object' ? found.telegram : undefined
     return {
-      id,
-      title: typeof row.title === 'string' && row.title ? row.title : id,
-      workspace: String(row.workspace || ''),
-      humanClone: String(row.humanClone || ''),
-      // Корни проекта: рабочая копия отдела и каталог человека. Сессия может
-      // стоять в любом из них — оба принадлежат проекту.
-      roots: [String(row.workspace || ''), String(row.humanClone || '')].filter(Boolean),
+      id: project.id,
+      title: project.title,
+      workspace: String(found.workspace || ''),
+      humanClone: String(found.humanClone || ''),
+      roots: projectRoots(project),
       // Явный список видимых проектов. Нет поля — пустой массив, а не «видит
       // всё»: правило «видит всё» принадлежит только проекту default.
       telegramProjects: tg ? distinctProjects(tg.projects) : [],
-      bot,
+      bot: (() => {
+        const bot = telegramOf(found)
+        if (!bot) return undefined
+        return { token: bot.token, chatId: bot.chatId, voiceLang: tg.voiceLang ? String(tg.voiceLang) : undefined }
+      })(),
     }
   })
-  return { projects, defaultId }
+  return {
+    projects,
+    defaultId: typeof document.default === 'string' && document.default ? document.default : undefined,
+    problem: parsed.problems.length > 0 ? parsed.problems.join('; ') : null,
+  }
 }
 
 // id проектов из telegram.projects: только непустые строки, без повторов.
@@ -293,6 +291,7 @@ export default {
 
     const registry = readProjectsRegistry()
     const projects = registry.projects
+    if (registry.problem) console.error('[tg-bridge] реестр проектов: ' + registry.problem)
     const bots = buildBots(registry)
     if (bots.length === 0) {
       console.error('[tg-bridge] нет ни одного бота: в проектах реестра не задан telegram (token и chatId)')
@@ -316,18 +315,9 @@ export default {
         const session = sessions ? sessions.get(sessionId) : undefined
         const cwd = session && session.header ? session.header.cwd : undefined
         if (!cwd) return undefined
-        const wanted = normalizePath(cwd)
-        let best
-        let bestLength = -1
-        for (const project of projects) {
-          for (const candidate of project.roots || []) {
-            const root = normalizePath(candidate)
-            if (!root) continue
-            if (wanted === root || wanted.indexOf(root + '\\') === 0) {
-              if (root.length > bestLength) { best = project; bestLength = root.length }
-            }
-          }        }
-        return best
+        // Поиск по корням — один на отдел: его же зовёт диспетчер, своей копии
+        // правила сравнения путей у моста нет.
+        return findProjectByRoots(projects, (project) => project.roots, cwd) || undefined
       } catch (error) {
         return undefined
       }

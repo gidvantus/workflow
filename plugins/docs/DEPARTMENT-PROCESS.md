@@ -96,7 +96,8 @@
 ## 3. Метки: кто ставит, при каком событии, кто снимает
 
 Имена по умолчанию; проект может переопределить их в реестре проектов отдела
-(`profiles/desktop/dsh-dev-department/projects.json`) → `projects.<id>.labels`.
+(`profiles/desktop/dsh-dev-department/projects.json`) → `labels` отдела разработки
+(`projects[].departments[]` с `kind: "development"`).
 
 | Метка | Ставит | Событие | Снимает |
 |---|---|---|---|
@@ -528,6 +529,7 @@ DevOps-инженера.
 | Человек снял `mockups-ready` | дизайнер (`design`) переделывает макет в том же диалоге; разработка не начинается, пока макет не принят |
 | Человек поставил `ready-for-dev` до макета | метка ждёт: разработка начнётся сразу после `mockups-ready` |
 | Макеты остались в ветке снятого тикета | ветка остаётся человеку: диспетчер её не удаляет, решение за ним |
+| Файл реестра не той формы, что читает установленный пакет | ни один проект не обслуживается: причина в `registry.problem`, в журнале смены один блок `🛑`, боту проекта из `default` одна тревога (не чаще раза в 30 минут на ту же причину); сам файл возвращает из `projects.json.bak` или переводит конвертером человек — после этого одно `✅` |
 
 ---
 
@@ -566,7 +568,7 @@ DevOps-инженера.
 | Строки плагинов отдела в композиции | `<пакет>/cordis.patch.yml` — патч бандла |
 | Роли: промт, описание, скиллы (`agent.cordis.yml`, `preset.yml`, `skills/`) | `<пакет>/agent-presets/<id>/` — карта ролей в разделе 2.1 |
 | Скилл макета (роль `design`) | `<пакет>/agent-presets/design/skills/mockup-delivery/SKILL.md` |
-| Проекты, ветки, каталоги, метки | `~/.dsh/profiles/desktop/dsh-dev-department/projects.json` |
+| Проекты, отделы, ветки, каталоги, метки | `~/.dsh/profiles/desktop/dsh-dev-department/projects.json` — кеш документа из `GET /api/registry` плюс локальные ключи файла; форма — документ версии 2, файл другой формы останавливает отдел с названной причиной и тревогой |
 | Общие расписание и лимиты | `~/.dsh/profiles/desktop/dsh-dev-department/dev-department.json` |
 | Карта диалогов роль↔тикет | `~/.dsh/profiles/desktop/dsh-dev-department/dev-department-dialogs.json` |
 | Журнал смен | `~/.dsh/profiles/desktop/dsh-dev-department/dev-department.log` |

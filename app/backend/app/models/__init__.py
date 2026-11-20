@@ -7,6 +7,7 @@ from app.models.department_kind import (
     DepartmentKind,
 )
 from app.models.project import Project
+from app.models.registry import RegistryDocument
 from app.models.role import DEFAULT_ROLES, Role
 from app.models.task import Task
 
@@ -17,6 +18,7 @@ __all__ = [
     "Department",
     "DepartmentKind",
     "Project",
+    "RegistryDocument",
     "Role",
     "Task",
     "department_roles",

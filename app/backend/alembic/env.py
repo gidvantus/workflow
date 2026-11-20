@@ -8,9 +8,9 @@ from alembic import context
 from app.config import get_settings
 from app.db import Base
 
-# Импорт моделей нужен ради метаданных: без него таблицы `projects`, `roles` и
-# `departments` в них не попадут.
-from app.models import Department, Project, Role  # noqa: F401
+# Импорт моделей нужен ради метаданных: без него таблицы `projects`, `roles`,
+# `departments` и `registry_documents` в них не попадут.
+from app.models import Department, Project, RegistryDocument, Role  # noqa: F401
 
 config = context.config
 

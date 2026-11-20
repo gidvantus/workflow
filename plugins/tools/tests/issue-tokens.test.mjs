@@ -225,7 +225,7 @@ fs.writeFileSync(path.join(homeBadContract, 'profiles', 'desktop', 'plugins', 'u
   'export function turnsOfEvents() { return 0 }',
   '',
 ].join('\n'))
-fs.writeFileSync(stateFile(homeBadContract, 'projects.json'), JSON.stringify({ version: 1, projects: {} }))
+fs.writeFileSync(stateFile(homeBadContract, 'projects.json'), JSON.stringify({ version: 2, projects: [] }))
 
 // Песочница «в модуле учёта нет правила ходов»: отчёт обязан отказаться, а не
 // считать ходы по своей копии правила — иначе колонка «ходов» разойдётся с
@@ -238,18 +238,24 @@ fs.writeFileSync(path.join(homeNoTurns, 'profiles', 'desktop', 'plugins', 'usage
   'export function usageOfEvents() { return { uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 } }',
   '',
 ].join('\n'))
-fs.writeFileSync(stateFile(homeNoTurns, 'projects.json'), JSON.stringify({ version: 1, projects: {} }))
+fs.writeFileSync(stateFile(homeNoTurns, 'projects.json'), JSON.stringify({ version: 2, projects: [] }))
 
 fs.rmSync(home, { recursive: true, force: true })
 fs.rmSync(homeNoModule, { recursive: true, force: true })
 const ledgerSource = installLedger(home)
 fs.writeFileSync(stateFile(home, 'projects.json'), JSON.stringify({
-  version: 1,
+  version: 2,
   default: 'workflow',
-  projects: {
-    workflow: { repo: 'gidvantus/workflow', base: 'main', workspace: 'D:\\Agents\\Workflow', humanClone: 'D:\\Development\\VideCoding\\Workflow' },
-    vahta: { repo: 'gidvantus/vahta', base: 'develop-m', workspace: 'D:\\Agents\\Vahta' },
-  },
+  projects: [
+    {
+      id: 'workflow',
+      departments: [{ kind: 'development', repo: 'gidvantus/workflow', base: 'main', workspace: 'D:\\Agents\\Workflow', humanClone: 'D:\\Development\\VideCoding\\Workflow' }],
+    },
+    {
+      id: 'vahta',
+      departments: [{ kind: 'development', repo: 'gidvantus/vahta', base: 'develop-m', workspace: 'D:\\Agents\\Vahta' }],
+    },
+  ],
 }, null, 2))
 
 // Книга: сессия бэкенда записана с префиксом session- (как её зовёт карта диалогов)
@@ -419,7 +425,7 @@ check('нечисловой номер объяснён', /номер тикет
 
 console.log('\n=== каталог сессии в каталоге установки ===')
 check('D:\\Agents\\Workflow → --D-Agents-Workflow--', mod.workspaceDirName('D:\\Agents\\Workflow'), '--D-Agents-Workflow--')
-const index = mod.workspaceIndex(stateFile(home, 'projects.json'))
+const index = await mod.workspaceIndex(stateFile(home, 'projects.json'))
 check('реестр: рабочая область и клон человека — один проект',
   [index.index.get('--d-agents-workflow--'), index.index.get('--d-development-videcoding-workflow--')], ['workflow', 'workflow'])
 check('реестр: чужой проект подписан своим именем', index.index.get('--d-agents-vahta--'), 'vahta')
