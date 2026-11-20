@@ -15,12 +15,16 @@ import {
   buildStaging,
   parseSkillMarkdown,
   readDeployedRoles,
+  readRemovedRoles,
   renderCordis,
   renderPresetYml,
   renderSkillMarkdown,
   syncPresets,
   writeDeployedRoles,
 } from '../../presets.mjs'
+// Загрузочная раскладка пакета — из диспетчера: проверяется именно её стык со списком
+// удалённых ролей (роль, удалённая в вебе, не должна вернуться после перезапуска).
+import { deployPresets } from '../../dev-department.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const repo = path.resolve(here, '../../..')
@@ -254,8 +258,9 @@ check('раскладка состоялась', first.deployed, true)
 check('роли в отчёте', first.roles, ['alpha', 'beta'])
 check('каталог роли появился', fs.existsSync(path.join(targetA, 'alpha', 'skills', 'alpha-skill', 'SKILL.md')), true)
 check('список разложенных ролей записан', read(path.join(targetA, DEPLOYED_ROLES_FILE)),
-  JSON.stringify({ roles: ['alpha', 'beta'] }, null, 2) + '\n')
+  JSON.stringify({ roles: ['alpha', 'beta'], removed: [] }, null, 2) + '\n')
 check('readDeployedRoles читает его', readDeployedRoles(targetA), ['alpha', 'beta'])
+check('удалённых ролей нет', readRemovedRoles(targetA), [])
 
 const second = await syncPresets(Object.assign({}, optionsA, {
   applied: { revision: first.revision, roles: first.roleRevisions },
@@ -320,7 +325,40 @@ check('её каталога больше нет', fs.existsSync(path.join(targe
 check('каталог оставшейся роли цел', fs.existsSync(path.join(targetC, 'alpha', 'preset.yml')), true)
 check('чужой каталог не тронут', read(path.join(targetC, 'my-own', 'preset.yml')), 'name: Моё\n')
 check('список ролей обновлён', readDeployedRoles(targetC), ['alpha'])
+check('удалённая роль записана в списке', readRemovedRoles(targetC), ['beta'])
 check('deploy не понадобился', deployC.state.calls, 1)
+
+console.log('\n=== раскладка пакета не воскрешает роль, удалённую в вебе ===')
+// Пакет — оба кода: alpha и beta. Перезапуск приложения раскладывает пакет, но beta
+// удалена в вебе, поэтому её каталог не должен появиться снова.
+const packageC = path.join(root, 'package-c')
+write(path.join(packageC, 'alpha', 'preset.yml'), 'name: Альфа из пакета\n')
+write(path.join(packageC, 'beta', 'preset.yml'), 'name: Бета из пакета\n')
+const restart = deployPresets({ source: packageC, target: targetC, skip: readRemovedRoles(targetC) })
+check('перезапуск: раскладка прошла', restart.problem, null)
+check('перезапуск: удалённая роль пропущена', restart.skipped, ['beta'])
+check('перезапуск: каталог beta не вернулся', fs.existsSync(path.join(targetC, 'beta')), false)
+check('перезапуск: beta не попала в отчёт', restart.presets.includes('beta'), false)
+check('перезапуск: alpha на месте', fs.existsSync(path.join(targetC, 'alpha', 'preset.yml')), true)
+check('перезапуск: чужая роль не тронута', fs.existsSync(path.join(targetC, 'my-own')), true)
+check('перезапуск: список ролей не переписан', readDeployedRoles(targetC), ['alpha'])
+
+console.log('\n=== роль вернулась в веб — пропуск снят ===')
+const c3 = await syncPresets({
+  apiUrl: API, token: 't', source, template, target: targetC, deploy: deployC.fn,
+  applied: { revision: 'r2', roles: { alpha: 'ra1' } },
+  fetchImpl: transport(routesFor(manifest('r3', [
+    { code: 'alpha', revision: 'ra1' },
+    { code: 'beta', revision: 'rb2' },
+  ]), [alpha, beta])),
+})
+check('вернувшаяся роль разложена', c3.roles, ['alpha', 'beta'])
+check('каталог вернувшейся роли на месте', fs.existsSync(path.join(targetC, 'beta', 'preset.yml')), true)
+check('список удалённых пуст', readRemovedRoles(targetC), [])
+check('список ролей снова полный', readDeployedRoles(targetC), ['alpha', 'beta'])
+const again = deployPresets({ source: packageC, target: targetC, skip: readRemovedRoles(targetC) })
+check('перезапуск после возврата: пропусков нет', again.skipped, [])
+check('перезапуск после возврата: каталог на месте', fs.existsSync(path.join(targetC, 'beta')), true)
 
 console.log('\n=== syncPresets: пустой манифест не стирает раскладку ===')
 const targetD = path.join(root, 'target-d')

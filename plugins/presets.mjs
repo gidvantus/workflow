@@ -253,18 +253,9 @@ export function renderCordis(templateText, role) {
 
 // ── Список разложенных ролей ────────────────────────────────────────────────
 
-/**
- * Читать `.department-roles.json`. Нет файла или он битый — пустой список: это не
- * ошибка, а первый запуск. Возвращается массив кодов, без мусора и повторов.
- */
-export function readDeployedRoles(target) {
-  if (!target) return []
-  let raw
-  try {
-    raw = JSON.parse(fs.readFileSync(path.join(target, DEPLOYED_ROLES_FILE), 'utf8'))
-  } catch (error) {
-    return []
-  }
+// Коды из поля `removed` файла `.department-roles.json`: они проверены тем же слагом и
+// тем же дедупликатором, что и `roles`.
+function slugList(raw) {
   const list = raw && Array.isArray(raw.roles) ? raw.roles : []
   const seen = new Set()
   const out = []
@@ -278,26 +269,48 @@ export function readDeployedRoles(target) {
   return out.sort()
 }
 
+function readDeployedFile(target) {
+  if (!target) return null
+  try {
+    return JSON.parse(fs.readFileSync(path.join(target, DEPLOYED_ROLES_FILE), 'utf8'))
+  } catch (error) {
+    return null
+  }
+}
+
+/**
+ * Читать `.department-roles.json`. Нет файла или он битый — пустой список: это не
+ * ошибка, а первый запуск. Возвращается массив кодов, без мусора и повторов.
+ */
+export function readDeployedRoles(target) {
+  return slugList(readDeployedFile(target))
+}
+
+/**
+ * Коды ролей, удалённых в вебе. Это память раскладки: пакетная загрузка плагина
+ * (`deployPresets`) не должна возвращать каталог роли, которую человек удалил в вебе,
+ * иначе удаление живёт до первого перезапуска приложения. Код уходит из списка, когда
+ * роль возвращается в манифест веба.
+ */
+export function readRemovedRoles(target) {
+  const raw = readDeployedFile(target)
+  return slugList(raw && Array.isArray(raw.removed) ? { roles: raw.removed } : null)
+}
+
 /**
  * Записать `.department-roles.json`. Список сортируется: файл сравнивают глазами
- * и в диффе, а порядок ролей в манифесте — достояние веба.
+ * и в диффе, а порядок ролей в манифесте — достояние веба. `removed` — те коды, которые
+ * разложены отделом раньше, но в вебе их больше нет; их пропускает загрузочная раскладка.
  */
-export function writeDeployedRoles(target, roles) {
+export function writeDeployedRoles(target, roles, removed = []) {
   if (!target) return false
-  const list = []
-  const seen = new Set()
-  for (const item of Array.isArray(roles) ? roles : []) {
-    if (typeof item !== 'string') continue
-    const code = item.trim()
-    if (!SLUG_RE.test(code) || seen.has(code)) continue
-    seen.add(code)
-    list.push(code)
-  }
-  list.sort()
+  const list = slugList({ roles })
+  const gone = slugList({ roles: Array.isArray(removed) ? removed : [] })
+    .filter((code) => !list.includes(code))
   try {
     fs.mkdirSync(target, { recursive: true })
     fs.writeFileSync(path.join(target, DEPLOYED_ROLES_FILE),
-      JSON.stringify({ roles: list }, null, 2) + '\n')
+      JSON.stringify({ roles: list, removed: gone }, null, 2) + '\n')
     return true
   } catch (error) {
     return false
@@ -671,6 +684,11 @@ export async function syncPresets(options = {}) {
     // 6. Список ролей отдела: все живые роли манифеста. Он же — единственный
     // источник, по которому удаляются каталоги: роли, заведённые человеком, в
     // этом файле не значатся и удалить их нельзя.
+    //
+    // Вместе с ним пишется список удалённых кодов: загрузочная раскладка пакета
+    // (`deployPresets` при старте плагина) пропускает их, иначе удалённая в вебе роль
+    // возвращалась бы после каждого перезапуска приложения. Код, вернувшийся в манифест,
+    // из этого списка уходит — тогда пакетная раскладка снова имеет право его класть.
     const nextRoles = live.map((entry) => entry.code).sort()
     const previous = readDeployedRoles(target)
     const removed = previous.filter((code) => !nextRoles.includes(code))
@@ -684,7 +702,9 @@ export async function syncPresets(options = {}) {
       }
     }
     result.removed = removed
-    if (!writeDeployedRoles(target, nextRoles)) {
+    const gone = [...readRemovedRoles(target), ...removed]
+      .filter((code) => !nextRoles.includes(code))
+    if (!writeDeployedRoles(target, nextRoles, gone)) {
       result.error = 'пресеты из веба: не записывается список разложенных ролей в ' + target
       return result
     }

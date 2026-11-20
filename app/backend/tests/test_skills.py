@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.api.roles import (
     NO_FIELDS_TO_UPDATE,
+    SECTION_BODY_NOT_TEXT,
     SECTION_BODY_TOO_LONG,
     SECTION_TITLE_REQUIRED,
     SECTION_TITLE_TOO_LONG,
@@ -308,6 +309,28 @@ def test_too_many_sections_are_rejected(client: TestClient) -> None:
 
     assert response.status_code == 422
     assert response.json()["detail"] == SECTIONS_TOO_MANY
+
+
+@pytest.mark.parametrize("body", [{"a": 1}, 42, True, ["строка"], 3.5])
+def test_non_text_section_body_is_rejected(client: TestClient, body: Any) -> None:
+    """Нестроковый `body` — `422`, а не приведение к тексту.
+
+    `str({"a": 1})` уехал бы в `SKILL.md` как `{'a': 1}`, и модель прочитала бы мусор
+    вместо раздела. `null` — отдельный случай: он читается как пустой текст.
+    """
+    response = client.post(
+        f"{ROLES_URL}/{ROLE_ID}/skills",
+        json={
+            "code": "pdf-report",
+            "title": SKILL["title"],
+            "description": SKILL["description"],
+            "sections": [{"title": "Раздел", "body": body}],
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == SECTION_BODY_NOT_TEXT
+    assert _skills(client) == []
 
 
 def test_limit_values_are_accepted(client: TestClient) -> None:

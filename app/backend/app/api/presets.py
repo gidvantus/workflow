@@ -12,8 +12,10 @@ harness: повторное сохранение того же документ�
 изменение любого поля двигает и её, и ревизию набора.
 
 **Документ роли** — единственная форма, из которой рендерятся файлы пресета: `code`,
-`title`, `description`, `skills[]` с `sections[]` в порядке показа. Порядок скиллов —
-по `id`, он же порядок файлов в пакете.
+`title`, `description`, `skills[]` с `sections[]` в порядке показа. Скиллы в документе
+идут по коду, а не по `id`: порядок в теле `PUT` — достояние вызывающего, и совпадение
+документа считается по содержимому, а не по перечислению. Список скиллов в ручках
+браузера (`GET /api/roles/{id}/skills`) остаётся по `id`.
 
 **Авторитетность веба.** Роль, которая есть в вебе, живёт по документу из веба: скилл,
 которого в документе нет, при `PUT` мягко удаляется. Роли, которой в вебе нет, harness не
@@ -85,7 +87,12 @@ PRESET_WRITE_RACE = "Документ роли не удалось сохран�
 
 
 def _document(role: Role, skills: Sequence[RoleSkill]) -> dict[str, Any]:
-    """Документ роли: ровно то, из чего harness рендерит файлы пресета."""
+    """Документ роли: ровно то, из чего harness рендерит файлы пресета.
+
+    Скиллы идут по коду, а не по `id`: тот же документ приходит в `PUT` в любом порядке,
+    и «повторная заливка ничего не изменила» должно быть видно по ревизии. Порядок файлов
+    в пакете тоже по коду, так что раскладка совпадает с порядком документа.
+    """
     return {
         "code": role.code,
         "title": role.title,
@@ -100,7 +107,7 @@ def _document(role: Role, skills: Sequence[RoleSkill]) -> dict[str, Any]:
                     for section in skill.sections or []
                 ],
             }
-            for skill in skills
+            for skill in sorted(skills, key=lambda item: item.code)
         ],
     }
 
@@ -203,7 +210,9 @@ def _normalize_document(role_code: str, payload: PresetPutRequest) -> dict[str, 
         "code": role_code,
         "title": title,
         "description": description,
-        "skills": skills,
+        # Порядок скиллов в документе — по коду, как и в `_document`: ревизия не должна
+        # зависеть от того, как вызывающий перечислил скиллы в теле.
+        "skills": sorted(skills, key=lambda item: item["code"]),
     }
 
 

@@ -115,7 +115,7 @@ import { STATE_FILES, dshHome, legacyFile, readStateFile, stateDir, stateFile } 
 // Роли и скиллы правятся в вебе, а раскладываются в `~/.dsh/.agent-presets`:
 // сверку источника с раскладкой держит отдельный модуль, чтобы у диспетчера не
 // было второй копии разбора `SKILL.md` и сборки композиции.
-import { syncPresets } from './presets.mjs'
+import { readRemovedRoles, syncPresets } from './presets.mjs'
 // Форма реестра проектов известна одному модулю: диспетчер, мост Telegram,
 // `sync.mjs` и инструменты `plugins/tools/` берут её отсюда, а не разбирают
 // `projects` каждый по-своему.
@@ -528,11 +528,15 @@ function pruneEmptyDirs(dir, root) {
 export function deployPresets(options = {}) {
   const source = options.source || PRESETS_SOURCE
   const target = options.target || path.join(dshHome(), '.agent-presets')
+  // Коды, которые раскладывать НЕЛЬЗЯ: их удалили в вебе, и пакет не должен их
+  // воскрешать. Список ведёт `syncPresets` в `.department-roles.json` (`readRemovedRoles`).
+  const skip = new Set(Array.isArray(options.skip) ? options.skip : [])
   const result = {
     source,
     target,
     presets: [],
     foreign: [],
+    skipped: [],
     written: 0,
     updated: 0,
     removed: 0,
@@ -554,6 +558,10 @@ export function deployPresets(options = {}) {
     result.problem = 'каталог пресетов пуст: ' + source
     return result
   }
+  // Пропуск считается после проверки «каталог пакета не пуст»: пустой пакет — беда
+  // установки, а не повод молчать.
+  result.skipped = ids.filter((id) => skip.has(id))
+  ids = ids.filter((id) => !skip.has(id))
 
   if (fs.existsSync(target)) {
     let stat = null
@@ -577,6 +585,22 @@ export function deployPresets(options = {}) {
   } catch (error) {
     result.problem = 'не создаётся корень пресетов ' + target + ': ' + (error && error.message ? error.message : String(error))
     return result
+  }
+
+  // Каталоги удалённых в вебе ролей. Слаг наш — отдел его и раскладывал, — поэтому
+  // остаток убираем здесь: иначе роль, которую человек удалил в вебе, продолжала бы
+  // подгружаться у агентов до следующего тика.
+  for (const id of result.skipped) {
+    const dir = path.join(target, id)
+    if (!fs.existsSync(dir)) continue
+    try {
+      if (fs.lstatSync(dir).isSymbolicLink()) continue
+      fs.rmSync(dir, { recursive: true, force: true })
+    } catch (error) {
+      result.problem = 'удалённая в вебе роль ' + id + ' не убирается из ' + target + ': ' +
+        (error && error.message ? error.message : String(error))
+      return result
+    }
   }
 
   for (const id of ids) {
@@ -618,7 +642,7 @@ export function deployPresets(options = {}) {
   }
 
   // Что лежит в корне помимо ролей отдела: это человеково, не наше дело.
-  const known = new Set(ids)
+  const known = new Set([...ids, ...skip])
   try {
     for (const entry of fs.readdirSync(target, { withFileTypes: true })) {
       if (entry.isDirectory() && !known.has(entry.name)) result.foreign.push(entry.name)
@@ -1551,8 +1575,13 @@ export default {
     // диалога, а человек видит это как «поставил метку, а агент задачу не взял».
     // Раскладка идёт на загрузке плагина, то есть при старте приложения и после
     // установки новой версии пакета.
+    //
+    // Роли, удалённые в вебе, пакет не возвращает: их коды лежат в `.department-roles.json`
+    // (поле `removed`) и передаются раскладке как список пропуска. Без этого удаление
+    // роли жило бы до первого перезапуска приложения.
     try {
-      const deployed = deployPresets()
+      const presetsRoot = path.join(dshHome(), '.agent-presets')
+      const deployed = deployPresets({ skip: readRemovedRoles(presetsRoot) })
       if (deployed.problem) {
         state.lastError = 'пресеты ролей: ' + deployed.problem
       } else if (deployed.written + deployed.updated + deployed.removed > 0) {
@@ -1560,6 +1589,7 @@ export default {
           deployed.presets.join(', ') +
           ' (новых файлов ' + deployed.written + ', обновлено ' + deployed.updated +
           ', убрано ' + deployed.removed + ').' +
+          (deployed.skipped.length > 0 ? ' Удалены в вебе и пропущены: ' + deployed.skipped.join(', ') + '.' : '') +
           (deployed.foreign.length > 0 ? ' Свои пресеты не тронуты: ' + deployed.foreign.join(', ') + '.' : ''))
       }
     } catch (error) {

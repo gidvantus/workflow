@@ -89,6 +89,7 @@ SECTIONS_TOO_MANY = "Разделов больше 50"
 SECTION_TITLE_REQUIRED = "Название раздела не задано"
 SECTION_TITLE_TOO_LONG = "Название раздела длиннее 200 символов"
 SECTION_BODY_TOO_LONG = "Текст раздела длиннее 20000 символов"
+SECTION_BODY_NOT_TEXT = "Текст раздела должен быть строкой"
 
 NO_FIELDS_TO_UPDATE = "Нет полей для изменения"
 
@@ -158,7 +159,8 @@ def validate_sections(raw: Any) -> list[dict[str, str]]:
     Принимается только массив: объект, строка или `null` — отказ «Разделы должны быть
     массивом», иначе «сохранил, а разделы пропали». Пустой массив допустим.
     Заголовок обязателен и обрезается по краям; текст сохраняется как прислан, потому
-    что markdown чувствителен к переводам строк и пробелам внутри блока кода.
+    что markdown чувствителен к переводам строк и пробелам внутри блока кода, но только
+    строкой: объект или число в `body` — отказ «Текст раздела должен быть строкой».
     """
     if not isinstance(raw, list):
         raise _reject(SECTIONS_NOT_ARRAY)
@@ -179,9 +181,11 @@ def validate_sections(raw: Any) -> list[dict[str, str]]:
         elif isinstance(body, str):
             body_text = body
         else:
-            # Не строка — не повод отказать: тело приходит от человека через markdown-поле,
-            # а машинный импорт всегда шлёт строку. Такое значение приводим к тексту.
-            body_text = str(body)
+            # Не строка — отказ, а не приведение: `str({"a": 1})` уехал бы в `SKILL.md`
+            # как текст скилла, и модель прочитала бы мусор вместо раздела. `null` уже
+            # разобран выше как пустой текст. Тело раздела приходит только строкой —
+            # markdown-поле фронта и машинный импорт шлют строку.
+            raise _reject(SECTION_BODY_NOT_TEXT)
         if len(body_text) > SECTION_BODY_MAX_LENGTH:
             raise _reject(SECTION_BODY_TOO_LONG)
         sections.append({"title": title, "body": body_text})

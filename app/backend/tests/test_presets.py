@@ -291,9 +291,11 @@ def test_put_creates_skills_and_reports_change(api: TestClient) -> None:
     assert body["revision"] == document["revision"]
     assert document["title"] == "Аналитик"
     assert document["description"] == DOCUMENT["description"]
-    assert [skill["code"] for skill in document["skills"]] == ["requirements", "acceptance"]
-    assert document["skills"][1]["sections"] == []
-    assert document["skills"][0]["sections"][1]["body"] == "## Шаг\n\n1. Прочитать задачу\n"
+    # Документ отдаётся по коду скилла, а не в порядке тела: сравнение с телом `PUT`
+    # не должно зависеть от перечисления.
+    assert [skill["code"] for skill in document["skills"]] == ["acceptance", "requirements"]
+    assert document["skills"][0]["sections"] == []
+    assert document["skills"][1]["sections"][1]["body"] == "## Шаг\n\n1. Прочитать задачу\n"
 
 
 def test_put_same_document_is_unchanged(api: TestClient) -> None:
@@ -308,6 +310,54 @@ def test_put_same_document_is_unchanged(api: TestClient) -> None:
     assert second.json()["revision"] == first["revision"]
     after = next(role for role in api.get(ROLES_URL).json() if role["id"] == ROLE_ID)
     assert after["updated_at"] == before["updated_at"]
+
+
+def test_put_order_of_skills_in_body_does_not_change_revision(api: TestClient) -> None:
+    """Порядок скиллов в теле — достояние вызывающего, а не часть документа.
+
+    Сценарий из ревью: в вебе скиллы `a`, `b`, `c`, добавили `0-intro` (id больше всех),
+    а инструмент импорта присылает документ в порядке кода — `0-intro` первым. Ревизия
+    документа и набора не должна от этого отличаться, иначе повторная заливка всегда
+    «изменённая», а `changed` перестаёт быть признаком изменения.
+    """
+    base: dict[str, Any] = {
+        "title": "Аналитик",
+        "description": "",
+        "skills": [
+            {"code": "a", "title": "A", "description": "a", "sections": []},
+            {"code": "b", "title": "B", "description": "b", "sections": []},
+            {"code": "c", "title": "C", "description": "c", "sections": []},
+        ],
+    }
+    _put(api, "analyst", base)
+    intro = {"code": "0-intro", "title": "Вступление", "description": "d", "sections": []}
+    import_document = {**base, "skills": [intro, *base["skills"]]}
+
+    first = _put(api, "analyst", import_document).json()
+    assert first["changed"] is True
+    document = _document(api, "analyst")
+    assert [skill["code"] for skill in document["skills"]] == ["0-intro", "a", "b", "c"]
+    assert first["revision"] == document["revision"]
+
+    # Импорт шлёт то же самое ещё раз — это не изменение.
+    second = _put(api, "analyst", import_document)
+    assert second.status_code == 200
+    assert second.json()["changed"] is False
+    assert second.json()["revision"] == first["revision"]
+
+    # И обратный порядок в теле — тоже не изменение.
+    reversed_document = {**import_document, "skills": list(reversed(import_document["skills"]))}
+    third = _put(api, "analyst", reversed_document)
+    assert third.json()["changed"] is False
+    assert third.json()["revision"] == first["revision"]
+
+    # Список скиллов браузерной ручки остаётся по `id`: порядок в UI не поехал.
+    assert [skill["code"] for skill in api.get(f"{ROLES_URL}/{ROLE_ID}/skills").json()] == [
+        "a",
+        "b",
+        "c",
+        "0-intro",
+    ]
 
 
 def test_put_removes_skill_missing_from_document(api: TestClient) -> None:
