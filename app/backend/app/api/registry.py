@@ -103,6 +103,16 @@ def _is_text(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
 
+def _is_department(value: Any) -> bool:
+    """Годный отдел: объект с названием вида (`kind`).
+
+    Ровно по этому признаку отдел читает `plugins/registry.mjs`: запись без `kind`
+    потребитель выбрасывает, поэтому документ, где годных отделов нет, принимать
+    нельзя — иначе правка из веба получает `200` и молча не доезжает до диспетчера.
+    """
+    return isinstance(value, dict) and _is_text(value.get("kind"))
+
+
 def _pair(window: Any) -> ClockPair | None:
     """Пара «начало и конец» окна или `None`, если окно задано не парой.
 
@@ -186,7 +196,9 @@ def validate_document(document: Any) -> dict[str, Any]:
             raise _Reject(PROJECT_ID_DUPLICATE.format(id=project_id))
         seen.add(project_id)
         departments = project.get("departments")
-        if not isinstance(departments, list) or not departments:
+        if not isinstance(departments, list) or not any(
+            _is_department(department) for department in departments
+        ):
             raise _Reject(PROJECT_NO_DEPARTMENTS.format(id=project_id))
         if _development_count(departments) > 1:
             raise _Reject(PROJECT_DUPLICATE_DEVELOPMENT.format(id=project_id))
@@ -208,7 +220,7 @@ def _development_count(departments: Sequence[Any]) -> int:
     return sum(
         1
         for department in departments
-        if isinstance(department, dict) and department.get("kind") == DEVELOPMENT_KIND
+        if _is_department(department) and department.get("kind") == DEVELOPMENT_KIND
     )
 
 

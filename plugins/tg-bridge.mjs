@@ -21,7 +21,7 @@ import { spawn } from 'node:child_process'
 import { STATE_FILES, readStateFile } from './state-paths.mjs'
 // Форма реестра проектов живёт в одном модуле: мост не разбирает `projects` сам,
 // иначе его копия формы разошлась бы с диспетчером молча.
-import { normalizePath, readRegistryFile, projectRoots, telegramOf, developmentOf } from './registry.mjs'
+import { normalizePath, readRegistryFile, projectRoots, telegramOf, developmentOf, findProjectByRoots } from './registry.mjs'
 
 // Боты берутся ТОЛЬКО из реестра проектов: поле telegram отдела разработки в
 // `<DSH_HOME>/profiles/desktop/dsh-dev-department/projects.json`. Другого источника
@@ -315,18 +315,9 @@ export default {
         const session = sessions ? sessions.get(sessionId) : undefined
         const cwd = session && session.header ? session.header.cwd : undefined
         if (!cwd) return undefined
-        const wanted = normalizePath(cwd)
-        let best
-        let bestLength = -1
-        for (const project of projects) {
-          for (const candidate of project.roots || []) {
-            const root = normalizePath(candidate)
-            if (!root) continue
-            if (wanted === root || wanted.indexOf(root + '\\') === 0) {
-              if (root.length > bestLength) { best = project; bestLength = root.length }
-            }
-          }        }
-        return best
+        // Поиск по корням — один на отдел: его же зовёт диспетчер, своей копии
+        // правила сравнения путей у моста нет.
+        return findProjectByRoots(projects, (project) => project.roots, cwd) || undefined
       } catch (error) {
         return undefined
       }

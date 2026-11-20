@@ -132,6 +132,16 @@ INVALID_DOCUMENTS: list[tuple[Any, str]] = [
     (_projects({"id": "a"}), api.PROJECT_NO_DEPARTMENTS.format(id="a")),
     (_projects({"id": "a", "departments": []}), api.PROJECT_NO_DEPARTMENTS.format(id="a")),
     (_projects({"id": "a", "departments": {}}), api.PROJECT_NO_DEPARTMENTS.format(id="a")),
+    # годных отделов нет: отдел-не-объект и отдел без `kind` потребитель выбрасывает
+    (_projects({"id": "a", "departments": [42]}), api.PROJECT_NO_DEPARTMENTS.format(id="a")),
+    (
+        _projects({"id": "a", "departments": [{"repo": "x"}]}),
+        api.PROJECT_NO_DEPARTMENTS.format(id="a"),
+    ),
+    (
+        _projects({"id": "a", "departments": [{"kind": "  "}]}),
+        api.PROJECT_NO_DEPARTMENTS.format(id="a"),
+    ),
     (
         _projects({"id": "a", "departments": [DEVELOPMENT, DEVELOPMENT]}),
         api.PROJECT_DUPLICATE_DEVELOPMENT.format(id="a"),
@@ -311,6 +321,8 @@ def test_invalid_documents_are_rejected(
         _with_department(telegram={"token": "t", "chatId": "1"}),
         _with_department(windows=None, telegram=None),
         _projects({"id": "a", "departments": [{"kind": "marketing"}]}),
+        # негодные отделы рядом с годным не мешают: потребитель их просто выбрасывает
+        _projects({"id": "a", "departments": [DEVELOPMENT, 42, {"repo": "x"}]}),
     ],
 )
 def test_good_documents_are_stored(api_client: TestClient, document: dict[str, Any]) -> None:

@@ -54,12 +54,6 @@ export const REGISTRY_VERSION = 2
 /** Код вида отдела, которым занимается диспетчер разработки. */
 export const DEVELOPMENT_KIND = 'development'
 
-/**
- * Ключи, которые живут только в файле: их правит человек, веб их не отдаёт, и
- * синхронизация обязана сохранять их поверх документа из API.
- */
-export const LOCAL_ONLY_KEYS = ['default', 'telegram', 'labels', 'areas', 'frontendPort', 'apiPort', 'enabled']
-
 // BOM в начале файла (его пишут редакторы Windows и PowerShell) ломает
 // JSON.parse невидимым символом. Реестр — обычный файл, который человек правит
 // руками, поэтому читаем его снисходительно.
@@ -269,17 +263,20 @@ export function telegramOf(department) {
 }
 
 /**
- * Проект по рабочей области (или по каталогу человека): сравнение нормализованным
- * путём, корень проекта может быть предком пути. Возвращает самую длинную
- * подошедшую область — как мост Telegram, — или `null`.
+ * Проект по рабочей области: сравнение нормализованным путём, корень проекта может
+ * быть предком пути. Возвращает самую длинную подошедшую область — как мост
+ * Telegram, — или `null`.
+ *
+ * Ищет по готовому списку проектов и их корням, а не по документу: мост Telegram
+ * держит проекты в своей форме (`roots`), и второй такой поиск ему не нужен.
  */
-export function findProjectByWorkspace(document, workspace) {
+export function findProjectByRoots(projects, rootsOf, workspace) {
   const wanted = normalizePath(workspace)
   if (!wanted) return null
   let best = null
   let bestLength = -1
-  for (const project of projectsOf(document)) {
-    for (const candidate of projectRoots(project)) {
+  for (const project of projects || []) {
+    for (const candidate of rootsOf(project) || []) {
       const root = normalizePath(candidate)
       if (!root) continue
       if (wanted === root || wanted.indexOf(root + '\\') === 0) {
@@ -291,13 +288,6 @@ export function findProjectByWorkspace(document, workspace) {
     }
   }
   return best
-}
-
-/**
- * Проект по id: `null`, если такого нет.
- */
-export function projectById(document, id) {
-  return projectsOf(document).find((project) => project.id === id) || null
 }
 
 /** Порты по умолчанию: прежние значения диспетчера, если отдел их не задал. */

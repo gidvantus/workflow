@@ -113,7 +113,12 @@ const nested = {
     { id: 'human', departments: [{ kind: 'development', workspace: 'D:\\Agents\\Brain', humanClone: 'D:\\Development\\VideCoding\\Brain' }] },
   ],
 }
-const find = (workspace) => { const p = registry.findProjectByWorkspace(nested, workspace); return p ? p.id : null }
+// Поиск по корням — одна реализация на отдел: её же зовёт мост Telegram со своей
+// формой проекта (`roots`), поэтому проверяем на документе и его корнях.
+const find = (workspace) => {
+  const project = registry.findProjectByRoots(registry.projectsOf(nested), registry.projectRoots, workspace)
+  return project ? project.id : null
+}
 check('точное совпадение', find('D:\\Agents\\Vahta'), 'vahta')
 check('другая раскладка слэшей и регистр', find('d:/agents/vahta/'), 'vahta')
 check('вложенный путь принадлежит проекту', find('D:\\Agents\\Vahta\\backend'), 'vahta')
