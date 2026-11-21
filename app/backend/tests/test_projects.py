@@ -1,8 +1,9 @@
 """Ручки `/api/projects`: коды, дословные тексты отказов и soft delete.
 
 Живая PostgreSQL тестам не нужна: `get_db` подменяется на SQLite в памяти, таблицы
-создаются из метаданных моделей. Индекс `uq_projects_name_alive` живёт и в SQLite,
-поэтому поведение совпадает со стендом. База в памяти и клиент живут в `conftest.py` —
+создаются из метаданных моделей. Индексы `uq_projects_name_alive` и
+`uq_projects_code_alive` живут и в SQLite, поэтому и гонка по имени, и гонка по коду
+проверяются на настоящем индексе. База в памяти и клиент живут в `conftest.py` —
 один общий движок на все ручки, чтобы не держать копию фикстуры в каждом модуле.
 """
 
@@ -25,7 +26,7 @@ PROJECT: dict[str, str] = {
 }
 
 
-def _create(client: TestClient, **overrides: str) -> dict[str, Any]:
+def _create(client: TestClient, **overrides: Any) -> dict[str, Any]:
     """Создать проект через ручку и вернуть тело ответа."""
     payload = {**PROJECT, **overrides}
     response = client.post("/api/projects", json=payload)
@@ -51,6 +52,7 @@ def test_create_returns_created_project(client: TestClient) -> None:
         "name",
         "description",
         "repo_url",
+        "code",
         "created_at",
         "updated_at",
     }
@@ -58,6 +60,8 @@ def test_create_returns_created_project(client: TestClient) -> None:
     assert body["name"] == "Workflow"
     assert body["description"] == "Отдел разработки"
     assert body["repo_url"] == "gidvantus/workflow"
+    # Кода нет — `null`, а не пустая строка: «не задан» и «пусто» значат одно и то же.
+    assert body["code"] is None
     assert isinstance(datetime.fromisoformat(body["created_at"]), datetime)
     assert isinstance(datetime.fromisoformat(body["updated_at"]), datetime)
 
@@ -301,6 +305,218 @@ def test_name_of_deleted_project_can_be_used_again(client: TestClient) -> None:
 
     assert repeated["name"] == created["name"]
     assert repeated["id"] != created["id"]
+
+
+def test_create_with_code_stores_and_returns_it(
+    client: TestClient,
+    session_factory: sessionmaker[Session],
+) -> None:
+    """Код сохраняется в базу и возвращается тем же значением."""
+    created = _create(client, code="workflow")
+
+    assert created["code"] == "workflow"
+    rows = _rows(session_factory)
+    assert [(row.id, row.code) for row in rows] == [(created["id"], "workflow")]
+
+
+def test_create_keeps_code_register_and_trims_spaces(client: TestClient) -> None:
+    """Верхний регистр кода разрешён (живой слаг `CRMDormitory`), пробелы по краям снимаются."""
+    created = _create(client, code="  CRMDormitory  ")
+
+    assert created["code"] == "CRMDormitory"
+
+
+@pytest.mark.parametrize("empty", ["", "   "])
+def test_create_with_empty_code_means_not_set(client: TestClient, empty: str) -> None:
+    """Пустой код — это «не задан»: в базе `NULL`, а не пустая строка."""
+    created = _create(client, code=empty)
+
+    assert created["code"] is None
+
+
+def test_create_with_null_code_means_not_set(client: TestClient) -> None:
+    """Явный `null` в теле — то же самое, что отсутствие поля."""
+    created = _create(client, code=None)
+
+    assert created["code"] is None
+
+
+@pytest.mark.parametrize(
+    ("code", "detail"),
+    [
+        ("работа", api.CODE_INVALID),
+        ("work flow", api.CODE_INVALID),
+        ("work_flow", api.CODE_INVALID),
+        ("workflow!", api.CODE_INVALID),
+        ("-workflow", api.CODE_INVALID),
+        ("a" * (api.CODE_MAX_LENGTH + 1), api.CODE_TOO_LONG),
+        ("1" * (api.CODE_MAX_LENGTH + 1), api.CODE_TOO_LONG),
+        ("12345", api.CODE_ALL_DIGITS),
+    ],
+)
+def test_create_rejects_invalid_code(client: TestClient, code: str, detail: str) -> None:
+    """Каждый отказ по коду — `422` с дословным текстом контракта."""
+    response = client.post("/api/projects", json={**PROJECT, "code": code})
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert response.json() == {"detail": detail}
+
+
+def test_create_accepts_code_of_max_length(client: TestClient) -> None:
+    """Ровно 32 символа — ещё не «длиннее 32», код сохраняется."""
+    code = "a" * api.CODE_MAX_LENGTH
+
+    created = _create(client, code=code)
+
+    assert created["code"] == code
+
+
+def test_taken_code_is_conflict_ignoring_register(client: TestClient) -> None:
+    """Занятый код — `409`, сравнение без учёта регистра."""
+    _create(client, name="CRMDormitory", repo_url="gidvantus/dorm", code="CRMDormitory")
+
+    response = client.post(
+        "/api/projects",
+        json={**PROJECT, "name": "Другой", "repo_url": "gidvantus/two", "code": "crmdormitory"},
+    )
+
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert response.json() == {"detail": "Код проекта уже занят"}
+
+
+def test_code_of_deleted_project_is_free(client: TestClient) -> None:
+    """Код удалённого проекта свободен: индекс смотрит только на живые строки."""
+    created = _create(client, code="workflow")
+    assert client.delete(f"/api/projects/{created['id']}").status_code == 204
+
+    repeated = _create(client, name="Второй", repo_url="gidvantus/two", code="workflow")
+
+    assert repeated["code"] == "workflow"
+
+
+def test_code_conflict_is_caught_by_index(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Гонка двух `POST`: предварительная проверка отключена, `409` держит индекс.
+
+    Оба запроса проходят `_code_is_taken`, второй ловит `IntegrityError` частичного
+    индекса `uq_projects_code_alive`. Тест фиксирует, что отказ гонки приходит с текстом
+    про код, а не про имя: текст выбирается по имени сработавшего индекса.
+    """
+    _create(client, name="Первый", repo_url="gidvantus/one", code="workflow")
+    monkeypatch.setattr(api, "_code_is_taken", lambda *args, **kwargs: False)
+
+    response = client.post(
+        "/api/projects",
+        json={**PROJECT, "name": "Второй", "repo_url": "gidvantus/two", "code": "WORKFLOW"},
+    )
+
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert response.json() == {"detail": "Код проекта уже занят"}
+    assert len(client.get("/api/projects").json()) == 1
+
+
+def test_patch_sets_code_once(client: TestClient) -> None:
+    """Код задаётся один раз: повтор того же кода — `200`, смена и стирание — `422`."""
+    created = _create(client)
+
+    first = client.patch(f"/api/projects/{created['id']}", json={"code": "workflow"})
+    assert first.status_code == status.HTTP_200_OK, first.text
+    assert first.json()["code"] == "workflow"
+
+    same = client.patch(f"/api/projects/{created['id']}", json={"code": "workflow"})
+    assert same.status_code == status.HTTP_200_OK, same.text
+    assert same.json()["code"] == "workflow"
+
+    for payload in ({"code": "other"}, {"code": ""}, {"code": None}):
+        changed = client.patch(f"/api/projects/{created['id']}", json=payload)
+        assert changed.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT, changed.text
+        assert changed.json() == {"detail": "Код проекта не меняется"}
+
+    assert client.get("/api/projects").json()[0]["code"] == "workflow"
+
+
+@pytest.mark.parametrize("empty", ["", "   ", None])
+def test_patch_empty_code_on_project_without_code_changes_nothing(
+    client: TestClient,
+    empty: str | None,
+) -> None:
+    """У проекта без кода пустой `code` в `PATCH` — не отказ и не стирание, а «не задан»."""
+    created = _create(client)
+
+    response = client.patch(f"/api/projects/{created['id']}", json={"code": empty})
+
+    assert response.status_code == status.HTTP_200_OK, response.text
+    assert response.json()["code"] is None
+
+
+def test_patch_taken_code_is_conflict(client: TestClient) -> None:
+    """Занятый код при первой установке — `409` без учёта регистра."""
+    _create(client, name="Первый", repo_url="gidvantus/one", code="workflow")
+    second = _create(client, name="Второй", repo_url="gidvantus/two")
+
+    response = client.patch(f"/api/projects/{second['id']}", json={"code": "WORKFLOW"})
+
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert response.json() == {"detail": "Код проекта уже занят"}
+    assert client.get("/api/projects").json()[1]["code"] is None
+
+
+@pytest.mark.parametrize(
+    ("code", "detail"),
+    [
+        ("работа", api.CODE_INVALID),
+        ("work_flow", api.CODE_INVALID),
+        ("12345", api.CODE_ALL_DIGITS),
+        ("a" * (api.CODE_MAX_LENGTH + 1), api.CODE_TOO_LONG),
+    ],
+)
+def test_patch_invalid_code_is_unprocessable(
+    client: TestClient,
+    code: str,
+    detail: str,
+) -> None:
+    """Проверки кода у `PATCH` те же, что у `POST`, и с теми же текстами."""
+    created = _create(client)
+
+    response = client.patch(f"/api/projects/{created['id']}", json={"code": code})
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert response.json() == {"detail": detail}
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [("workflow", "workflow"), ("  CRMDormitory  ", "CRMDormitory"), ("wrk-2", "wrk-2")],
+)
+def test_validate_code_returns_trimmed_code(value: str, expected: str) -> None:
+    """Валидатор кода доступен без HTTP: он снимает пробелы по краям и хранит регистр."""
+    assert api.validate_code(value) == expected
+
+
+@pytest.mark.parametrize("value", [None, "", "   "])
+def test_validate_code_treats_empty_as_not_set(value: str | None) -> None:
+    """`None` и пустая строка — одно и то же: кода нет."""
+    assert api.validate_code(value) is None
+
+
+@pytest.mark.parametrize(
+    ("value", "detail"),
+    [
+        ("работа", api.CODE_INVALID),
+        ("-workflow", api.CODE_INVALID),
+        ("work_flow", api.CODE_INVALID),
+        ("1" * (api.CODE_MAX_LENGTH + 1), api.CODE_TOO_LONG),
+        ("12345", api.CODE_ALL_DIGITS),
+    ],
+)
+def test_validate_code_rejects(value: str, detail: str) -> None:
+    """Отказы валидатора кода — `422` с дословным текстом контракта."""
+    with pytest.raises(HTTPException) as excinfo:
+        api.validate_code(value)
+    assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert excinfo.value.detail == detail
 
 
 @pytest.mark.parametrize(

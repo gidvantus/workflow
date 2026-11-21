@@ -184,13 +184,18 @@ def _seed_project(
     departments: list[dict[str, Any]],
     *,
     deleted: bool = False,
+    code: str | None = None,
 ) -> int:
-    """Завести проект и его отделы прямо в базе; вернуть id проекта."""
+    """Завести проект и его отделы прямо в базе; вернуть id проекта.
+
+    `code` — слаг проекта: если он задан, `rebuild` поставит его `id` проекта в документе.
+    """
     with session_factory() as session:
         project = Project(
             name=name,
             description="",
             repo_url="gidvantus/" + name.lower(),
+            code=code,
             deleted_at=datetime(2026, 11, 20, 10, 0, 0) if deleted else None,
         )
         session.add(project)
@@ -207,6 +212,30 @@ def _seed_project(
             )
         session.commit()
         return project.id
+
+
+def _add_development(
+    session_factory: sessionmaker[Session],
+    projects: list[tuple[int, str]],
+) -> None:
+    """Добавить отдел разработки уже заведённым проектам: пары `(id проекта, код)`.
+
+    Нужно тестам, где проект создан ручкой `POST /api/projects`: без отдела `rebuild`
+    проект в документ не поставит, а ручки отделов требуют справочника видов.
+    """
+    with session_factory() as session:
+        kind_id = _kind_id(session, "development")
+        for project_id, code in projects:
+            session.add(
+                Department(
+                    project_id=project_id,
+                    kind_id=kind_id,
+                    name="Разработка",
+                    repo_path=f"gidvantus/{code}",
+                    base_branch="main",
+                )
+            )
+        session.commit()
 
 
 def test_get_without_token_is_401(api_client: TestClient) -> None:
@@ -455,6 +484,98 @@ def test_rebuild_without_projects_is_422(api_client: TestClient) -> None:
 
     assert response.status_code == 422
     assert response.json()["detail"] == api.NO_PROJECTS
+
+
+def test_rebuild_uses_code_as_project_id(
+    api_client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """У проекта с кодом `id` в документе — код, а не число: на этом держится склейка."""
+    _seed_project(
+        session_factory,
+        "Workflow",
+        [{"repo_path": "gidvantus/workflow"}],
+        code="workflow",
+    )
+
+    document = api_client.post("/api/registry/rebuild", headers=HEADERS).json()["document"]
+
+    assert document["projects"][0]["id"] == "workflow"
+    assert document["projects"][0]["title"] == "Workflow"
+
+
+def test_rebuild_keeps_numeric_id_for_project_without_code(
+    api_client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """Проект без кода остаётся под `str(id)`: старые документы не ломаются.
+
+    Обратная совместимость важна ровно до заполнения кодов: пока у проекта кода нет,
+    `id` в реестре числовой, и это лучше, чем выдуманный код.
+    """
+    _seed_project(
+        session_factory,
+        "Workflow",
+        [{"repo_path": "gidvantus/workflow"}],
+        code="workflow",
+    )
+    brain_id = _seed_project(
+        session_factory,
+        "Brain",
+        [{"repo_path": "gidvantus/brain"}],
+    )
+
+    document = api_client.post("/api/registry/rebuild", headers=HEADERS).json()["document"]
+
+    assert [project["id"] for project in document["projects"]] == ["workflow", str(brain_id)]
+
+
+def test_rebuild_with_codes_is_accepted_by_put(
+    api_client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """Документ с кодами в `id` проходит проверку формы и становится ревизией."""
+    _seed_project(
+        session_factory,
+        "CRMDormitory",
+        [{"repo_path": "gidvantus/factory-dormitory-management"}],
+        code="CRMDormitory",
+    )
+    rebuilt = api_client.post("/api/registry/rebuild", headers=HEADERS).json()
+
+    response = _put(api_client, rebuilt["document"])
+
+    assert response.status_code == 200, response.text
+    assert (rebuilt["revision"], response.json()["revision"]) == (1, 2)
+
+
+def test_rebuild_ids_are_the_codes_of_projects_created_by_api(
+    api_client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """Приёмочный сценарий задачи: пять живых проектов → `id` реестра ровно эти коды.
+
+    Проекты заводятся ручкой `POST /api/projects`, как их заведёт веб или человек, а
+    отдел добавляется прямо в базу: ручки отделов требуют справочника видов и к маршруту
+    задачи не относятся. Проверяется весь путь «код прошёл валидацию и записался →
+    `rebuild` поставил его `id` проекта» — то есть ровно случай, из-за которого живой
+    реестр терял локальные ключи (числовые `id` против слагов в файле), и то, что
+    собранный документ потом принимается `PUT`.
+    """
+    codes = ["vahta", "cloudpass", "brain", "CRMDormitory", "workflow"]
+    created: list[tuple[int, str]] = []
+    for code in codes:
+        response = api_client.post(
+            "/api/projects",
+            json={"name": code, "repo_url": f"gidvantus/{code}", "code": code},
+        )
+        assert response.status_code == 201, response.text
+        assert response.json()["code"] == code
+        created.append((response.json()["id"], code))
+
+    _add_development(session_factory, created)
+
+    rebuilt = api_client.post("/api/registry/rebuild", headers=HEADERS)
+    assert rebuilt.status_code == 200, rebuilt.text
+    document = rebuilt.json()["document"]
+    assert [project["id"] for project in document["projects"]] == codes
+    assert _put(api_client, document).status_code == 200
 
 
 def test_rebuild_then_put_creates_next_revision(
