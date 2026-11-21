@@ -232,6 +232,75 @@ check('бот: сохранённые подполя перечислены', bo
 ].sort())
 check('бот: файл не испорчен склейкой', botLocal.projects[0].departments[0].telegram.token, 'file')
 
+console.log('\n=== склейка: потеря названа поимённо ===')
+// Ровно инцидент из постановки #63: в документе веба `id` числовые (колонка
+// `projects.code` пуста), а файл держится на слагах. Склейка по `id` не совпадёт
+// ни с одним проектом, и без `lost` все локальные ключи исчезли бы молча.
+const numericApi = {
+  version: 2,
+  projects: [
+    { id: '1', title: 'Вахта', departments: [{ kind: 'development', title: 'Разработка' }] },
+    { id: '2', title: 'CloudPass', departments: [{ kind: 'development', title: 'Разработка' }] },
+  ],
+}
+const numericLocal = {
+  version: 2,
+  default: 'vahta',
+  projects: [
+    {
+      id: 'vahta',
+      title: 'Вахта',
+      frontendPort: 8095,
+      apiPort: 8096,
+      departments: [{ kind: 'development', composeProject: 'vahta-agent', telegram: { token: 't', chatId: 1, projects: ['vahta'] } }],
+    },
+    { id: 'cloudpass', enabled: false, departments: [{ kind: 'development', composeProject: 'cloudpass-agent' }] },
+  ],
+}
+const numericMerged = registry.overlay(numericApi, numericLocal)
+check('lost не пуст, когда ни один id не совпал', numericMerged.lost.map((item) => item.id), ['vahta', 'cloudpass'])
+check('droppedProjects повторяет lost[].id', numericMerged.droppedProjects, numericMerged.lost.map((item) => item.id))
+const lostVahta = numericMerged.lost[0]
+check('lost называет локальные ключи проекта', lostVahta.keys.includes('vahta.frontendPort'), true)
+check('lost называет ключи отдела', lostVahta.keys.includes('vahta.departments[development].composeProject'), true)
+check('lost называет виды потерянных отделов', lostVahta.departments, ['development'])
+check('локальные ключи в результат не попали (склейки нет)', numericMerged.document.projects[0].frontendPort, undefined)
+check('локальные ключи сохранены в самом перечне', numericMerged.lost[1].keys.includes('cloudpass.enabled'), true)
+check('документ API не испорчен', numericApi.projects[0].frontendPort, undefined)
+
+// Обратная сторона защиты: id совпали — терять нечего, `lost` обязан быть пустым,
+// иначе запись кеша заблокируется на ровном месте.
+const matched = registry.overlay(fromApi, { ...local, projects: local.projects.slice(0, 1) })
+check('id совпали — lost пуст', matched.lost, [])
+check('id совпали — droppedProjects пуст', matched.droppedProjects, [])
+
+// Второй канал потери: проект совпал, а локального отдела такого вида в документе
+// нет. `droppedProjects` молчит — проект-то на месте, — но отдел пропадёт.
+const extraKindApi = {
+  version: 2,
+  projects: [{ id: 'workflow', departments: [{ kind: 'development', title: 'Разработка' }] }],
+}
+const extraKindLocal = {
+  version: 2,
+  projects: [
+    {
+      id: 'workflow',
+      departments: [
+        { kind: 'development', telegram: { token: 't', chatId: 1 } },
+        { kind: 'analytics', windows: [{ start: '10:00', stop: '19:00' }] },
+      ],
+    },
+  ],
+}
+const extraKindMerged = registry.overlay(extraKindApi, extraKindLocal)
+check('отдел отсутствующего вида назван потерянным', extraKindMerged.lost.map((item) => item.departments), [['analytics']])
+check('и его ключи перечислены', extraKindMerged.lost[0].keys, [
+  'workflow.departments[analytics].windows',
+])
+check('проект при этом не назван потерянным', extraKindMerged.droppedProjects, [])
+check('совпавший отдел склеен как раньше', extraKindMerged.document.projects[0].departments[0].telegram, { token: 't', chatId: 1 })
+check('файла нет — терять нечего', registry.overlay(fromApi, null).lost, [])
+
 console.log('\n=== запись кеша ===')
 const cacheFile = path.join(sandbox, 'state', 'projects.json')
 const first = registry.writeRegistryFile(cacheFile, fromApi)

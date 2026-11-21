@@ -3887,10 +3887,25 @@ export default {
       revision: null,      // отпечаток применённого документа
       localKeys: [],       // ключи, которые живут только в файле
       droppedProjects: [], // проекты файла, которых нет в документе веба
+      lost: [],            // ключи, которым некуда лечь при склейке (`overlay().lost`)
       error: null,
     }
 
     const messageOf = (error) => (error && error.message ? error.message : String(error))
+
+    // Причина отказа записи кеша: какие именно локальные ключи некуда положить.
+    // Постановка просит до пяти ключей на проект и «…» при большем — иначе одна
+    // строка статуса вырастает в весь файл реестра.
+    function registryLostText(lost) {
+      return lost.map((item) => {
+        const keys = item.keys.slice(0, 5)
+        if (item.keys.length > 5) keys.push('…')
+        const named = keys.length > 0
+          ? keys.join(', ')
+          : (item.departments && item.departments.length > 0 ? 'отделы: ' + item.departments.join(', ') : '')
+        return named ? item.id + ': ' + named : item.id
+      }).join('; ')
+    }
 
     // Отпечаток документа. Ревизию наружу отдаёт только запись (`PUT`/`rebuild`),
     // а `GET` возвращает сам документ; поэтому «на какой ревизии стоит кеш»
@@ -3987,13 +4002,26 @@ export default {
       }
 
       const merged = overlay(parsed.document, local)
+      registrySync.localKeys = merged.localKeys
+      registrySync.droppedProjects = merged.droppedProjects
+      registrySync.lost = merged.lost
+      // Склейка потеряла бы локальные ключи: проекта нет в документе API или у
+      // локального отдела нет вида в документе. Писать такой файл нельзя — в нём
+      // человек держит telegram, порты, areas, `enabled: false` и второе окно
+      // смены, — смена продолжается на прошлом кеше, а причина с перечнем ключей
+      // видна в статусе. Ровно это и случилось на первой живой синхронизации,
+      // когда `id` в документе был числовым, а в файле — слаги.
+      if (merged.lost.length > 0) {
+        registrySync.ok = false
+        registrySync.error = 'реестр из веба: не совпали проекты — '
+          + registryLostText(merged.lost) + '; кеш не переписан'
+        return { error: registrySync.error, lost: merged.lost }
+      }
       const written = writeRegistryFile(stateFile(STATE_FILES.projects), merged.document)
       registrySync.ok = true
       registrySync.error = null
       registrySync.fetchedAt = new Date().toISOString()
       registrySync.revision = registryDigest(merged.document)
-      registrySync.localKeys = merged.localKeys
-      registrySync.droppedProjects = merged.droppedProjects
       if (written.changed) registrySync.changedAt = registrySync.fetchedAt
       return { ok: true, changed: written.changed, revision: registrySync.revision, localKeys: merged.localKeys }
     }
@@ -4339,6 +4367,10 @@ export default {
             attemptedAt: registrySync.attemptedAt === null ? null : new Date(registrySync.attemptedAt).toISOString(),
             localKeys: registrySync.localKeys,
             droppedProjects: registrySync.droppedProjects,
+            // Ключи, которым некуда лечь: при непустом списке кеш не переписан,
+            // и рядом стоит причина (`error`). Массив, а не строка: человеку нужен
+            // перечень, а не пересказ.
+            lost: registrySync.lost,
             error: registrySync.error,
           },
           // Раскладка пресетов ролей: `ok: null` — синхронизации в этом процессе

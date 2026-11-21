@@ -209,6 +209,18 @@ export default function ProjectPage({ project, onBack }: ProjectPageProps): JSX.
                 ·
               </span>
               <span>{`Обновлён ${formatDate(project.updated_at)}`}</span>
+              {/* Код проекта — тот же идентификатор, под которым проект живёт в
+                  документе реестра отдела. Показывается только когда задан. */}
+              {project.code !== null && project.code !== '' && (
+                <>
+                  <span className="crumbs__sep" aria-hidden="true">
+                    ·
+                  </span>
+                  <span className="project-code" data-testid="project-code">
+                    {`Код проекта: ${project.code}`}
+                  </span>
+                </>
+              )}
             </p>
           </div>
         </div>

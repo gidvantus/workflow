@@ -194,6 +194,53 @@ check('время изменения файла то же', status.registrySync.
 check('а время удачного ответа новое', status.registrySync.fetchedAt !== fetchedAt, true)
 check('при этом синхронизация снова удачна', status.registrySync.ok, true)
 
+console.log('\n=== документ не совпал по id: локальные ключи не теряются, кеш не переписан ===')
+// Ровно инцидент из постановки #63: в вебе коды проектов не заполнены, и `id`
+// приходит числовым, а файл держится на слагах. Склейка по `id` не совпадёт —
+// писать такой документ поверх файла нельзя, иначе пропадут telegram, порты,
+// areas, `enabled: false` и второе окно смены.
+const beforeLost = fs.readFileSync(projectsFile, 'utf8')
+mode = {
+  kind: 'ok',
+  status: 200,
+  body: {
+    version: 2,
+    projects: [
+      {
+        id: '1',
+        title: 'Вахта',
+        departments: [{ kind: 'development', repo: WORKSPACE, base: 'main', workspace: WORKSPACE, windows: [{ start: '13:00', stop: '04:00' }] }],
+      },
+    ],
+  },
+}
+await app.tick()
+status = await app.status()
+check('успех снят', status.registrySync.ok, false)
+check('файл байт в байт прежний', fs.readFileSync(projectsFile, 'utf8') === beforeLost, true)
+includes('причина названа словами постановки', status.registrySync.error, 'реестр из веба: не совпали проекты — ')
+includes('в причине назван проект', status.registrySync.error, 'vahta')
+includes('в причине названы ключи', status.registrySync.error, 'vahta.title')
+includes('перечень ключей укорочен многоточием', status.registrySync.error, '…; кеш не переписан')
+includes('и сказано, что кеш не переписан', status.registrySync.error, 'кеш не переписан')
+check('lost в статусе — массив', Array.isArray(status.registrySync.lost), true)
+check('lost называет проект', status.registrySync.lost.map((item) => item.id), ['vahta'])
+check('lost называет его ключи', status.registrySync.lost[0].keys.includes('vahta.departments[development].telegram'), true)
+check('и виды отделов', status.registrySync.lost[0].departments, ['development'])
+check('droppedProjects тоже названы', status.registrySync.droppedProjects, ['vahta'])
+check('ревизия прошлой удачи не забыта', /^[0-9a-f]{12}$/.test(status.registrySync.revision), true)
+check('кеш всё равно обслуживается', status.registry.serving, ['vahta'])
+check('порт из кеша на месте', cacheDepartment().frontendPort, 8095)
+
+// Коды заполнили — id совпали, и запись возобновляется: защита блокирует только
+// потерю, а не синхронизацию вообще.
+mode = { kind: 'ok', status: 200, body: webDocument('gidvantus/vahta') }
+await app.tick()
+status = await app.status()
+check('id совпали — синхронизация снова удачна', status.registrySync.ok, true)
+check('lost очищен', status.registrySync.lost, [])
+check('проект снова из веба', cacheDepartment().repo, 'gidvantus/vahta')
+
 console.log('\n=== 401: кеш не тронут ===')
 mode = { kind: 'status', status: 401 }
 const beforeDenied = fs.readFileSync(projectsFile, 'utf8')

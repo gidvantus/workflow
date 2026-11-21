@@ -23,15 +23,25 @@ export type Project = {
   name: string;
   description: string;
   repo_url: string;
+  /**
+   * Стабильный код проекта — он же `id` проекта в документе реестра отдела.
+   * `null` — код не задан, и в реестре проект живёт под числовым `id`.
+   */
+  code: string | null;
   created_at: string;
   updated_at: string;
 };
 
-/** Тело создания и правки: `POST` требует `name` и `repo_url`, `PATCH` принимает подмножество. */
+/**
+ * Тело создания и правки: `POST` требует `name` и `repo_url`, `PATCH` принимает
+ * подмножество. `code` необязателен: `undefined` значит «не трогать» — так правка
+ * не отправляет код, который задан и по контракту не меняется.
+ */
 export type ProjectInput = {
   name: string;
   description: string;
   repo_url: string;
+  code?: string | null;
 };
 
 const PROJECTS_URL = '/api/projects';
@@ -42,17 +52,21 @@ function readProject(payload: unknown): Project | null {
     return null;
   }
   const { id, name, description, repo_url, created_at, updated_at } = payload;
+  // Ответ без `code` — старый сервер или усечённое тело: это «код не задан», а не
+  // мусор, иначе экран целиком упал бы в «api не отвечает».
+  const code = payload.code === undefined ? null : payload.code;
   if (
     typeof id !== 'number' ||
     typeof name !== 'string' ||
     typeof description !== 'string' ||
     typeof repo_url !== 'string' ||
+    (code !== null && typeof code !== 'string') ||
     typeof created_at !== 'string' ||
     typeof updated_at !== 'string'
   ) {
     return null;
   }
-  return { id, name, description, repo_url, created_at, updated_at };
+  return { id, name, description, repo_url, code, created_at, updated_at };
 }
 
 /** Тело успешного ответа с проектом; неразборчивое тело — не контракт, значит «не отвечает». */
