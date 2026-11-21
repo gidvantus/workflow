@@ -214,6 +214,30 @@ def _seed_project(
         return project.id
 
 
+def _add_development(
+    session_factory: sessionmaker[Session],
+    projects: list[tuple[int, str]],
+) -> None:
+    """Добавить отдел разработки уже заведённым проектам: пары `(id проекта, код)`.
+
+    Нужно тестам, где проект создан ручкой `POST /api/projects`: без отдела `rebuild`
+    проект в документ не поставит, а ручки отделов требуют справочника видов.
+    """
+    with session_factory() as session:
+        kind_id = _kind_id(session, "development")
+        for project_id, code in projects:
+            session.add(
+                Department(
+                    project_id=project_id,
+                    kind_id=kind_id,
+                    name="Разработка",
+                    repo_path=f"gidvantus/{code}",
+                    base_branch="main",
+                )
+            )
+        session.commit()
+
+
 def test_get_without_token_is_401(api_client: TestClient) -> None:
     """Без заголовка `X-Registry-Token` документ не отдаётся."""
     response = api_client.get("/api/registry")
@@ -520,6 +544,38 @@ def test_rebuild_with_codes_is_accepted_by_put(
 
     assert response.status_code == 200, response.text
     assert (rebuilt["revision"], response.json()["revision"]) == (1, 2)
+
+
+def test_rebuild_ids_are_the_codes_of_projects_created_by_api(
+    api_client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """Приёмочный сценарий задачи: пять живых проектов → `id` реестра ровно эти коды.
+
+    Проекты заводятся ручкой `POST /api/projects`, как их заведёт веб или человек, а
+    отдел добавляется прямо в базу: ручки отделов требуют справочника видов и к маршруту
+    задачи не относятся. Проверяется весь путь «код прошёл валидацию и записался →
+    `rebuild` поставил его `id` проекта» — то есть ровно случай, из-за которого живой
+    реестр терял локальные ключи (числовые `id` против слагов в файле), и то, что
+    собранный документ потом принимается `PUT`.
+    """
+    codes = ["vahta", "cloudpass", "brain", "CRMDormitory", "workflow"]
+    created: list[tuple[int, str]] = []
+    for code in codes:
+        response = api_client.post(
+            "/api/projects",
+            json={"name": code, "repo_url": f"gidvantus/{code}", "code": code},
+        )
+        assert response.status_code == 201, response.text
+        assert response.json()["code"] == code
+        created.append((response.json()["id"], code))
+
+    _add_development(session_factory, created)
+
+    rebuilt = api_client.post("/api/registry/rebuild", headers=HEADERS)
+    assert rebuilt.status_code == 200, rebuilt.text
+    document = rebuilt.json()["document"]
+    assert [project["id"] for project in document["projects"]] == codes
+    assert _put(api_client, document).status_code == 200
 
 
 def test_rebuild_then_put_creates_next_revision(
