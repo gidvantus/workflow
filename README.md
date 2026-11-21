@@ -191,9 +191,12 @@ DSH собирается из композиций Cordis. Здесь их дв�
    метки и бот. Источник правды — веб-приложение `app/` (`GET /api/registry`):
    диспетчер забирает документ оттуда и кладёт кешем в
    `~/.dsh/profiles/desktop/dsh-dev-department/projects.json`. Локальные ключи,
-   которых API не отдаёт (`default`, `labels`, `areas`, `frontendPort`, `apiPort`,
-   `enabled`), синхронизация сохраняет, прошлую версию файла — в
-   `projects.json.bak`. Адрес и токен ручки задаёт блок `registry` (`apiUrl`,
+   которых API не отдаёт (`default`, `labels`, `areas`, `frontendPort`, `apiPort`),
+   синхронизация сохраняет, прошлую версию файла — в
+   `projects.json.bak`. Флаг работы отдела (`enabled`) локальным ключом больше не
+   бывает: он живёт в базе веба и приходит из документа API, поэтому правка в файле
+   доедет только до следующей синхронизации и будет перекрыта — включать и выключать
+   отдел нужно в вебе. Адрес и токен ручки задаёт блок `registry` (`apiUrl`,
    `token`) в `dev-department.json`, на стороне стенда — `REGISTRY_TOKEN` в
    `app/.env`. Прежнюю форму v1 переводит
    `node plugins/tools/registry-v1-to-v2.mjs` (по умолчанию dry-run, `--write`

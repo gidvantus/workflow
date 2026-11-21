@@ -244,7 +244,8 @@ check('проект снова из веба', cacheDepartment().repo, 'gidvantu
 console.log('\n=== флаг работы отдела: пришёл из веба и локальным не стал ===')
 // С #65 флаг живёт в базе веба (`departments.enabled`): документ API приносит его и
 // перекрывает файл, а в `localKeys` записи про `enabled` быть не должно — иначе
-// человек решил бы, что флаг по-прежнему правится в файле руками.
+// человек решил бы, что флаг по-прежнему правится в файле руками. В `lost` его тоже
+// нет: `lost` — авария «ключу некуда лечь», а перекрытый флаг переписывать не мешает.
 const withEnabled = localDocument()
 withEnabled.projects[0].departments[0].enabled = true
 fs.writeFileSync(projectsFile, JSON.stringify(withEnabled, null, 2))
@@ -281,6 +282,9 @@ check(
 )
 check('проект остался в кеше', readCache().projects[0].title, 'Вахта из веба')
 check('локальные ключи всё ещё названы', cacheDepartment().frontendPort, 8095)
+// Перекрытие флага — не потеря: он не попадает ни в `lost`, ни в `localKeys`, и кеш
+// спокойно переписывается. Проверка держит формулировку из докстрок `overlay`.
+check('и в lost его тоже нет', status.registrySync.lost, [])
 // Выключенный отдел диспетчер не обслуживает: проект уходит из `serving`, кеш при этом
 // цел. Смена на прошлом кеше не продолжается — флаг доехал до отбора проектов.
 check('выключенный проект не обслуживается', status.registry.serving, [])
