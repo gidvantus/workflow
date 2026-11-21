@@ -232,6 +232,14 @@ body {
   color: var(--muted);
 }
 
+/* Код проекта в паспорте: тот же служебный слаг, под которым проект живёт в
+   документе реестра отдела, — моноширинный, чтобы не читался как часть описания. */
+.project-code {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
 /* Полоса подразделов — тихая линия, а не пилюли: подразделов два, и оба — один уровень
    навигации. У выбранной вкладки линия `--ink` толщиной 2 px сливается с линией полосы,
    счётчиков в подписях нет. */
@@ -508,6 +516,19 @@ body {
   margin: 0.125rem 0 0;
   font-size: 0.8125rem;
   line-height: 1.45;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Код проекта в строке списка: служебный слаг, поэтому моноширинный и тише
+   названия. Показывается только у проектов с заданным кодом. */
+.row__code {
+  margin: 0.125rem 0 0;
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 0.75rem;
+  line-height: 1.4;
   color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
