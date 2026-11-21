@@ -316,6 +316,10 @@ def _department_row(department: Department) -> dict[str, Any]:
     Незаполненное поле не попадает в документ вовсе, а не приходит `null`: плагин
     подставляет умолчание только на отсутствующем ключе, а `null` для `repo` или
     `workspace` он читает как значение.
+
+    Исключение — `enabled` и `maxRework`: у них есть значение, отличное от «не задано»,
+    поэтому они попадают в документ всегда. `enabled` — это `bool` из базы, а не
+    отсутствующий ключ: диспетчер необязательный ключ читает как «включён».
     """
     row: dict[str, Any] = {"kind": department.kind.code, "title": department.name}
     for key, value in (
@@ -333,6 +337,11 @@ def _department_row(department: Department) -> dict[str, Any]:
     if windows:
         row["windows"] = windows
     row["maxRework"] = department.max_rework
+    # Флаг работы отдела отдаётся **всегда**, в отличие от незаполненных полей: диспетчер
+    # читает `dept.enabled !== false`, поэтому отсутствующий ключ и `null` для него значат
+    # «включён». Опущенный ключ означал бы «включён» у выключенного отдела — то есть
+    # выключатель не доезжал бы до работы, а только выглядел выключенным в вебе.
+    row["enabled"] = department.enabled
     telegram = _telegram(department)
     if telegram is not None:
         row["telegram"] = telegram

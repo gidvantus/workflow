@@ -400,8 +400,9 @@ def update_department(
 
     Строковое поле со значением `null` или `""` стирает значение в базе: пустая строка в
     `departments` не появляется ни после одной правки. `max_rework: null` возвращает
-    умолчание `3`, а `notifications_enabled: null` значит «не менять»: у флажка нет
-    значения «пусто».
+    умолчание `3`, а `notifications_enabled: null` и `enabled: null` значат «не менять»: у
+    флажка нет значения «пусто». `enabled` — работа отдела: выключенный отдел диспетчер не
+    обслуживает, но настройки и роли у него остаются.
 
     Имя отдела не меняется: оно равно названию вида, а переименования отделов в
     приложении нет. Отдел между проектами не переезжает: `project_id` в теле — не поле
@@ -423,6 +424,9 @@ def update_department(
             updates[field] = validate_text(changes[field], max_length, too_long)
     if "max_rework" in changes:
         updates["max_rework"] = validate_max_rework(changes["max_rework"])
+    # Флаг работы отдела: `null` и отсутствие ключа — «не менять», как у уведомлений.
+    if payload.enabled is not None:
+        updates["enabled"] = payload.enabled
     if payload.notifications_enabled is not None:
         updates["notifications_enabled"] = payload.notifications_enabled
     roles: list[Role] | None = None

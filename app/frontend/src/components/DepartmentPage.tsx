@@ -2,8 +2,9 @@
  * Страница правки отдела: крошки, «← К проекту», заголовок с видом и датой, форма из
  * блоков, которые задаёт вид отдела.
  *
- * Страница заменяет прежнее окно правки: полей у отдела стало десять плюс уведомления,
- * и в диалог они не влезают. Адреса у неё нет — как и у страницы проекта, это состояние
+ * Страница заменяет прежнее окно правки: полей у отдела стало одиннадцать (флаг работы,
+ * расписание, роли, шесть машинных строк, лимит возврата и уведомления), и в диалог они
+ * не влезают. Адреса у неё нет — как и у страницы проекта, это состояние
  * `ProjectPage`, а не маршрут.
  *
  * **Состав и порядок блоков задаёт контракт.** `department.fields` — массив ключей,
@@ -115,7 +116,7 @@ function isTextFieldKey(key: string): key is TextFieldKey {
  * он берётся из `department.fields`; ключ, которого нет ни в одной секции, не рисуется.
  */
 const SECTIONS: readonly { title: string; keys: readonly string[] }[] = [
-  { title: 'Смена', keys: ['schedule', 'roles'] },
+  { title: 'Смена', keys: ['enabled', 'schedule', 'roles'] },
   {
     title: 'Где работает отдел',
     keys: [
@@ -256,6 +257,12 @@ export default function DepartmentPage({
     department.roles.map((role) => role.id),
   );
   const [maxRework, setMaxRework] = useState(String(department.max_rework));
+  /**
+   * Флаг работы отдела. Берётся из ответа как есть: умолчание `true` и смысл флага —
+   * серверные, фронт значение не выводит из других полей (пустое расписание ≠ выключено)
+   * и ничего не подставляет вместо отсутствующего ключа.
+   */
+  const [enabled, setEnabled] = useState(department.enabled);
   const [notifications, setNotifications] = useState(department.notifications_enabled);
   const [telegramToken, setTelegramToken] = useState(department.telegram_token ?? '');
   const [telegramChatId, setTelegramChatId] = useState(department.telegram_chat_id ?? '');
@@ -379,6 +386,11 @@ export default function DepartmentPage({
         }
       } else if (key === 'max_rework') {
         patch.max_rework = reworkOf(maxRework);
+      } else if (key === 'enabled') {
+        // Флаг уходит тем же единственным `PATCH`, что и остальные поля: второго пути
+        // правки (переключателя в списке) нет. Выключение ничего не стирает — расписание,
+        // роли и бот остаются в теле своими ключами.
+        patch.enabled = enabled;
       } else if (key === 'notifications') {
         patch.notifications_enabled = notifications;
         if (notifications) {
@@ -421,6 +433,30 @@ export default function DepartmentPage({
             setTexts((previous) => ({ ...previous, [key]: value }));
           }}
         />
+      </div>
+    );
+  }
+
+  /**
+   * Блок «Работа отдела включена» — тот же `.notify` и `.checkbox`, что у уведомлений,
+   * только без полей за флажком. Подпись и описание видны в обоих состояниях: за флагом
+   * полей нет, а последствие выключения (`Выключенный отдел не берёт задачи из очереди`)
+   * нужно прочитать до того, как снимаешь галочку. Ничего не гаснет и не прячется:
+   * отдел сохраняет расписание, роли и настройки, выключается только очередь.
+   */
+  function renderEnabled(): JSX.Element {
+    return (
+      <div className="notify" key="enabled">
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={enabled}
+            data-testid="department-field-enabled"
+            onChange={(event) => setEnabled(event.target.checked)}
+          />
+          <span>Работа отдела включена</span>
+        </label>
+        <p className="field__hint">Выключенный отдел не берёт задачи из очереди</p>
       </div>
     );
   }
@@ -681,7 +717,9 @@ export default function DepartmentPage({
         continue;
       }
       flushGrid();
-      if (key === 'schedule') {
+      if (key === 'enabled') {
+        blocks.push(renderEnabled());
+      } else if (key === 'schedule') {
         blocks.push(renderSchedule());
       } else if (key === 'roles') {
         blocks.push(renderRoles());
