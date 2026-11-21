@@ -687,8 +687,17 @@ SQLAlchemy не увидел бы изменения, а `updated_at` не сд�
   делают то же, что клик. Клик по «⋯» и по пунктам меню страницу **не** открывает:
   действия строки останавливают всплывание.
 - Одно окно на создание и правку: «Название», «Описание», «Адрес репозитория»,
-  «Сохранить» и «Отмена»; `role="dialog"`, `aria-modal`, Esc и подложка закрывают
-  окно, Tab удерживается внутри, фокус возвращается на кнопку, которая окно открыла.
+  «Код проекта», «Сохранить» и «Отмена»; `role="dialog"`, `aria-modal`, Esc и подложка
+  закрывают окно, Tab удерживается внутри, фокус возвращается на кнопку, которая окно
+  открыла.
+- «Код проекта» — необязательное поле: пустое значит «не задан», и проект в реестре
+  остаётся под числовым `id`. У проекта с заданным кодом поле в правке только для
+  чтения, подсказка под ним — `Код не меняется`; в тело `PATCH` такой код не попадает,
+  поэтому «Код проекта не меняется» из окна не приходит. Код из одних цифр, длиннее
+  32 символов и с посторонними символами отклоняет сервер, а текст его отказа виден
+  под полем дословно: своих формулировок окно не добавляет.
+- В строке списка код показывается, только если задан (`project-item-code`), в той же
+  строке, где название и описание.
 - Удаление — подтверждение с названием проекта; во время запроса кнопки неактивны.
 - После создания, правки и удаления список перечитывается с сервера. Оптимистичных
   обновлений нет: на экране только то, что вернул сервер.
@@ -719,9 +728,10 @@ SQLAlchemy не увидел бы изменения, а `updated_at` не сд�
 Элементы для тестов помечены `data-testid`: `app-status`, `app-check`, `app-error`,
 `projects-list`, `projects-state`, `projects-empty`, `projects-retry`, `project-error`,
 `project-create`, `project-item`, `project-item-name`, `project-item-open`,
-`project-item-description`,
+`project-item-description`, `project-item-code`,
 `project-edit`, `project-delete`, `project-form`, `project-form-name`,
-`project-form-description`, `project-form-repo`, `project-form-submit`,
+`project-form-description`, `project-form-repo`, `project-form-code`,
+`project-form-code-hint`, `project-form-submit`,
 `project-form-cancel`, `project-form-error`, `project-delete-confirm`,
 `project-delete-confirm-submit`, `project-delete-confirm-cancel`,
 `project-delete-confirm-error`. Своих тестов и линтеров у фронтенда в этой задаче нет;
@@ -1072,7 +1082,8 @@ Esc и подложка закрывают окно, Tab удерживаетс�
 подсказка «Необязательно. В рублях, например 1250.00»), кнопки «Сохранить» и «Отмена».
 
 `data-testid` страницы и подраздела: `project-page`, `project-back`, `project-title`,
-`project-tab-tasks`, `project-tab-departments`, `tasks-list`, `tasks-state`,
+`project-code`, `project-tab-tasks`, `project-tab-departments`, `tasks-list`,
+`tasks-state`,
 `tasks-empty`, `tasks-retry`, `tasks-error`, `task-create`, `task-item`, `task-item-id`,
 `task-item-name`, `task-item-cost`, `task-form`, `task-form-name`,
 `task-form-description`, `task-form-cost`, `task-form-submit`, `task-form-cancel`,
