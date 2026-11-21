@@ -61,12 +61,19 @@
 | `composeProject` | имя своего compose-стенда |
 | `frontendPort`, `apiPort` | порты стенда |
 | `artifacts` | каталог артефактов вне рабочей копии |
-| `enabled`, `windows`, `maxRework`, `maxAttempts`, `stuckAfterMinutes` | включённость, окна смен и лимиты |
+| `enabled` | работа отдела: выключенный диспетчер не обслуживает — проект уходит в `disabled` |
+| `windows`, `maxRework`, `maxAttempts`, `stuckAfterMinutes` | окна смен и лимиты |
 | `labels` | переопределение имён меток конвейера, если проект их переименовал |
 | `areas` | каталоги половин работы: `backend` и `frontend` |
 | `telegram` | бот проекта: `token`, `chatId`, `projects`, `voiceLang` |
 
-`default`, `labels`, `areas`, `frontendPort`, `apiPort`, `enabled` и
+`enabled` — признак работы отдела — приходит из документа API вместе с остальными
+полями отдела: в базе веба он живёт колонкой `departments.enabled`, а чекбокс на
+странице правки отдела шлёт его тем же `PATCH`. Отсутствие ключа в документе и `null`
+диспетчер читает как «включён», поэтому `rebuild` отдаёт ключ **всегда** — иначе
+выключенный отдел молча обслуживался бы дальше.
+
+`default`, `labels`, `areas`, `frontendPort`, `apiPort` и
 `telegram.projects` API не отдаёт — это локальные ключи файла. Синхронизация их
 сохраняет (`overlay` в `plugins/registry.mjs`), а остальное приходит из документа
 API. Прошлая версия файла остаётся в `projects.json.bak`.

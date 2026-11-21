@@ -697,9 +697,11 @@ function projectRow(registry, id, shared) {
   const windows = ownWindows.windows || shared.windows
   const windowsSource = ownWindows.windows ? 'проект' : (shared.windows ? 'общее' : 'нет')
 
-  // Отдел может быть выключен двумя способами: ключом `enabled` и отсутствием
-  // отдела разработки вовсе. Второй — не «включён по умолчанию»: иначе проект
-  // чужого вида давал бы проблему «не задан repo» на каждом тике.
+  // Отдел может быть выключен двумя способами: флагом `enabled` и отсутствием отдела
+  // разработки вовсе. Второй — не «включён по умолчанию»: иначе проект чужого вида
+  // давал бы проблему «не задан repo» на каждом тике. Первый приходит из документа
+  // реестра от веба (`departments.enabled`): отсутствие ключа и `null` — «включён»,
+  // поэтому выключенным считается только явный `false`.
   const enabled = found.department !== null && dept.enabled !== false
   const pick = (key, min, max) => {
     if (dept[key] === undefined) return shared[key]

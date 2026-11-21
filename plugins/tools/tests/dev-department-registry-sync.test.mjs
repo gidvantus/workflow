@@ -241,6 +241,80 @@ check('id совпали — синхронизация снова удачна'
 check('lost очищен', status.registrySync.lost, [])
 check('проект снова из веба', cacheDepartment().repo, 'gidvantus/vahta')
 
+console.log('\n=== флаг работы отдела: пришёл из веба и локальным не стал ===')
+// С #65 флаг живёт в базе веба (`departments.enabled`): документ API приносит его и
+// перекрывает файл, а в `localKeys` записи про `enabled` быть не должно — иначе
+// человек решил бы, что флаг по-прежнему правится в файле руками.
+const withEnabled = localDocument()
+withEnabled.projects[0].departments[0].enabled = true
+fs.writeFileSync(projectsFile, JSON.stringify(withEnabled, null, 2))
+mode = {
+  kind: 'ok',
+  status: 200,
+  body: {
+    version: 2,
+    projects: [
+      {
+        id: 'vahta',
+        title: 'Вахта из веба',
+        departments: [
+          {
+            kind: 'development',
+            repo: 'gidvantus/vahta',
+            base: 'main',
+            workspace: WORKSPACE,
+            windows: [{ start: '13:00', stop: '04:00' }],
+            enabled: false,
+          },
+        ],
+      },
+    ],
+  },
+}
+await app.tick()
+status = await app.status()
+check('выключение из веба доехало в кеш', cacheDepartment().enabled, false)
+check(
+  'про `enabled` в локальных ключах не говорят',
+  status.registrySync.localKeys.some((key) => key.endsWith('.enabled')),
+  false,
+)
+check('проект остался в кеше', readCache().projects[0].title, 'Вахта из веба')
+check('локальные ключи всё ещё названы', cacheDepartment().frontendPort, 8095)
+// Выключенный отдел диспетчер не обслуживает: проект уходит из `serving`, кеш при этом
+// цел. Смена на прошлом кеше не продолжается — флаг доехал до отбора проектов.
+check('выключенный проект не обслуживается', status.registry.serving, [])
+check('и назван выключенным', status.registry.disabled, ['vahta'])
+// Возврат в норму: включённый отдел снова обслуживается, и снова по документу веба.
+mode = {
+  kind: 'ok',
+  status: 200,
+  body: {
+    version: 2,
+    projects: [
+      {
+        id: 'vahta',
+        title: 'Вахта из веба',
+        departments: [
+          {
+            kind: 'development',
+            repo: 'gidvantus/vahta',
+            base: 'main',
+            workspace: WORKSPACE,
+            windows: [{ start: '13:00', stop: '04:00' }],
+            enabled: true,
+          },
+        ],
+      },
+    ],
+  },
+}
+await app.tick()
+status = await app.status()
+check('включили — проект снова обслуживается', status.registry.serving, ['vahta'])
+check('и выключенных нет', status.registry.disabled, [])
+check('флаг в кеше — из веба', cacheDepartment().enabled, true)
+
 console.log('\n=== 401: кеш не тронут ===')
 mode = { kind: 'status', status: 401 }
 const beforeDenied = fs.readFileSync(projectsFile, 'utf8')
