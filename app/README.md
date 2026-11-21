@@ -880,6 +880,12 @@ SQLAlchemy не увидел бы изменения, а `updated_at` не сд�
   названиям из справочника, дата обновления и действия под «⋯» — «Изменить» и «Удалить».
   Сетка строки и заголовки колонок не менялись: вид стоит строкой под названием, а не
   отдельной колонкой, колонка времени остаётся 8.5 rem.
+- У отдела с `enabled: false` под видом стоит третья строка «отдел выключен»
+  (`department-item-disabled`): такой отдел диспетчер не обслуживает, хотя настройки и
+  роли у него на месте. Пометка — не ошибка, поэтому это отдельная строка того же кегля,
+  но тяжелее и темнее вида, а не пилюля, капс или `--danger`. У включённого отдела третьей
+  строки нет, и высота его строки не меняется; у вида без флага (у «Маркетинга») пометки
+  не бывает.
 - Окна в ячейке идут друг под другом, по одному в строке (запятая остаётся концом
   предыдущей строки): разряды `13:00` и `07:00` встают друг под другом, и набор читается
   как расписание. На ширине ≤ 900 px окна встают в одну строку через запятую — там у
@@ -926,7 +932,8 @@ SQLAlchemy не увидел бы изменения, а `updated_at` не сд�
 `data-testid` вкладки, карточки и окна создания: `project-tab-departments`,
 `departments-list`, `departments-state`, `departments-empty`, `departments-retry`,
 `department-error`, `department-create`, `department-item`, `department-item-name`,
-`department-item-kind`, `department-item-time`, `department-item-roles`,
+`department-item-kind`, `department-item-disabled`, `department-item-time`,
+`department-item-roles`,
 `department-edit`, `department-delete`, `department-create-dialog`,
 `department-create-kind-<code>`, `department-create-submit`, `department-create-cancel`,
 `department-create-error`, `department-create-kinds-error`,
@@ -985,6 +992,15 @@ SQLAlchemy не увидел бы изменения, а `updated_at` не сд�
   считается и своего текста не имеет, поэтому с экрана он недостижим. Диапазон `0..99`
   по-прежнему проверяет сервер и отвечает своим текстом, пустое поле — `null`
   (умолчание сервера, `3`).
+- **Флаг работы отдела.** `enabled` — первое поле секции «Смена» (первым его отдаёт и
+  каталог вида): чекбокс «Работа отдела включена» с постоянной подсказкой «Выключенный
+  отдел не берёт задачи из очереди». Подсказка видна в обоих состояниях, в отличие от
+  блока уведомлений: за флажком полей нет, а последствие нужно прочитать до того, как
+  снимаешь галочку. При выключении ничего не гаснет и не прячется — расписание, роли, пути
+  и уведомления остаются редактируемыми, а флаг уходит тем же единственным `PATCH`
+  (`patch.enabled = enabled`), без подтверждения, отмены и тоста. Значение берётся из
+  ответа и других полей не выводится (пустое расписание ≠ выключено); у вида без флага
+  чекбокса нет, и фронт его не подставляет.
 - **Выключенный флажок уведомлений не стирает токен.** Поля «API telegram бота» и «Ваш ID»
   при выключенном флажке не рисуются вовсе, а `telegram_token`/`telegram_chat_id` уходят в
   теле только вместе с включённым флажком: значения из базы остаются на месте.
@@ -1024,7 +1040,8 @@ SQLAlchemy не увидел бы изменения, а `updated_at` не сд�
 | `Сервер не отвечает` | api недоступен: сеть, остановленный контейнер, прокси |
 
 `data-testid` страницы: `department-page`, `department-page-back`,
-`department-page-title`, `department-page-kind`, `department-field-windows`,
+`department-page-title`, `department-page-kind`, `department-field-enabled`,
+`department-field-windows`,
 `department-field-window-start-<i>`, `department-field-window-end-<i>`,
 `department-field-window-remove-<i>`, `department-field-window-add`,
 `department-field-role-<code>`, `department-field-repo`,
