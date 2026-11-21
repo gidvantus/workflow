@@ -336,16 +336,22 @@ export function projectFields(project) {
  * обеих сторон, из файла добираются недостающие подполя, а присланные вебом
  * остаются как есть.
  *
- * Возвращает `{document, localKeys, droppedProjects}`:
+ * Возвращает `{document, localKeys, droppedProjects, lost}`:
  * `localKeys` — что сохранено и живёт только в файле (это печатается в статусе),
  * `droppedProjects` — проекты, которых в документе API нет вовсе: их ключи
- * сохранить некуда, и молчать об этом нельзя — человек ищет свой telegram.
+ * сохранить некуда, и молчать об этом нельзя — человек ищет свой telegram,
+ * `lost` — второй канал потери, названный поимённо: `[{id, keys, departments}]`,
+ * где `keys` — локальные ключи, которым некуда лечь, а `departments` — виды
+ * локальных отделов, которых в документе нет. Склейка по-прежнему не бросает
+ * такие ключи в результат, но и не теряет их молча: `droppedProjects` — это
+ * `lost[].id` проектов, отсутствующих в документе целиком.
  */
 export function overlay(apiDocument, localDocument) {
   const document = clone(apiDocument)
   const localKeys = []
   const droppedProjects = []
-  if (!isObject(localDocument)) return { document, localKeys, droppedProjects }
+  const lost = []
+  if (!isObject(localDocument)) return { document, localKeys, droppedProjects, lost }
 
   for (const key of Object.keys(localDocument)) {
     if (key === 'version' || key === 'projects') continue
@@ -363,6 +369,7 @@ export function overlay(apiDocument, localDocument) {
 
   const kept = new Set()
   for (const project of projectsOf(document)) {
+    if (!isObject(project)) continue
     const local = locals.get(project.id)
     if (!local) continue
     kept.add(project.id)
@@ -374,9 +381,11 @@ export function overlay(apiDocument, localDocument) {
     }
     const localDepartments = Array.isArray(local.departments) ? local.departments : []
     const departments = Array.isArray(project.departments) ? project.departments : []
+    const matchedKinds = new Set()
     for (const department of departments) {
       const match = localDepartments.find((candidate) => isObject(candidate) && candidate.kind === department.kind)
       if (!match) continue
+      matchedKinds.add(department.kind)
       for (const key of Object.keys(match)) {
         if (key === 'kind') continue
         // Бот — единственный блок, у которого часть полей приходит из веба
@@ -397,11 +406,52 @@ export function overlay(apiDocument, localDocument) {
         localKeys.push(project.id + '.departments[' + department.kind + '].' + key)
       }
     }
+    // Второй канал потери: отдел, который живёт в файле, а вида в документе нет.
+    // Проект при этом совпал, поэтому `droppedProjects` его не называет — без
+    // этой ветки отдел исчез бы молча вместе со своими ключами.
+    const lostDepartments = []
+    const lostKeys = []
+    for (const candidate of localDepartments) {
+      if (!isObject(candidate) || !nonEmptyString(candidate.kind)) continue
+      if (matchedKinds.has(candidate.kind)) continue
+      lostDepartments.push(candidate.kind)
+      for (const key of Object.keys(candidate)) {
+        if (key === 'kind') continue
+        lostKeys.push(project.id + '.departments[' + candidate.kind + '].' + key)
+      }
+    }
+    if (lostDepartments.length > 0) lost.push({ id: project.id, keys: lostKeys, departments: lostDepartments })
   }
-  for (const id of locals.keys()) {
-    if (!kept.has(id)) droppedProjects.push(id)
+  for (const [id, local] of locals) {
+    if (kept.has(id)) continue
+    droppedProjects.push(id)
+    lost.push(lostProject(id, local))
   }
-  return { document, localKeys, droppedProjects }
+  return { document, localKeys, droppedProjects, lost }
+}
+
+/**
+ * Что именно пропадёт, если проекта нет в документе API: его собственные ключи и
+ * ключи его отделов. Без этого перечня человек видит только имя проекта и идёт
+ * искать глазами, какие поля он потерял.
+ */
+function lostProject(id, local) {
+  const keys = []
+  const departments = []
+  for (const key of Object.keys(local)) {
+    if (key === 'id' || key === 'departments') continue
+    keys.push(id + '.' + key)
+  }
+  const localDepartments = Array.isArray(local.departments) ? local.departments : []
+  for (const department of localDepartments) {
+    if (!isObject(department) || !nonEmptyString(department.kind)) continue
+    departments.push(department.kind)
+    for (const key of Object.keys(department)) {
+      if (key === 'kind') continue
+      keys.push(id + '.departments[' + department.kind + '].' + key)
+    }
+  }
+  return { id, keys, departments }
 }
 
 /**
