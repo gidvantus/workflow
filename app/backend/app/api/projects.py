@@ -26,9 +26,13 @@ DbSession = Annotated[Session, Depends(get_db)]
 NAME_MAX_LENGTH = 200
 REPO_URL_MAX_LENGTH = 500
 DESCRIPTION_MAX_LENGTH = 2000
+CODE_MAX_LENGTH = 32
 
 # Ссылка (`https://…`, `http://…`) или короткая запись `owner/repo`.
 REPO_URL_PATTERN = re.compile(r"^(https?://\S+|[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)$")
+# Код проекта: латиница, цифры и дефис; первый символ — не дефис. Верхний регистр
+# разрешён: в живом реестре отдела есть слаг `CRMDormitory`.
+CODE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*$")
 
 NAME_REQUIRED = "Укажите название проекта"
 NAME_TOO_LONG = "Название длиннее 200 символов"
@@ -37,7 +41,15 @@ REPO_URL_INVALID = "Адрес репозитория должен быть сс
 DESCRIPTION_TOO_LONG = "Описание длиннее 2000 символов"
 NO_FIELDS_TO_UPDATE = "Нет полей для изменения"
 NAME_TAKEN = "Проект с таким названием уже есть"
+CODE_TAKEN = "Код проекта уже занят"
+CODE_INVALID = "Код проекта указывается латиницей, цифрами и дефисом"
+CODE_ALL_DIGITS = "Код проекта не может состоять только из цифр"
+CODE_TOO_LONG = "Код проекта длиннее 32 символов"
+CODE_IMMUTABLE = "Код проекта не меняется"
 PROJECT_NOT_FOUND = "Проект не найден"
+
+# Имя частичного уникального индекса кода: по нему отказ гонки получает правильный текст.
+CODE_INDEX = "uq_projects_code_alive"
 
 
 def _reject(detail: str) -> HTTPException:
@@ -74,6 +86,28 @@ def validate_description(value: str) -> str:
     return value
 
 
+def validate_code(value: str | None) -> str | None:
+    """Код проекта: вернуть обрезанный код или `None`, если код не задан.
+
+    `None` и пустая строка значат одно — «кода нет»: пустой `code` в теле запроса не
+    ошибка формата, а «поле не заполнено». Остальные отказы — дословно из контракта;
+    порядок проверок фиксирован: длина, формат, «не только цифры».
+    """
+    if value is None:
+        return None
+    code = value.strip()
+    if not code:
+        return None
+    if len(code) > CODE_MAX_LENGTH:
+        raise _reject(CODE_TOO_LONG)
+    if not CODE_PATTERN.match(code):
+        raise _reject(CODE_INVALID)
+    # Код из одних цифр столкнулся бы с числовым запасным `id` в документе реестра.
+    if code.isdigit():
+        raise _reject(CODE_ALL_DIGITS)
+    return code
+
+
 def _name_is_taken(db: Session, name: str, exclude_id: int | None = None) -> bool:
     """Занято ли название среди живых строк: сравнение без учёта регистра.
 
@@ -89,6 +123,21 @@ def _name_is_taken(db: Session, name: str, exclude_id: int | None = None) -> boo
     return db.execute(statement).first() is not None
 
 
+def _code_is_taken(db: Session, code: str, exclude_id: int | None = None) -> bool:
+    """Занят ли код среди живых проектов: сравнение без учёта регистра.
+
+    Код удалённого проекта свободен по тому же правилу, что и имя: индекс
+    `uq_projects_code_alive` смотрит только на живые строки с заданным кодом.
+    """
+    statement = select(Project.id).where(
+        Project.deleted_at.is_(None),
+        func.lower(Project.code) == code.lower(),
+    )
+    if exclude_id is not None:
+        statement = statement.where(Project.id != exclude_id)
+    return db.execute(statement).first() is not None
+
+
 def _get_alive_project(db: Session, project_id: int) -> Project:
     """Живой проект по id. Удалённый — это `404`: воскрешения через `PATCH` не бывает."""
     project = db.get(Project, project_id)
@@ -97,13 +146,35 @@ def _get_alive_project(db: Session, project_id: int) -> Project:
     return project
 
 
+def _conflict_detail(error: IntegrityError) -> str:
+    """Какой уникальный индекс сработал: имя проекта или его код.
+
+    Проверка перед записью не атомарна, поэтому две одновременные правки ловит индекс.
+    Тексты отказов у этих индексов разные, и угадывать по полю нельзя — единственный
+    надёжный признак в `IntegrityError` — имя сработавшего индекса: и PostgreSQL
+    (`duplicate key value violates unique constraint "…"`), и SQLite
+    (`UNIQUE constraint failed: index "…"`) содержат его в тексте. Разобрать текст не
+    удалось — отвечаем про имя: этот индекс появился раньше, и старый текст про имя
+    остаётся поведением по умолчанию.
+    """
+    if CODE_INDEX in str(error.orig):
+        return CODE_TAKEN
+    return NAME_TAKEN
+
+
 def _commit_or_conflict(db: Session) -> None:
-    """Фиксация изменений; гонку по имени ловит индекс и превращается в тот же `409`."""
+    """Зафиксировать изменения; гонку ловит индекс и превращается в `409` с текстом.
+
+    Проверка занятости до записи не атомарна: две одновременные правки проходят её обе,
+    и вторую ловит частичный уникальный индекс. Текст отказа выбирается по имени
+    сработавшего индекса (`_conflict_detail`), чтобы фронт получил ту же фразу, что и
+    при обычной проверке.
+    """
     try:
         db.commit()
     except IntegrityError as error:
         db.rollback()
-        raise HTTPException(status.HTTP_409_CONFLICT, NAME_TAKEN) from error
+        raise HTTPException(status.HTTP_409_CONFLICT, _conflict_detail(error)) from error
 
 
 @router.get(
@@ -124,18 +195,23 @@ def list_projects(db: DbSession) -> Sequence[Project]:
     status_code=status.HTTP_201_CREATED,
     summary="Создание проекта",
     responses={
-        status.HTTP_409_CONFLICT: {"description": f"Имя занято: «{NAME_TAKEN}»."},
+        status.HTTP_409_CONFLICT: {
+            "description": f"Имя занято: «{NAME_TAKEN}»; код занят: «{CODE_TAKEN}»."
+        },
     },
 )
 def create_project(payload: ProjectCreate, db: DbSession) -> Project:
-    """`201` с созданным проектом; `409` — имя занято живым проектом."""
+    """`201` с созданным проектом; `409` — имя или код заняты живым проектом."""
     name = validate_name(payload.name)
     repo_url = validate_repo_url(payload.repo_url)
     description = validate_description(payload.description)
+    code = validate_code(payload.code)
     if _name_is_taken(db, name):
         raise HTTPException(status.HTTP_409_CONFLICT, NAME_TAKEN)
+    if code is not None and _code_is_taken(db, code):
+        raise HTTPException(status.HTTP_409_CONFLICT, CODE_TAKEN)
 
-    project = Project(name=name, description=description, repo_url=repo_url)
+    project = Project(name=name, description=description, repo_url=repo_url, code=code)
     db.add(project)
     _commit_or_conflict(db)
     db.refresh(project)
@@ -148,9 +224,13 @@ def create_project(payload: ProjectCreate, db: DbSession) -> Project:
     summary="Правка проекта",
     responses={
         status.HTTP_404_NOT_FOUND: {"description": f"Проекта нет: «{PROJECT_NOT_FOUND}»."},
-        status.HTTP_409_CONFLICT: {"description": f"Имя занято: «{NAME_TAKEN}»."},
+        status.HTTP_409_CONFLICT: {
+            "description": f"Имя занято: «{NAME_TAKEN}»; код занят: «{CODE_TAKEN}»."
+        },
         status.HTTP_422_UNPROCESSABLE_CONTENT: {
-            "description": f"Пустое тело: «{NO_FIELDS_TO_UPDATE}».",
+            "description": (
+                f"Пустое тело: «{NO_FIELDS_TO_UPDATE}»; смена заданного кода: «{CODE_IMMUTABLE}»."
+            ),
         },
     },
 )
@@ -159,10 +239,14 @@ def update_project(
     payload: ProjectUpdate,
     db: DbSession,
 ) -> Project:
-    """`200` с обновлённым проектом; `422` на пустое тело, `404` для удалённого.
+    """`200` с обновлённым проектом; `422` на пустое тело и смену кода, `404` для удалённого.
 
     Сначала проверяются все присланные поля, и только потом они присваиваются:
     отказ не должен оставлять в сессии половину правки.
+
+    Код задаётся один раз: смена заданного кода сменила бы `id` проекта в реестре, а
+    стереть код нельзя тем более. Пустой `code` (`""` или `null`) — это «не задан», а не
+    «стереть»: у проекта без кода такой запрос ничего не меняет.
     """
     project = _get_alive_project(db, project_id)
     changes = payload.model_dump(exclude_unset=True)
@@ -172,6 +256,7 @@ def update_project(
     name: str | None = None
     repo_url: str | None = None
     description: str | None = None
+    code: str | None = None
     if "name" in changes:
         name = validate_name(changes["name"] or "")
         if _name_is_taken(db, name, exclude_id=project.id):
@@ -180,6 +265,16 @@ def update_project(
         repo_url = validate_repo_url(changes["repo_url"] or "")
     if "description" in changes:
         description = validate_description(changes["description"] or "")
+    if "code" in changes:
+        requested = validate_code(changes["code"])
+        if project.code is not None:
+            # Заданный код неизменяем: и другое значение, и пустое — один и тот же отказ.
+            if requested != project.code:
+                raise _reject(CODE_IMMUTABLE)
+        elif requested is not None:
+            if _code_is_taken(db, requested, exclude_id=project.id):
+                raise HTTPException(status.HTTP_409_CONFLICT, CODE_TAKEN)
+            code = requested
 
     if name is not None:
         project.name = name
@@ -187,6 +282,8 @@ def update_project(
         project.repo_url = repo_url
     if description is not None:
         project.description = description
+    if code is not None:
+        project.code = code
 
     _commit_or_conflict(db)
     db.refresh(project)
