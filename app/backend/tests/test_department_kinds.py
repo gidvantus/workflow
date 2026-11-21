@@ -26,6 +26,7 @@ PROJECT: dict[str, str] = {
 }
 
 DEVELOPMENT_FIELDS = [
+    "enabled",
     "schedule",
     "roles",
     "repo_path",
@@ -78,23 +79,29 @@ def test_kind_body_has_exactly_contract_fields(client: TestClient) -> None:
         assert set(item) == {"id", "code", "title", "fields"}
 
 
-def test_development_has_ten_fields_in_catalog_order(client: TestClient) -> None:
-    """У «Разработки» десять полей, и порядок — порядок каталога, а не алфавит."""
+def test_development_has_eleven_fields_in_catalog_order(client: TestClient) -> None:
+    """У «Разработки» одиннадцать полей, и порядок — порядок каталога, а не алфавит."""
     body: list[dict[str, Any]] = client.get(KINDS_URL).json()
 
     development = next(item for item in body if item["code"] == "development")
     assert development["fields"] == DEVELOPMENT_FIELDS
     assert development["fields"] == list(FIELD_KEYS_BY_CODE["development"])
-    assert len(development["fields"]) == 10
+    assert len(development["fields"]) == 11
+    # Флаг работы отдела — первое поле «Смены»: диспетчер обслуживает только включённый
+    # отдел, и человек читает это до расписания и ролей.
+    assert development["fields"][0] == "enabled"
 
 
 def test_marketing_has_four_fields(client: TestClient) -> None:
-    """У «Маркетинга» только четыре строки: ни времени, ни ролей, ни лимита, ни уведомлений."""
+    """У «Маркетинга» только четыре строки: ни флага работы, ни времени, ни ролей."""
     body: list[dict[str, Any]] = client.get(KINDS_URL).json()
 
     marketing = next(item for item in body if item["code"] == "marketing")
     assert marketing["fields"] == MARKETING_FIELDS
     assert len(marketing["fields"]) == 4
+    # Признак включённости показывает только вид «Разработка»: диспетчер обслуживает
+    # ровно отдел разработки, флага работы у маркетинга нет.
+    assert "enabled" not in marketing["fields"]
 
 
 def test_kind_absent_from_catalog_has_no_fields(

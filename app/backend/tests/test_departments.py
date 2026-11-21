@@ -78,6 +78,7 @@ DEPARTMENT_FIELDS = {
     "telegram_token",
     "telegram_chat_id",
     "max_rework",
+    "enabled",
     "notifications_enabled",
     "created_at",
     "updated_at",
@@ -211,6 +212,9 @@ def test_create_returns_created_department(client: TestClient, project_id: int) 
     assert body["windows"] == []
     assert body["roles"] == []
     assert body["max_rework"] == 3
+    # Работа отдела включена: выключенный отдел перестал бы брать задачи, и умолчание
+    # `false` остановило бы работу после выкатки.
+    assert body["enabled"] is True
     assert body["notifications_enabled"] is False
     for field in TEXT_FIELDS:
         assert body[field] is None
@@ -578,6 +582,78 @@ def test_patch_notifications_null_does_not_change(
 
     assert response.status_code == status.HTTP_200_OK
     assert response.json()["notifications_enabled"] is True
+
+
+def test_patch_enabled_toggle_keeps_settings(
+    client: TestClient,
+    project_id: int,
+) -> None:
+    """Выключение отдела не стирает ни расписание, ни роли, ни строки, ни бота.
+
+    Флаг работы отдела — «диспетчер его не обслуживает», а не «настроек больше нет»:
+    отдел выключается и включается тем же `PATCH`, и всё заполненное остаётся на месте.
+    """
+    created = _create(client, project_id)
+    filled = client.patch(
+        _department_url(created["id"]),
+        json={
+            "repo_path": "gidvantus/workflow",
+            "workspace": "D:\\Agents\\Workflow",
+            "max_rework": 5,
+            "windows": [{"start_time": "13:00", "end_time": "04:00"}],
+            "notifications_enabled": True,
+            "telegram_token": TELEGRAM_TOKEN,
+            "telegram_chat_id": TELEGRAM_CHAT_ID,
+        },
+    )
+    assert filled.status_code == status.HTTP_200_OK, filled.text
+    assert filled.json()["enabled"] is True
+
+    disabled = client.patch(_department_url(created["id"]), json={"enabled": False})
+
+    assert disabled.status_code == status.HTTP_200_OK
+    body = disabled.json()
+    assert body["enabled"] is False
+    assert body["repo_path"] == "gidvantus/workflow"
+    assert body["workspace"] == "D:\\Agents\\Workflow"
+    assert body["max_rework"] == 5
+    assert body["windows"] == [{"start_time": "13:00", "end_time": "04:00"}]
+    assert body["notifications_enabled"] is True
+    assert body["telegram_token"] == TELEGRAM_TOKEN
+    assert body["telegram_chat_id"] == TELEGRAM_CHAT_ID
+    # Роли выключение не трогает: набор в ответе тот же, что был до правки.
+    assert body["roles"] == filled.json()["roles"]
+
+    enabled_again = client.patch(_department_url(created["id"]), json={"enabled": True})
+
+    assert enabled_again.status_code == status.HTTP_200_OK
+    assert enabled_again.json()["enabled"] is True
+
+
+def test_patch_enabled_null_does_not_change(client: TestClient, project_id: int) -> None:
+    """`null` для флага работы — «не менять»: значения «пусто» у флажка нет."""
+    created = _create(client, project_id)
+    assert (
+        client.patch(
+            _department_url(created["id"]),
+            json={"enabled": False},
+        ).json()["enabled"]
+        is False
+    )
+
+    response = client.patch(_department_url(created["id"]), json={"enabled": None})
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()["enabled"] is False
+
+
+def test_patch_enabled_rejects_not_boolean(client: TestClient, project_id: int) -> None:
+    """`"выключен"` во флаге — `422` схемы: флажок булев, строку он не принимает."""
+    created = _create(client, project_id)
+
+    response = client.patch(_department_url(created["id"]), json={"enabled": "выключен"})
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
 
 
 def test_patch_ignores_sent_project_id(client: TestClient) -> None:

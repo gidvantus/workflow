@@ -422,6 +422,9 @@ def test_rebuild_builds_document_from_database(
             {"start": "07:00", "stop": "09:00"},
         ],
         "maxRework": 5,
+        # Флаг работы отдела попадает в документ всегда — даже включённым: отсутствие
+        # ключа диспетчер читает как «включён», и опускать его нельзя.
+        "enabled": True,
         "telegram": {"token": "bot-token", "chatId": 294292338},
     }
     # Второй проект: уведомления выключены — ключа бота нет; маркетинг в документе есть.
@@ -432,9 +435,50 @@ def test_rebuild_builds_document_from_database(
             "repo": "gidvantus/brain",
             "base": "main",
             "maxRework": 3,
+            "enabled": True,
         },
-        {"kind": "marketing", "title": "Маркетинг", "repo": "gidvantus/brain", "maxRework": 3},
+        {
+            "kind": "marketing",
+            "title": "Маркетинг",
+            "repo": "gidvantus/brain",
+            "maxRework": 3,
+            "enabled": True,
+        },
     ]
+    assert api_client.get("/api/registry", headers=HEADERS).json() == document
+
+
+def test_rebuild_gives_disabled_department_enabled_false(
+    api_client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """Выключенный отдел уходит в документ с `enabled: false`, а не без ключа.
+
+    Диспетчер читает `dept.enabled !== false`: опущенный ключ он поймёт как «включён», и
+    выключение из веба до работы не доедет.
+    """
+    _seed_project(
+        session_factory,
+        "Workflow",
+        [{"repo_path": "gidvantus/workflow", "enabled": False}],
+    )
+
+    document = api_client.post("/api/registry/rebuild", headers=HEADERS).json()["document"]
+
+    assert document["projects"][0]["departments"][0]["enabled"] is False
+
+
+def test_stored_document_keeps_non_boolean_enabled(
+    api_client: TestClient,
+) -> None:
+    """`PUT` с небулевым `enabled` принимается и сохраняется как прислан.
+
+    `validate_document` булево не проверяет: значение из базы всегда `bool`, а небулево
+    значение в присланном документе диспетчер прочтёт как «включён» — это записанное
+    решение, а не недоделка. Проверка здесь держит решение от случайного расширения.
+    """
+    document = _with_department(enabled="да")
+
+    assert _put(api_client, document).status_code == 200
     assert api_client.get("/api/registry", headers=HEADERS).json() == document
 
 
