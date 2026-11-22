@@ -409,7 +409,7 @@ def test_put_renames_label_and_registry_shows_it(
     """Переименование метки доезжает до документа реестра: это и есть путь до диспетчера."""
     _rebuild(api_client)
     before = _registry_department(api_client, department_id)
-    assert "process" not in before
+    assert before["process"] is None
 
     document = default_process()
     document["labels"]["test"] = "qa-ready"
@@ -421,14 +421,19 @@ def test_put_renames_label_and_registry_shows_it(
     assert after["process"]["labels"]["test"] == "qa-ready"
 
 
-def test_put_without_saved_process_keeps_key_out_of_registry(
+def test_put_without_saved_process_sends_null_to_registry(
     api_client: TestClient,
     department_id: int,
 ) -> None:
-    """Незаполненный процесс в документ реестра не попадает, как все необязательные поля."""
+    """Ключ `process` есть всегда, а «своего процесса нет» — это `null`.
+
+    Пропущенный ключ `plugins/registry.mjs` читает как «веб про процесс молчит» и оставляет
+    в файле прежнюю таблицу: снятый в вебе процесс продолжал бы исполняться диспетчером.
+    """
     _rebuild(api_client)
     department = _registry_department(api_client, department_id)
-    assert "process" not in department
+    assert "process" in department
+    assert department["process"] is None
 
 
 def test_put_normalizes_document(client: TestClient, department_id: int) -> None:

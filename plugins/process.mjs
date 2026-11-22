@@ -12,8 +12,9 @@
 //
 // Копия таблицы умолчаний есть и в Python (`app/backend/app/process_defaults.py`):
 // `api` собирается из `app/backend`, диспетчер — из `plugins`, и файл репозитория не
-// читает ни один из них. Расхождение видно в статусе отдела полем `process.source`, а
-// совпадение строк проверяет тест `dev-department-process.test.mjs`.
+// читает ни один из них. Расхождение копий сегодня сверяется глазами при каждой правке
+// таблицы: `process.source` показывает только источник (`web`/`default`), а тела ступеней
+// из двух языков ни один тест не сравнивает.
 
 import crypto from 'node:crypto'
 
@@ -92,6 +93,16 @@ export const ROLE_RESOLVERS = [ROLE_BY_AREA, ROLE_BY_FINDINGS]
  * По этому признаку статус отличает активный тикет от ожидающего.
  */
 export const ACTIVE_LABEL_KEYS = ['progress', 'review', 'test', 'ok', 'failed', 'frontend']
+
+/**
+ * Метки, при которых ступень макета не берётся: по тикету уже шла работа.
+ *
+ * Это содержимое стража `mockup-stage` — прежний фильтр `mockupStage()` отсекал
+ * `progress|review|test|ok|merged|failed` и снятые с конвейера тикеты (снятие приходит в
+ * план отдельным полем `dropped`). Без этой проверки ступень приоритета 1 забирала бы
+ * тикет, который прямо сейчас стоит в ревью или в тесте, и макет перебивал бы живую работу.
+ */
+export const MOCKUP_STAGE_BLOCKED_KEYS = ['progress', 'review', 'test', 'ok', 'failed', 'merged']
 
 /** Приоритет ступени: целое от 1 до 999, как в проверке веба. */
 export const PRIORITY_MIN = 1
@@ -513,6 +524,56 @@ export function isActiveStep(step) {
   return step.when.some((key) => ACTIVE_LABEL_KEYS.includes(key))
 }
 
+/**
+ * Страж ступени как предикат по меткам: `true` — ступень для этого тикета не работает.
+ *
+ * Здесь только те стражи, которым не нужен ни GitHub, ни состояние диспетчера. Остальные
+ * (`route`, `dispatch`, `no-code`, `same-head`, `checklist-gate`, `limits`,
+ * `merged-already`) исполняет `dispatch()`: без запроса к PR или без счётчиков попыток их
+ * не решить, и matcher о них знать не обязан.
+ *
+ * @param {object} step ступень документа
+ * @param {string[]|Set<string>} labels ключи стоящих меток
+ */
+export function guardBlocks(step, labels) {
+  if (step.guard !== 'mockup-stage') return false
+  const present = labels instanceof Set ? labels : new Set(labels || [])
+  return MOCKUP_STAGE_BLOCKED_KEYS.some((key) => present.has(key))
+}
+
+/**
+ * Роль половины по стоящим ключам меток — порядок прежних `findActive()`/`implementer()`.
+ *
+ * Передача фронтенду (`frontend`) решает раньше маршрута `area:*`: к этому моменту
+ * бэкенд-часть полного стека уже сделана, и сессия должна подняться у фронтендера.
+ * Обратный порядок отправлял доработку второй половины бэкендеру по `area:fullstack`, и
+ * правка уезжала не тому исполнителю.
+ */
+export function areaRoleOfKeys(keys) {
+  const present = keys instanceof Set ? keys : new Set(keys || [])
+  if (present.has('frontend')) return 'dev-frontend'
+  if (present.has('areaFullstack')) return present.has('phaseFrontend') ? 'dev-frontend' : 'dev-backend'
+  if (present.has('areaFrontend')) return 'dev-frontend'
+  if (present.has('areaBackend')) return 'dev-backend'
+  return 'dev-fullstack'
+}
+
+/**
+ * То же по именам меток GitHub: `names` — метки тикета, `labels` — имена ключей проекта.
+ * Ступень продолжения держит резолвер `by-area`, и диспетчер спрашивает его этой функцией.
+ *
+ * @param {string[]|Set<string>} names
+ * @param {Record<string, string>} labels
+ */
+export function areaRoleOfLabels(names, labels) {
+  const standing = names instanceof Set ? names : new Set(names || [])
+  const keys = PROCESS_LABEL_KEYS.filter((key) => {
+    const name = labels ? labels[key] : null
+    return Boolean(name) && standing.has(name)
+  })
+  return areaRoleOfKeys(keys)
+}
+
 /** Ступень входа: тикет ждёт сессии, но работа по нему ещё не начата. */
 export function isEntryStep(step) {
   if (step.kind !== 'session' || isActiveStep(step)) return false
@@ -529,6 +590,10 @@ export function isEntryStep(step) {
  *
  * `options.kinds` — ограничить набор видов (например, вне окна смены исполняется только
  * маршрутная ступень: сессию поднимать некуда).
+ *
+ * Страж, который решается по одним меткам, `planOfProcess` исполняет сам (`guardBlocks`):
+ * ступень макета не попадает в план по начатому тикету. Это же делает и карточка статуса —
+ * она считает план тем же вызовом, а не вторым правилом.
  *
  * @param {object} document
  * @param {Array<{item: any, labels: string[]|Set<string>, dropped?: boolean}>} items
@@ -549,6 +614,7 @@ export function planOfProcess(document, items, options = {}) {
     if (entry.dropped) continue
     const labels = entry.labels instanceof Set ? entry.labels : new Set(entry.labels || [])
     for (const row of steps) {
+      if (guardBlocks(row, labels)) continue
       if (skip && skip(row, entry.item)) continue
       if (!stepMatches(row, labels)) continue
       plan.push({ step: row, item: entry.item })

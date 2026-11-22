@@ -137,6 +137,7 @@ import {
 import {
   PROCESS_LABEL_KEYS,
   activeOfPlan,
+  areaRoleOfLabels,
   isActiveStep,
   isEntryStep,
   labelsOfProcess,
@@ -1670,13 +1671,12 @@ export default {
     // задачи. Поэтому возврат в доработку уходит той же роли, а не первой
     // попавшейся. Полный стек проходит две половины: сначала бэкенд, затем
     // фронтенд — вторая половина помечена phaseFrontend.
+    //
+    // Само правило выбора половины живёт в `areaRoleOfLabels`: порядок ветвлений
+    // (передача фронтенду раньше `area:*`) закреплён эталонным тестом, а не
+    // повторяется здесь третьим списком условий.
     function implementer(issue, L) {
-      if (has(issue, L.areaFullstack)) return has(issue, L.phaseFrontend) ? 'dev-frontend' : 'dev-backend'
-      if (has(issue, L.areaFrontend)) return 'dev-frontend'
-      if (has(issue, L.areaBackend)) return 'dev-backend'
-      // Без метки маршрута остаётся разработчик полного стека: старые тикеты и
-      // задачи вне разделения ролей должны доделываться, а не вставать.
-      return 'dev-fullstack'
+      return areaRoleOfLabels(labelsOf(issue), L)
     }
 
     // Пустой ход половины: роль вернулась без ветки и PR, метку перехода при этом
@@ -2127,7 +2127,6 @@ export default {
       return planOfProcess(project.process.document, processItems(project, issues), options)
     }
 
-    // Тикет и ступень, которые тик должен обслужить: первая ступень плана.
     // Тикет и ступень, которые тик должен обслужить: первая ступень плана. Маршрутную
     // ступень берём, только если маршрут по постановке вообще выводится: без признаков
     // разметки она бы крутилась вхолостую и держала тикет впереди выдачи, а старая

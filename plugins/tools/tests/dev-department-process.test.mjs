@@ -1,15 +1,15 @@
 // Процесс отдела как данные: эталонная таблица ступеней, проверка документа, имена меток
-// и матчер. Набор берёт **боевой** модуль `plugins/proc.mjs` в любой раскладке
+// и матчер. Набор берёт **боевой** модуль `plugins/process.mjs` в любой раскладке
 // (рабочая копия, пакет, старая) через `plugin-paths` — копий исходника здесь нет, поэтому
 // расхождение кода и теста невозможно.
 //
 // Главная проверка — «эталонный тест 14 сценариев» из постановки #67 (`§4.5` и `§8`
 // `plugins/docs/DEPARTMENT-PROCESS.md`). Решение старого диспетчера снято в `legacyStep`
-// **до** перевода конвейера на данные: это снимок ветвлений `dispatch()`, а не вызов
-// живого кода. После перевода таблица по умолчанию обязана давать на тех же 14 наборах
+// **до** перевода конвейера на данные: это снимок ветвлений `step()`/`dispatch()`, а не
+// вызов живого кода. После перевода таблица по умолчанию обязана давать на тех же наборах
 // меток те же решения — иначе тихая смена поведения на первом же тике.
 //
-// Запуск: node plugins/tools/tests/dev-department-proc.test.mjs
+// Запуск: node plugins/tools/tests/dev-department-process.test.mjs
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import * as pluginPaths from '../plugin-paths.mjs'
@@ -31,42 +31,82 @@ function check(name, actual, expected) {
   )
 }
 
-/** Снимок старого решения: какую ступень выбрал бы `dispatch()` до перевода на данные. */
-function legacyStep(keys) {
+/**
+ * Снимок старого решения: какую ступень выбрал бы тик до перевода конвейера на данные.
+ *
+ * Порядок — тот, что был в `step()` ветки `main`, а не порядок строк таблицы: смысл
+ * проверки в том, чтобы сравнить два независимых порядка, а не пересказать документ его
+ * же строками. Прежний тик шёл так:
+ *
+ *   1. `handOffToFrontend()` — вторая половина полного стека;
+ *   2. `settleAlreadyMerged()` — слитый PR;
+ *   3. `assignArea()` — маршрут по постановке (он же `queuedOf()`: тикет без начатой
+ *      работы, без метки маршрута и без ожидания макета);
+ *   4. `findActive()` — передача фронтенду, ревью, тест, провал, взятая работа;
+ *   5. `mockupStage()` — макет, только после активных ступеней;
+ *   6. `pickQueued()` — выдача исполнителю по метке маршрута.
+ *
+ * `area` — выводится ли маршрут по тексту постановки (`classifyArea()`): без признаков
+ * маршрута входная ступень не срабатывает, и старый код сразу выдавал задачу исполнителю
+ * по умолчанию.
+ */
+function legacyStep(keys, area = null) {
   const labels = new Set(keys)
   const has = (key) => labels.has(key)
-  // Макет шёл первой проверкой: пока макета нет, постановка ждёт.
-  if (has('mockup') && !has('mockupsReady')) return 'mockup'
-  // Активные ступени — в прежнем порядке ветвлений; передача фронтенду проверялась
-  // раньше ревью и теста.
-  if (has('test') && has('areaFullstack') && !has('phaseFrontend')) return 'handoff-frontend'
+  const started = has('progress') || has('review') || has('test') || has('ok') || has('failed')
+  const routed = has('areaBackend') || has('areaFrontend') || has('areaFullstack')
+  const waitingMockup = has('mockup') && !has('mockupsReady')
+
+  // 1. Передача фронтенду: бэкенд-часть полного стека прошла тест, второй раз её не
+  //    показывают ни ревьюеру, ни тестировщику.
+  if (has('areaFullstack') && !has('phaseFrontend') && has('test') && !has('review')) {
+    return 'handoff-frontend'
+  }
+  // 2. Слитый PR закрывает тикет раньше любой ступени сессии.
+  if (has('ok')) return 'merge'
+  // 3. Маршрут по постановке: только у тикета без начатой работы, без метки маршрута и
+  //    без ожидания макета, и только если признаки маршрута в постановке есть.
+  if (has('dev') && !started && !routed && !waitingMockup && area) return 'route'
+  // 4. Активная работа — в прежнем порядке `findActive()`.
+  if (has('frontend')) return 'dev-fullstack-frontend'
   if (has('review')) return 'review'
   if (has('test')) return 'test'
-  if (has('ok')) return 'merge'
   if (has('failed')) return 'rework-test'
   if (has('progress')) return 'continue'
-  // Вход: маршрут по постановке, затем выдача по площади работы.
-  if (
-    has('dev') &&
-    !has('areaBackend') &&
-    !has('areaFrontend') &&
-    !has('areaFullstack')
-  ) {
-    return 'route'
+  // 5. Макет — ниже активных ступеней: прежний `mockupStage()` отсекал тикеты, по которым
+  //    работа уже шла, а не забирал их себе по приоритету 1.
+  if (waitingMockup && !started && !has('merged')) return 'mockup'
+  // 6. Вход в разработку: тикет без начатой работы и без ожидания макета.
+  if (has('dev') && !started && !waitingMockup) {
+    if (has('areaBackend')) return 'dev-backend'
+    if (has('areaFrontend')) return 'dev-frontend'
+    if (has('areaFullstack')) return 'dev-fullstack-backend'
+    return 'dev-fullstack-default'
   }
-  if (has('dev') && has('areaBackend')) return 'dev-backend'
-  if (has('dev') && has('areaFrontend')) return 'dev-frontend'
-  if (has('dev') && has('areaFullstack')) return 'dev-fullstack-backend'
-  if (has('frontend')) return 'dev-fullstack-frontend'
-  if (has('dev')) return 'dev-fullstack-default'
-  if (has('mockup')) return null
   return null
 }
 
-/** Решение таблицы по умолчанию для одного набора меток. */
+/**
+ * Решение таблицы по умолчанию для одного набора меток.
+ *
+ * `skip` — тот же, что передаёт `decisionOf()` (`plugins/dev-department.mjs`): маршрутная
+ * ступень берётся, только если маршрут по постановке выводится. Без этого сценарий
+ * «свежая постановка без площади» проверял бы путь, которым диспетчер не идёт.
+ */
 function tableStep(keys, options = {}) {
-  const plan = proc.planOfProcess(proc.defaultProcess(), [{ item: 'issue', labels: keys }], options)
+  const area = options.area === undefined ? null : options.area
+  const plan = proc.planOfProcess(proc.defaultProcess(), [{ item: 'issue', labels: keys }], {
+    skip: (step) => step.kind === 'route' && !area,
+  })
   return plan.length > 0 ? plan[0].step.id : null
+}
+
+/** Роль решения таблицы: у резолвера `by-area` она выводится из ключей ступени, как в диспетчере. */
+function tableRole(keys) {
+  const id = tableStep(keys)
+  if (id === null) return null
+  if (id !== 'continue') return stepOf(id).role
+  return proc.areaRoleOfKeys(keys)
 }
 
 /** Ступень таблицы по умолчанию по id. */
@@ -124,11 +164,15 @@ check(
   ['progress'],
 )
 
-console.log('\n=== 14 сценариев: таблица по умолчанию даёт прежние решения ===')
+console.log('\n=== 14 сценариев постановки: таблица по умолчанию даёт прежние решения ===')
+// `area` — выводится ли маршрут по тексту постановки. Он есть только у свежей постановки
+// без метки маршрута: у остальных строк маршрутная ступень и так не срабатывает. Поэтому
+// набор `['dev']` проверяется дважды — с признаками маршрута в постановке и без них.
 const SCENARIOS = [
   ['макет поставлен', ['mockup'], 'mockup'],
   ['макет готов, задачи нет', ['mockup', 'mockupsReady'], null],
-  ['свежая постановка без площади', ['dev'], 'route'],
+  ['свежая постановка с признаками маршрута', ['dev'], 'route', 'backend'],
+  ['свежая постановка без признаков маршрута', ['dev'], 'dev-fullstack-default'],
   ['постановка с бэкендом', ['dev', 'areaBackend'], 'dev-backend'],
   ['постановка с фронтендом', ['dev', 'areaFrontend'], 'dev-frontend'],
   ['постановка с полным стеком', ['dev', 'areaFullstack'], 'dev-fullstack-backend'],
@@ -141,10 +185,49 @@ const SCENARIOS = [
   ['тестировщик вернул', ['failed'], 'rework-test'],
   ['меток нет', [], null],
 ]
-for (const [name, keys, expectedId] of SCENARIOS) {
-  check(name + ' — старый код', legacyStep(keys), expectedId)
-  check(name + ' — таблица', tableStep(keys), expectedId)
+for (const [name, keys, expectedId, area = null] of SCENARIOS) {
+  check(name + ' — старый код', legacyStep(keys, area), expectedId)
+  check(name + ' — таблица', tableStep(keys, { area }), expectedId)
 }
+
+console.log('\n=== макет не перебивает начатую работу (страж mockup-stage) ===')
+// Тикет, по которому работа уже шла, макету не отдают: старая ступень `mockupStage()`
+// отсекала такие тикеты, а приоритет 1 забирал бы их у ревью и теста.
+check('макет и ревью вместе — старый код', legacyStep(['mockup', 'review']), 'review')
+check('макет и ревью вместе — таблица', tableStep(['mockup', 'review']), 'review')
+check('макет и работа вместе', [legacyStep(['mockup', 'progress']), tableStep(['mockup', 'progress'])], [
+  'continue',
+  'continue',
+])
+check('макет и тест вместе', tableStep(['mockup', 'test']), 'test')
+check('страж берёт начатую работу', proc.guardBlocks(stepOf('mockup'), ['mockup', 'test']), true)
+check('страж не берёт чистую постановку', proc.guardBlocks(stepOf('mockup'), ['mockup']), false)
+check('страж чужой ступени молчит', proc.guardBlocks(stepOf('review'), ['review', 'test']), false)
+
+console.log('\n=== половина работы в доработке (by-area) ===')
+// Порядок ветвлений прежнего `implementer()`: метка передачи фронтенду решает раньше
+// `area:fullstack`, иначе доработка второй половины уезжала бы бэкендеру.
+const L = proc.DEFAULT_PROCESS_LABELS
+const names = (...keys) => keys.map((key) => L[key])
+check(
+  'передача фронтенду сильнее маршрута',
+  proc.areaRoleOfLabels(names('frontend', 'progress', 'areaFullstack'), L),
+  'dev-frontend',
+)
+check('полный стек до передачи — бэкенд', proc.areaRoleOfLabels(names('areaFullstack', 'progress'), L), 'dev-backend')
+check(
+  'вторая половина полного стека — фронтенд',
+  proc.areaRoleOfLabels(names('areaFullstack', 'frontend', 'phaseFrontend'), L),
+  'dev-frontend',
+)
+check('только бэкенд', proc.areaRoleOfLabels(names('areaBackend', 'progress'), L), 'dev-backend')
+check('только фронтенд', proc.areaRoleOfLabels(names('areaFrontend', 'progress'), L), 'dev-frontend')
+check('без маршрута — полный стек', proc.areaRoleOfLabels(names('progress'), L), 'dev-fullstack')
+check(
+  'решение таблицы по начатой работе совпадает с прежним',
+  tableRole(['progress', 'frontend', 'areaFullstack']),
+  'dev-frontend',
+)
 
 console.log('\n=== переходы меток из строк таблицы ===')
 check('макет ставит работу', stepOf('mockup').put, ['progress'])

@@ -425,6 +425,10 @@ def test_rebuild_builds_document_from_database(
         # Флаг работы отдела попадает в документ всегда — даже включённым: отсутствие
         # ключа диспетчер читает как «включён», и опускать его нельзя.
         "enabled": True,
+        # Своего процесса у отдела нет — ключ всё равно есть, значением `null`: пропущенный
+        # ключ `plugins/registry.mjs` читает как «веб молчит» и оставляет в файле прежнюю
+        # таблицу ступеней.
+        "process": None,
         "telegram": {"token": "bot-token", "chatId": 294292338},
     }
     # Второй проект: уведомления выключены — ключа бота нет; маркетинг в документе есть.
@@ -436,6 +440,7 @@ def test_rebuild_builds_document_from_database(
             "base": "main",
             "maxRework": 3,
             "enabled": True,
+            "process": None,
         },
         {
             "kind": "marketing",
@@ -443,6 +448,7 @@ def test_rebuild_builds_document_from_database(
             "repo": "gidvantus/brain",
             "maxRework": 3,
             "enabled": True,
+            "process": None,
         },
     ]
     assert api_client.get("/api/registry", headers=HEADERS).json() == document
