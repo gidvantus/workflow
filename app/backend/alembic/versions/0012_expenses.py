@@ -3,11 +3,11 @@
 Ревизия добавляет деньги проекта и сам журнал:
 
 1. `projects` получает пять колонок — четыре цены за 1 000 000 токенов
-   (`Numeric(18, 6)`) и итог `total_cost` (`Numeric(14, 2)`). Все `NOT NULL` с умолчанием
+   (`Numeric(18, 6)`) и итог `total_cost` (`Numeric(20, 2)`). Все `NOT NULL` с умолчанием
    `0`: существующие строки получают нули без `UPDATE`, и проект без цен — допустимое
    состояние (ручка журнала отвергает запись по нему отдельным текстом, а не падает);
 2. создаётся `project_expenses` с внешним ключом на `projects.id`, днём расхода, четырьмя
-   количествами (`BIGINT`), суммой (`Numeric(14, 2)`) и моментом записи;
+   количествами (`BIGINT`), суммой (`Numeric(20, 2)`) и моментом записи;
 3. индекс `ix_project_expenses_project_id` обслуживает список журнала проекта.
 
 Цены в базе, а не в записи: сумма записи — снимок на момент записи, а смена цен задним
@@ -35,12 +35,14 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 # Пять новых колонок `projects`: имя и точность. Порядок — порядок цен в интерфейсе.
+# Точность итога с запасом под максимум контракта: цена до 10 знаков до разделителя и
+# количество до 10^12 дают сумму до 4·10^16, а `Numeric(14, 2)` держит меньше 10^12.
 PROJECT_MONEY_COLUMNS = (
     ("price_input", sa.Numeric(precision=18, scale=6)),
     ("price_output", sa.Numeric(precision=18, scale=6)),
     ("price_cache_read", sa.Numeric(precision=18, scale=6)),
     ("price_cache_write", sa.Numeric(precision=18, scale=6)),
-    ("total_cost", sa.Numeric(precision=14, scale=2)),
+    ("total_cost", sa.Numeric(precision=20, scale=2)),
 )
 
 
@@ -62,7 +64,7 @@ def upgrade() -> None:
         sa.Column("tokens_cache_read", sa.BigInteger(), nullable=False),
         sa.Column("tokens_cache_write", sa.BigInteger(), nullable=False),
         # Сумма — снимок на момент записи: меняют ли цены, считаются уже записанные.
-        sa.Column("amount", sa.Numeric(precision=14, scale=2), nullable=False),
+        sa.Column("amount", sa.Numeric(precision=20, scale=2), nullable=False),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
