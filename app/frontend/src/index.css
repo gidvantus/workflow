@@ -1583,3 +1583,212 @@ body {
     animation: none;
   }
 }
+
+/* ---------- вкладка «Расходы»: журнал расхода смен ---------- */
+
+/* Итог журнала стоит в шапке карточки справа — там же, где счётчики «Проектов» и
+   «Задач», и растёт вниз от подписи к числу только на узком экране. Число итога —
+   данные, а не подпись: основной цвет и вес 600, табличные цифры, чтобы суммы разных
+   проектов стояли друг под другом разрядами. */
+.expenses-total {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  color: var(--muted);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Итог смены внутри детализации стоит не в шапке, а под ней, слева: шапку занимает
+   кнопка возврата. */
+.expenses-total--left {
+  text-align: left;
+}
+
+.expenses-total__value {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+/* Строка журнала: интервал смены, причина, число сессий, токены, сумма и вход в
+   детализацию. Шапки колонок нет — как у списка задач: подписи «Интервал» и «Сумма»
+   к трём строкам ничего не добавляют, а знак `$` сам называет последнюю колонку. */
+.expense-row {
+  display: grid;
+  grid-template-columns: 9.5rem minmax(0, 1fr) 4.5rem 7rem 6.5rem 5.5rem;
+  grid-template-areas: 'period reason sessions tokens cost open';
+  gap: 1.25rem;
+  align-items: baseline;
+  padding: 0.5625rem 1.125rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.expense-row:last-child {
+  border-bottom: 0;
+}
+
+.expense-row:hover {
+  background-color: #fbfaf7;
+}
+
+.expense-row__date {
+  grid-area: period;
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.expense-row__reason {
+  grid-area: reason;
+  margin: 0;
+  min-width: 0;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+/* Число сессий и токены — количества: основной цвет, табличные цифры, правое
+   выравнивание, чтобы столбик чисел читался сверху вниз. */
+.expense-row__count,
+.expense-row__tokens,
+.expense-row__amount,
+.expense-session__tokens,
+.expense-session__amount {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  text-align: right;
+  white-space: nowrap;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.expense-row__count,
+.expense-row__tokens {
+  color: var(--muted);
+}
+
+.expense-row__count {
+  grid-area: sessions;
+}
+
+.expense-row__tokens {
+  grid-area: tokens;
+}
+
+.expense-row__amount,
+.expense-session__amount {
+  font-weight: 500;
+}
+
+.expense-row__amount {
+  grid-area: cost;
+}
+
+.expense-row__open {
+  grid-area: open;
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* Строка сессии в детализации: роль, тикет, ходы, токены и цена. */
+.expense-session {
+  display: grid;
+  grid-template-columns: 8.5rem minmax(0, 1fr) 5rem 7rem 6.5rem;
+  grid-template-areas: 'role issue turns tokens cost';
+  gap: 1.25rem;
+  align-items: baseline;
+  padding: 0.5625rem 1.125rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.expense-session:last-child {
+  border-bottom: 0;
+}
+
+.expense-session:hover {
+  background-color: #fbfaf7;
+}
+
+.expense-session__role {
+  grid-area: role;
+  margin: 0;
+  min-width: 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.expense-session__issue {
+  grid-area: issue;
+  margin: 0;
+  min-width: 0;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.expense-session__turns {
+  grid-area: turns;
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.expense-session__tokens {
+  grid-area: tokens;
+}
+
+.expense-session__amount {
+  grid-area: cost;
+}
+
+/* Тесная панель под итогом: у детализации в шапке кнопка возврата, а отступ `card__body`
+   рассчитан на пустые состояния, а не на строку данных. */
+.card__body--tight {
+  padding-top: 0.75rem;
+  padding-bottom: 0.75rem;
+}
+
+@media (max-width: 900px) {
+  /* На узком экране строка журнала перестраивается: интервал и вход в детализацию на
+     первой линии, причина под ними во всю ширину, затем количества и сумма. */
+  .expense-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      'period open'
+      'reason reason'
+      'sessions cost'
+      'tokens tokens';
+    gap: 0.25rem 0.75rem;
+  }
+
+  .expense-row__open {
+    align-self: center;
+  }
+
+  .expense-session {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      'role cost'
+      'issue issue'
+      'turns tokens';
+    gap: 0.25rem 0.75rem;
+  }
+}
+
+@media (max-width: 600px) {
+  /* Итог в шапке карточки на узком экране занимает всю строку под заголовком: в одну
+     строку с «Расходы проекта» он не влезает. Перенос самой шапки уже задан в общем
+     блоке `@media (max-width: 600px)` выше (`flex-wrap: wrap` у `.card__head`), поэтому
+     здесь только эта строка — шапки остальных карточек не трогаем. */
+  .expenses-total {
+    width: 100%;
+    text-align: left;
+  }
+}
