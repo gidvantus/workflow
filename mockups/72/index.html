@@ -1,0 +1,2482 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Макет · Один раздел «Расходы» · issue #72</title>
+    <style>
+      /*
+       * МАКЕТ постановки issue #72: у проекта остаётся одна вкладка «Расходы», в ней
+       * долларовый прайс, объединённый журнал (смены отдела и ручные записи) и один итог.
+       *
+       * Стили ниже — не продукт: это копия токенов и компонентов
+       * app/frontend/src/index.css в одном файле, чтобы макет открывался двойным щелчком
+       * без сборки, без сети и без зависимостей. Имена классов совпадают с продуктовыми;
+       * всё помеченное «НОВОЕ» фронтендер переносит в index.css, всё помеченное
+       * «ИЗМЕНЕНО» — существующие правила, которые надо поправить, иначе макет не сойдётся
+       * с кодом.
+       *
+       * Новых цветов, гарнитур, теней и радиусов нет: палитра — токены продукта,
+       * гарнитура одна (system-ui), моноширинный только у адреса репозитория.
+       * Количества, даты и деньги набраны табличными цифрами.
+       */
+
+      /* ---------- токены продукта ---------- */
+      :root {
+        --canvas: #e8e6e0;
+        --chrome: #fcfbf8;
+        --rail: #edebe4;
+        --band: #f2f0ea;
+        --shell: #f7f6f3;
+        --panel: #ffffff;
+        --line: #ece9e2;
+        --border: #e4e1d9;
+        --ink: #17170f;
+        --muted: #6f6d64;
+        --muted-rail: #6b6a61;
+        --muted-2: #9c9a90;
+        --dark: #1b1b16;
+        --dark-hover: #2e2e26;
+        --green: #4a7a52;
+        --danger: #a63d2e;
+        --danger-soft: #fbeeea;
+
+        font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+        color: var(--ink);
+        background-color: var(--canvas);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        padding: 1.75rem;
+      }
+
+      /* ---------- лист макета (не продукт) ---------- */
+
+      .sheet {
+        display: flex;
+        flex-direction: column;
+        gap: 2.5rem;
+        max-width: 80rem;
+        margin: 0 auto;
+      }
+
+      .sheet__head {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+        padding-bottom: 1.25rem;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .sheet__title {
+        margin: 0;
+        font-size: 1.75rem;
+        font-weight: 600;
+        letter-spacing: -0.015em;
+        line-height: 1.2;
+      }
+
+      .sheet__lead {
+        margin: 0;
+        max-width: 78ch;
+        font-size: 0.9375rem;
+        line-height: 1.6;
+      }
+
+      .sheet__meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.25rem 1rem;
+        margin: 0;
+        font-size: 0.8125rem;
+        color: var(--muted);
+      }
+
+      .sheet__meta code {
+        font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+        font-size: 0.75rem;
+      }
+
+      .frame {
+        display: flex;
+        flex-direction: column;
+        gap: 0.875rem;
+        margin: 0;
+      }
+
+      /* Кадры стоят друг под другом, поэтому карточка приложения не тянется на высоту
+         окна; оверлей кадра — absolute, иначе диалог кадра накрыл бы весь лист. */
+      .frame .app {
+        position: relative;
+        width: 100%;
+        min-height: 0;
+      }
+
+      .frame .overlay {
+        position: absolute;
+      }
+
+      .frame__cap {
+        display: flex;
+        flex-direction: column;
+        gap: 0.375rem;
+        padding-bottom: 0.625rem;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .frame__name {
+        font-size: 0.9375rem;
+        font-weight: 600;
+      }
+
+      .frame__meta {
+        max-width: 92ch;
+        font-size: 0.8125rem;
+        line-height: 1.5;
+        color: var(--muted);
+      }
+
+      /* Состояния блоков: карточка или окно продукта под подписью на холсте. */
+      .states {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 1.5rem;
+        align-items: start;
+      }
+
+      .state {
+        display: flex;
+        flex-direction: column;
+        gap: 0.625rem;
+      }
+
+      .states .card {
+        width: 100%;
+      }
+
+      .states .card__head {
+        flex-wrap: wrap;
+        gap: 0.625rem 0.75rem;
+      }
+
+      .state__cap {
+        margin: 0;
+        font-size: 0.8125rem;
+        line-height: 1.5;
+        color: var(--muted);
+      }
+
+      .state__cap strong {
+        font-weight: 600;
+        color: var(--ink);
+      }
+
+      .state--wide {
+        grid-column: 1 / -1;
+      }
+
+      /* Окно без затемнения: на листе макета состояние окна показывается само по себе,
+         тень уже говорит, что это окно над экраном. */
+      .state .dialog {
+        width: min(28rem, 100%);
+        margin: 0 auto;
+      }
+
+      /* ---------- оболочка приложения ---------- */
+
+      .app {
+        display: grid;
+        grid-template-columns: 15.5rem minmax(0, 1fr);
+        max-width: 80rem;
+        min-height: calc(100vh - 3.5rem);
+        margin: 0 auto;
+        background-color: var(--chrome);
+        border: 1px solid var(--border);
+        border-radius: 1.125rem;
+        box-shadow: 0 30px 60px -48px rgba(23, 23, 15, 0.55);
+        overflow: hidden;
+      }
+
+      .sidebar {
+        display: flex;
+        flex-direction: column;
+        gap: 1.75rem;
+        padding: 1.25rem 1rem 1rem;
+        background-color: var(--rail);
+        border-right: 1px solid var(--border);
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 0.625rem;
+        padding: 0.25rem 0.375rem;
+      }
+
+      .brand__mark {
+        display: grid;
+        place-items: center;
+        width: 2rem;
+        height: 2rem;
+        color: var(--shell);
+        background-color: var(--dark);
+        border-radius: 0.5rem;
+      }
+
+      .brand__name {
+        margin: 0;
+        font-size: 0.875rem;
+        font-weight: 600;
+        line-height: 1.25;
+      }
+
+      .brand__sub {
+        margin: 0;
+        font-size: 0.75rem;
+        color: var(--muted-rail);
+      }
+
+      .nav {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+      }
+
+      .nav__label {
+        margin: 0;
+        padding: 0 0.375rem;
+        font-size: 0.6875rem;
+        font-weight: 500;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted-rail);
+      }
+
+      .nav__item {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.5rem 0.625rem;
+        font-size: 0.875rem;
+        font-weight: 500;
+        color: var(--muted-rail);
+        text-decoration: none;
+        background-color: transparent;
+        border: 1px solid transparent;
+        border-radius: 0.5rem;
+      }
+
+      .nav__item:hover {
+        color: var(--ink);
+        background-color: rgba(255, 255, 255, 0.65);
+      }
+
+      .nav__item[aria-current='page'] {
+        color: var(--ink);
+        background-color: var(--panel);
+        border-color: var(--border);
+      }
+
+      .nav__item svg {
+        flex: none;
+      }
+
+      .nav__count {
+        margin-left: auto;
+        padding: 0.0625rem 0.375rem;
+        font-size: 0.6875rem;
+        font-weight: 500;
+        color: var(--muted);
+        background-color: var(--band);
+        border: 1px solid var(--border);
+        border-radius: 999px;
+      }
+
+      .topbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem 1rem;
+        padding: 0.875rem 1.5rem;
+        background-color: var(--chrome);
+        border-bottom: 1px solid var(--border);
+      }
+
+      .crumbs {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.5rem;
+        margin: 0;
+        font-size: 0.8125rem;
+        color: var(--muted);
+      }
+
+      .crumbs__sep {
+        color: var(--muted-2);
+      }
+
+      .crumbs__current {
+        color: var(--ink);
+        font-weight: 500;
+      }
+
+      .main {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+      }
+
+      .content {
+        display: flex;
+        flex-direction: column;
+        gap: 1.25rem;
+        padding: 1.5rem;
+      }
+
+      .page-head {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 1rem;
+      }
+
+      .page-head__title {
+        margin: 0;
+        font-size: 1.5rem;
+        font-weight: 600;
+        letter-spacing: -0.015em;
+        line-height: 1.25;
+      }
+
+      /* ---------- паспорт проекта ---------- */
+
+      .project-head {
+        display: flex;
+        flex-direction: column;
+        gap: 0.375rem;
+        min-width: 0;
+      }
+
+      .project-head__desc {
+        margin: 0;
+        max-width: 68ch;
+        font-size: 0.9375rem;
+        line-height: 1.55;
+        color: var(--ink);
+      }
+
+      .project-head__meta {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 0.25rem 0.5rem;
+        margin: 0.125rem 0 0;
+        font-size: 0.8125rem;
+        color: var(--muted);
+      }
+
+      .project-repo {
+        font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+        font-size: 0.75rem;
+        color: var(--muted);
+      }
+
+      .project-code {
+        font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+        font-size: 0.75rem;
+        color: var(--muted);
+      }
+
+      /* ИЗМЕНЕНО: стоимость проекта остаётся строкой паспорта, но число теперь в долларах
+         и равно итогу журнала — подпись «Стоимость» не переименовывается. */
+      .project-spend {
+        color: var(--muted);
+      }
+
+      .project-spend__value {
+        color: var(--ink);
+        font-weight: 500;
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* Полоса подразделов: ИЗМЕНЕНО — вкладок три, «Стоимости» больше нет. */
+      .tabs {
+        display: flex;
+        gap: 0.25rem;
+        min-width: 0;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .tab {
+        position: relative;
+        margin-bottom: -1px;
+        padding: 0.4375rem 0.75rem 0.5rem;
+        font: inherit;
+        font-size: 0.8125rem;
+        font-weight: 500;
+        line-height: 1.3;
+        color: var(--muted);
+        background-color: transparent;
+        border: 0;
+        border-bottom: 2px solid transparent;
+        cursor: pointer;
+      }
+
+      .tab:hover {
+        color: var(--ink);
+      }
+
+      .tab[aria-selected='true'] {
+        color: var(--ink);
+        border-bottom-color: var(--ink);
+      }
+
+      /* ---------- кнопки ---------- */
+
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.375rem;
+        padding: 0.4375rem 0.75rem;
+        font: inherit;
+        font-size: 0.8125rem;
+        font-weight: 500;
+        line-height: 1.25;
+        color: var(--ink);
+        background-color: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 0.5rem;
+        cursor: pointer;
+      }
+
+      .btn:hover {
+        background-color: var(--shell);
+      }
+
+      .btn--dark {
+        padding: 0.5rem 0.9375rem;
+        color: var(--shell);
+        background-color: var(--dark);
+        border-color: var(--dark);
+      }
+
+      .btn--dark:hover {
+        background-color: var(--dark-hover);
+        border-color: var(--dark-hover);
+      }
+
+      .btn:disabled {
+        cursor: not-allowed;
+        opacity: 0.45;
+      }
+
+      .btn:focus-visible,
+      .nav__item:focus-visible,
+      .field__input:focus-visible,
+      .dialog__close:focus-visible,
+      .tab:focus-visible {
+        outline: 2px solid var(--ink);
+        outline-offset: 2px;
+      }
+
+      /* ---------- карточка раздела ---------- */
+
+      .card {
+        display: flex;
+        flex-direction: column;
+        background-color: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 0.875rem;
+        overflow: hidden;
+      }
+
+      .card__head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        padding: 0.875rem 1.125rem;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .card__title {
+        margin: 0;
+        font-size: 0.875rem;
+        font-weight: 600;
+      }
+
+      .card__meta {
+        font-size: 0.8125rem;
+        color: var(--muted);
+      }
+
+      .card__tools {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+      }
+
+      .card__body {
+        padding: 1.5rem 1.125rem;
+      }
+
+      .card__body--tight {
+        padding-top: 0.75rem;
+        padding-bottom: 0.75rem;
+      }
+
+      .table__body {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      /* Итог журнала — единственное громкое число вкладки: 20 px, 600, табличные цифры.
+         Число то же, что «Стоимость» в паспорте: одна сумма, два места. */
+      .cost-sum {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        margin-right: 0.375rem;
+        gap: 0;
+        line-height: 1.15;
+      }
+
+      .cost-sum__label {
+        font-size: 0.6875rem;
+        color: var(--muted);
+      }
+
+      .cost-sum__value {
+        font-size: 1.25rem;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
+
+      /* ---------- строка цен: ИЗМЕНЕНО — единица долларовая ---------- */
+
+      .card__prices {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        grid-template-areas: 'label list button';
+        align-items: center;
+        gap: 0.375rem 1.25rem;
+        padding: 0.4375rem 1.125rem;
+        background-color: var(--band);
+        border-bottom: 1px solid var(--line);
+      }
+
+      .prices__label {
+        grid-area: label;
+        margin: 0;
+        font-size: 0.75rem;
+        color: var(--muted-rail);
+        white-space: nowrap;
+      }
+
+      .prices__unit {
+        color: var(--muted-rail);
+      }
+
+      .prices__list {
+        grid-area: list;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 0.125rem 1.125rem;
+        margin: 0;
+        padding: 0;
+        min-width: 0;
+        list-style: none;
+      }
+
+      .prices__list .tok__label {
+        font-size: 0.75rem;
+        color: var(--muted-rail);
+      }
+
+      .prices__list .tok__value {
+        font-size: 0.75rem;
+      }
+
+      .card__prices .btn {
+        grid-area: button;
+        padding: 0.25rem 0.625rem;
+        font-size: 0.75rem;
+      }
+
+      /* Цены не заданы. Четыре нуля — допустимое состояние проекта, но запись с такими
+         ценами сервер отклонит, поэтому строка говорит об этом до нажатия «Сохранить». */
+      .card__prices--unset .prices__label {
+        color: var(--danger);
+        font-weight: 500;
+      }
+
+      .card__prices--unset .prices__note {
+        grid-area: list;
+        margin: 0;
+        font-size: 0.75rem;
+        color: var(--muted);
+      }
+
+      .tok {
+        display: inline-flex;
+        align-items: baseline;
+        gap: 0.3125rem;
+        white-space: nowrap;
+      }
+
+      .tok__label {
+        font-size: 0.75rem;
+        line-height: 1.4;
+        color: var(--muted);
+      }
+
+      .tok__value {
+        font-size: 0.8125rem;
+        font-weight: 500;
+        line-height: 1.4;
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* ---------- объединённая строка журнала (НОВОЕ) ---------- */
+
+      /* Одна ведомость на две половины: дата, источник, количества, сумма и вход в
+         детализацию смены. Пять колонок вместо прежних трёх у ручной записи и шести у
+         смены — потому что источник теперь общий признак строки, а не повод нарисовать
+         вторую вкладку. Метка источника — слово, а не чип: пилюля на каждой строке
+         превратила бы ведомость в набор ярлыков. */
+      .journal-row {
+        display: grid;
+        grid-template-columns: 6.75rem 9rem minmax(0, 1fr) 7rem auto;
+        grid-template-areas: 'when source tokens amount open';
+        align-items: baseline;
+        gap: 1rem;
+        padding: 0.6875rem 1.125rem;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .journal-row:last-child {
+        border-bottom: 0;
+      }
+
+      .journal-row:hover {
+        background-color: #fbfaf7;
+      }
+
+      .journal-row__when {
+        grid-area: when;
+        min-width: 0;
+      }
+
+      /* Дата — единственная подпись строки, поэтому основного цвета и весом 500. */
+      .journal-row__date {
+        margin: 0;
+        font-size: 0.8125rem;
+        font-weight: 500;
+        line-height: 1.4;
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* Интервал смены: служебная строка под датой, тише её. У ручной записи её нет. */
+      .journal-row__period {
+        margin: 0.125rem 0 0;
+        font-size: 0.75rem;
+        line-height: 1.35;
+        color: var(--muted);
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .journal-row__source {
+        grid-area: source;
+        min-width: 0;
+      }
+
+      /* Метка источника: темнее пояснения под ней, но тише суммы и даты. */
+      .journal-row__source-label {
+        margin: 0;
+        font-size: 0.75rem;
+        font-weight: 500;
+        line-height: 1.4;
+        color: var(--ink);
+      }
+
+      .journal-row__source-note {
+        margin: 0.125rem 0 0;
+        font-size: 0.75rem;
+        line-height: 1.35;
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* Количества — как в строке цен: подпись тише числа, пары переносятся. */
+      /* Количества стоят двумя парами в две колонки: вход | выход, кэш-чтение |
+         кэш-запись. Так пары выстраиваются в столбик по всей ведомости, а не переносятся
+         как попало; при четырёх числах получается ровный квадрат 2×2. */
+      .journal-row__tokens {
+        grid-area: tokens;
+        display: grid;
+        grid-template-columns: 8.75rem minmax(0, max-content);
+        gap: 0.125rem 0.875rem;
+        margin: 0;
+        min-width: 0;
+      }
+
+      /* Деньги — данные, а не подпись: вес 500, правый край, табличные цифры. */
+      .journal-row__amount {
+        grid-area: amount;
+        margin: 0;
+        font-size: 0.8125rem;
+        font-weight: 500;
+        line-height: 1.4;
+        text-align: right;
+        white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .journal-row__open {
+        grid-area: open;
+        display: flex;
+        justify-content: flex-end;
+      }
+
+      /* Строка смены без кнопки «Сессии» не бывает, а ручная запись её не получает:
+         раскрывать в ручной записи нечего, числа в ней и есть запись. */
+
+      /* ---------- состояния списка ---------- */
+
+      .state__line {
+        margin: 0;
+        font-size: 0.875rem;
+      }
+
+      .state__hint {
+        margin: 0.375rem 0 0;
+        font-size: 0.8125rem;
+        line-height: 1.5;
+        color: var(--muted);
+      }
+
+      .state__error {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.625rem 1rem;
+      }
+
+      .error {
+        margin: 0;
+        font-size: 0.8125rem;
+        line-height: 1.45;
+        color: var(--danger);
+      }
+
+      /* ---------- подвал ---------- */
+
+      .footbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem 1.5rem;
+        margin-top: auto;
+        padding: 0.875rem 1.5rem;
+        font-size: 0.75rem;
+        color: var(--muted);
+        border-top: 1px solid var(--border);
+      }
+
+      .footbar__note {
+        margin: 0;
+      }
+
+      /* ---------- детализация смены (перенесена из ProjectExpenses) ---------- */
+
+      .expenses-total {
+        margin: 0;
+        font-size: 0.8125rem;
+        line-height: 1.4;
+        color: var(--muted);
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .expenses-total--left {
+        text-align: left;
+      }
+
+      .expenses-total__value {
+        font-weight: 600;
+        color: var(--ink);
+      }
+
+      .expense-session {
+        display: grid;
+        grid-template-columns: 8.5rem minmax(0, 1fr) 5rem 7rem 6.5rem;
+        grid-template-areas: 'role issue turns tokens cost';
+        gap: 1.25rem;
+        align-items: baseline;
+        padding: 0.5625rem 1.125rem;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .expense-session:last-child {
+        border-bottom: 0;
+      }
+
+      .expense-session:hover {
+        background-color: #fbfaf7;
+      }
+
+      .expense-session__role {
+        grid-area: role;
+        margin: 0;
+        min-width: 0;
+        font-size: 0.8125rem;
+        font-weight: 600;
+        line-height: 1.4;
+      }
+
+      .expense-session__issue {
+        grid-area: issue;
+        margin: 0;
+        min-width: 0;
+        font-size: 0.8125rem;
+        line-height: 1.4;
+        color: var(--muted);
+        overflow-wrap: anywhere;
+      }
+
+      .expense-session__turns {
+        grid-area: turns;
+        margin: 0;
+        font-size: 0.75rem;
+        line-height: 1.4;
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+      }
+
+      .expense-session__tokens,
+      .expense-session__amount {
+        margin: 0;
+        font-size: 0.8125rem;
+        line-height: 1.4;
+        text-align: right;
+        white-space: nowrap;
+        color: var(--ink);
+        font-variant-numeric: tabular-nums;
+      }
+
+      .expense-session__tokens {
+        grid-area: tokens;
+        color: var(--muted);
+      }
+
+      .expense-session__amount {
+        grid-area: cost;
+        font-weight: 500;
+      }
+
+      /* ---------- диалоги ---------- */
+
+      .overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 10;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1.5rem;
+        background-color: rgba(23, 23, 15, 0.45);
+        animation: overlay-in 120ms ease-out;
+      }
+
+      .dialog {
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+        width: min(28rem, 100%);
+        max-height: calc(100vh - 3rem);
+        overflow-y: auto;
+        padding: 1.25rem;
+        background-color: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 0.875rem;
+        box-shadow: 0 24px 48px -30px rgba(23, 23, 15, 0.45);
+        animation: dialog-in 120ms ease-out;
+      }
+
+      .dialog:focus-visible {
+        outline: 2px solid var(--ink);
+        outline-offset: 2px;
+      }
+
+      .dialog__head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 0.75rem;
+      }
+
+      .dialog__title {
+        margin: 0;
+        font-size: 1rem;
+        font-weight: 600;
+        line-height: 1.35;
+      }
+
+      .dialog__close {
+        display: grid;
+        place-items: center;
+        width: 1.5rem;
+        height: 1.5rem;
+        padding: 0;
+        color: var(--muted);
+        background-color: transparent;
+        border: 0;
+        border-radius: 0.375rem;
+        cursor: pointer;
+      }
+
+      .dialog__close:hover {
+        color: var(--ink);
+        background-color: var(--shell);
+      }
+
+      .dialog__form {
+        display: flex;
+        flex-direction: column;
+        gap: 0.875rem;
+      }
+
+      .dialog__group {
+        min-width: 0;
+        margin: 0;
+        padding: 0;
+        border: 0;
+      }
+
+      .dialog__group > legend {
+        padding: 0;
+        margin-bottom: 0.4375rem;
+      }
+
+      .dialog__actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 0.5rem;
+      }
+
+      .field {
+        display: flex;
+        flex-direction: column;
+        gap: 0.3125rem;
+      }
+
+      .field__label {
+        font-size: 0.75rem;
+        font-weight: 500;
+        color: var(--muted);
+      }
+
+      .field__input {
+        width: 100%;
+        padding: 0.5rem 0.625rem;
+        font: inherit;
+        font-size: 0.875rem;
+        line-height: 1.4;
+        color: var(--ink);
+        background-color: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 0.5rem;
+      }
+
+      .field__input[aria-invalid='true'] {
+        border-color: var(--danger);
+      }
+
+      .field__hint {
+        font-size: 0.75rem;
+        color: var(--muted);
+      }
+
+      .field--tokens .field__input,
+      .field--price .field__input {
+        font-variant-numeric: tabular-nums;
+      }
+
+      .form-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.875rem 1.25rem;
+      }
+
+      @keyframes overlay-in {
+        from {
+          opacity: 0;
+        }
+      }
+
+      @keyframes dialog-in {
+        from {
+          opacity: 0;
+          transform: translateY(0.5rem);
+        }
+      }
+
+      /* ---------- ≤ 900 px: меню полосой, строка журнала в три линии ---------- */
+
+      @media (max-width: 900px) {
+        .app {
+          grid-template-columns: minmax(0, 1fr);
+        }
+
+        .sidebar {
+          flex-direction: row;
+          align-items: center;
+          gap: 1rem;
+          padding: 0.75rem 1rem;
+          border-right: 0;
+          border-bottom: 1px solid var(--border);
+        }
+
+        .nav {
+          flex-direction: row;
+          flex-wrap: wrap;
+          align-items: center;
+        }
+
+        .nav__item {
+          white-space: nowrap;
+        }
+
+        .nav__count {
+          flex: none;
+        }
+
+        .nav__label {
+          display: none;
+        }
+
+        .topbar {
+          padding: 0.75rem 1rem;
+        }
+
+        .content {
+          padding: 1rem;
+        }
+
+        .page-head__title {
+          font-size: 1.375rem;
+        }
+
+        /* НОВОЕ: строка журнала на узком экране — три линии. Первая: дата слева, сумма
+           справа (сумма ищется глазом по столбцу). Вторая: метка источника и кнопка
+           «Сессии». Третья: количества во всю ширину, чтобы числа не резались. */
+        .journal-row {
+          grid-template-columns: minmax(0, 1fr) auto;
+          grid-template-areas:
+            'when amount'
+            'source open'
+            'tokens tokens';
+          gap: 0.1875rem 0.75rem;
+          padding: 0.75rem 1rem;
+        }
+
+        /* Дата и интервал на узком экране делят одну линию: два столбика по 13 px — лишняя
+           высота, а перенос сам разведёт их, если места не хватит. */
+        .journal-row__when {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: baseline;
+          gap: 0 0.5rem;
+        }
+
+        .journal-row__period {
+          margin: 0;
+        }
+
+        .journal-row__source {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: baseline;
+          gap: 0 0.5rem;
+        }
+
+        .journal-row__source-note {
+          margin: 0;
+        }
+
+        .journal-row__open {
+          align-self: center;
+        }
+
+        .card__prices {
+          grid-template-columns: minmax(0, 1fr) auto;
+          grid-template-areas:
+            'label button'
+            'list list';
+          gap: 0.375rem 0.75rem;
+          padding: 0.5rem 1rem;
+        }
+
+        .expense-session {
+          grid-template-columns: minmax(0, 1fr) auto;
+          grid-template-areas:
+            'role cost'
+            'issue issue'
+            'turns tokens';
+          gap: 0.25rem 0.75rem;
+        }
+
+        .states {
+          grid-template-columns: minmax(0, 1fr);
+        }
+      }
+
+      /* ---------- ≤ 600 px: одна колонка ---------- */
+
+      @media (max-width: 600px) {
+        body {
+          padding: 0.75rem;
+        }
+
+        .app {
+          border-radius: 0.875rem;
+        }
+
+        .sidebar {
+          flex-wrap: wrap;
+          gap: 0.5rem 0.75rem;
+        }
+
+        .brand__sub {
+          display: none;
+        }
+
+        .page-head {
+          align-items: flex-start;
+        }
+
+        .project-head__meta {
+          column-gap: 0.75rem;
+          row-gap: 0.125rem;
+        }
+
+        .project-head__meta .crumbs__sep {
+          display: none;
+        }
+
+        .card__head {
+          flex-wrap: wrap;
+          gap: 0.625rem 0.75rem;
+          padding: 0.75rem 1rem;
+        }
+
+        /* Шапка журнала на телефоне: счётчик записей и «Итого» — отдельными строками
+           слева, «Добавить запись» — во всю ширину карточки. Прижимать итог к правому
+           краю незачем: справа под ним окажется кнопка, и число потеряется между ними. */
+        .card__tools {
+          width: 100%;
+          flex-wrap: wrap;
+          justify-content: flex-start;
+          gap: 0.5rem 0.75rem;
+        }
+
+        .card__tools .btn--dark {
+          flex-basis: 100%;
+        }
+
+        .cost-sum {
+          align-items: flex-start;
+          margin-right: 0;
+        }
+
+        .card__meta {
+          white-space: normal;
+        }
+
+        .card__body {
+          padding: 1.25rem 1rem;
+        }
+
+        .form-grid {
+          gap: 0.75rem 1rem;
+        }
+
+        .dialog__actions {
+          flex-direction: column;
+        }
+
+        .dialog__actions .btn {
+          width: 100%;
+        }
+
+        .footbar {
+          flex-direction: column;
+          align-items: flex-start;
+          padding: 0.75rem 1rem;
+        }
+      }
+
+      /* ---------- ≤ 480 px ---------- */
+
+      @media (max-width: 480px) {
+        .topbar .btn {
+          width: 100%;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .overlay,
+        .dialog {
+          animation: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="sheet">
+      <header class="sheet__head">
+        <h1 class="sheet__title">Один раздел «Расходы»</h1>
+        <p class="sheet__lead">
+          Вкладки «Стоимость» больше нет: прайс проекта в долларах США за 1 млн токенов,
+          объединённый журнал и общий итог живут в «Расходах». В одной ведомости стоят смена
+          отдела и ручная запись: источник назван словом, у смены есть вход в прежнюю
+          детализацию. Суммы считает только сервер, на экране они в <code>$</code>, итог
+          карточки и «Стоимость» в паспорте — одно и то же число.
+        </p>
+        <p class="sheet__meta">
+          <span>issue #72 · макет постановки</span>
+          <span>ветка <code>feature/72-one-expenses-tab</code></span>
+          <span>токены и классы — <code>app/frontend/src/index.css</code></span>
+          <span>кадры 1440 и 375</span>
+        </p>
+      </header>
+
+      <!-- ==================== КАДР 1: ВКЛАДКА «РАСХОДЫ» ==================== -->
+      <figure class="frame">
+        <figcaption class="frame__cap">
+          <span class="frame__name">1 · Вкладка «Расходы»: один журнал на обе половины</span>
+          <span class="frame__meta">
+            Вкладок три. Смена отличается от ручной записи двумя признаками: меткой источника
+            и кнопкой «Сессии»; дата, количества и сумма набраны одинаково, потому что это
+            одна ведомость. У смены в ячейке даты вторая строка — интервал, в ячейке
+            источника — число сессий и причина закрытия. Порядок задаёт сервер
+            (<code>spent_on DESC, sort_at DESC, id DESC</code>), поэтому запись и смена за один
+            день стоят подряд. Суммы выдуманные, но сходятся: 18,42 + 8,25 + 31,25 + 5,35 +
+            55,21 + 0,0004 + 0,75 = 119,23 $. Запись 16 ноя показывает правило денег: ненулевая
+            сумма меньше копейки печатается четырьмя знаками.
+          </span>
+        </figcaption>
+
+        <div class="app">
+          <aside class="sidebar">
+            <div class="brand">
+              <span class="brand__mark" aria-hidden="true">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+                  <path d="M2.5 5.5 8 2.5l5.5 3L8 8.5z" />
+                  <path d="M2.5 8.5 8 11.5l5.5-3" />
+                </svg>
+              </span>
+              <div>
+                <p class="brand__name">Workflow</p>
+                <p class="brand__sub">Отдел разработки</p>
+              </div>
+            </div>
+
+            <nav class="nav" aria-label="Разделы">
+              <p class="nav__label">Разделы</p>
+              <a class="nav__item" href="#" aria-current="page">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+                  <path d="M2 5.5A1.5 1.5 0 0 1 3.5 4h3l1.5 1.5h4A1.5 1.5 0 0 1 13.5 7v4.5A1.5 1.5 0 0 1 12 13H3.5A1.5 1.5 0 0 1 2 11.5z" />
+                </svg>
+                Проекты
+                <span class="nav__count">6</span>
+              </a>
+            </nav>
+          </aside>
+
+          <div class="main">
+            <header class="topbar">
+              <p class="crumbs">
+                Приложение
+                <span class="crumbs__sep" aria-hidden="true">/</span>
+                Проекты
+                <span class="crumbs__sep" aria-hidden="true">/</span>
+                <span class="crumbs__current">Workflow</span>
+              </p>
+              <button class="btn" type="button">← К проектам</button>
+            </header>
+
+            <main class="content">
+              <div class="page-head">
+                <div class="project-head">
+                  <h1 class="page-head__title">Workflow</h1>
+                  <p class="project-head__desc">
+                    Отдел разработки надстройки: конвейер задач, отделы с ролями и
+                    расписанием, отчёты смен.
+                  </p>
+                  <p class="project-head__meta">
+                    <span class="project-repo">https://github.com/gidvantus/workflow</span>
+                    <span class="crumbs__sep" aria-hidden="true">·</span>
+                    <span class="project-spend"
+                      >Стоимость
+                      <span class="project-spend__value" data-testid="project-total">119,23 $</span></span
+                    >
+                    <span class="crumbs__sep" aria-hidden="true">·</span>
+                    <span>Обновлён 20 ноя 2026</span>
+                    <span class="crumbs__sep" aria-hidden="true">·</span>
+                    <span class="project-code" data-testid="project-code">Код проекта: workflow</span>
+                  </p>
+                </div>
+              </div>
+
+              <div class="tabs" role="tablist" aria-label="Подразделы проекта">
+                <button class="tab" type="button" role="tab" aria-selected="false">Задачи</button>
+                <button class="tab" type="button" role="tab" aria-selected="false">Отделы</button>
+                <button
+                  class="tab"
+                  type="button"
+                  role="tab"
+                  aria-selected="true"
+                  aria-controls="expenses-panel"
+                  data-testid="project-tab-expenses"
+                >
+                  Расходы
+                </button>
+              </div>
+
+              <section
+                class="card"
+                id="expenses-panel"
+                role="tabpanel"
+                aria-label="Расходы проекта"
+                data-testid="expenses-card"
+              >
+                <div class="card__head">
+                  <h2 class="card__title">Расходы проекта</h2>
+                  <div class="card__tools">
+                    <span class="card__meta" data-testid="expenses-count"
+                      >7 записей · 3 смены и 4 ручные записи</span
+                    >
+                    <div class="cost-sum">
+                      <span class="cost-sum__label">Итого</span>
+                      <span class="cost-sum__value" data-testid="expenses-total">119,23 $</span>
+                    </div>
+                    <button class="btn btn--dark" type="button" data-testid="expense-create">
+                      Добавить запись
+                    </button>
+                  </div>
+                </div>
+
+                <div class="card__prices" data-testid="expenses-prices">
+                  <p class="prices__label">
+                    Цены за токены <span class="prices__unit">· $ за 1 млн</span>
+                  </p>
+                  <ul class="prices__list">
+                    <li class="tok"><span class="tok__label">вход</span><span class="tok__value">3,00</span></li>
+                    <li class="tok"><span class="tok__label">выход</span><span class="tok__value">15,00</span></li>
+                    <li class="tok"><span class="tok__label">кэш-чтение</span><span class="tok__value">0,30</span></li>
+                    <li class="tok"><span class="tok__label">кэш-запись</span><span class="tok__value">3,75</span></li>
+                  </ul>
+                  <button class="btn" type="button" data-testid="expenses-prices-edit">Изменить</button>
+                </div>
+
+                <ul class="table__body" data-testid="expenses-list">
+                  <li class="journal-row" data-testid="expense-item">
+                    <div class="journal-row__when">
+                      <p class="journal-row__date" data-testid="expense-item-date">19 ноя 2026</p>
+                      <p class="journal-row__period">09:00 → 17:00</p>
+                    </div>
+                    <div class="journal-row__source">
+                      <p class="journal-row__source-label" data-testid="expense-item-source">смена</p>
+                      <p class="journal-row__source-note">3 сессии · окно смены</p>
+                    </div>
+                    <p class="journal-row__tokens" data-testid="expense-item-tokens">
+                      <span class="tok"><span class="tok__label">вход</span><span class="tok__value">2 480 000</span></span>
+                      <span class="tok"><span class="tok__label">выход</span><span class="tok__value">610 000</span></span>
+                      <span class="tok"><span class="tok__label">кэш-чтение</span><span class="tok__value">3 100 000</span></span>
+                      <span class="tok"><span class="tok__label">кэш-запись</span><span class="tok__value">240 000</span></span>
+                    </p>
+                    <p class="journal-row__amount" data-testid="expense-item-amount">18,42 $</p>
+                    <div class="journal-row__open">
+                      <button
+                        class="btn"
+                        type="button"
+                        data-testid="expense-open"
+                        aria-label="Сессии смены 19 ноя 2026 с 09:00 до 17:00"
+                      >
+                        Сессии
+                      </button>
+                    </div>
+                  </li>
+
+                  <li class="journal-row" data-testid="expense-item">
+                    <div class="journal-row__when">
+                      <p class="journal-row__date" data-testid="expense-item-date">19 ноя 2026</p>
+                    </div>
+                    <div class="journal-row__source">
+                      <p class="journal-row__source-label" data-testid="expense-item-source">ручная запись</p>
+                    </div>
+                    <p class="journal-row__tokens" data-testid="expense-item-tokens">
+                      <span class="tok"><span class="tok__label">вход</span><span class="tok__value">1 500 000</span></span>
+                      <span class="tok"><span class="tok__label">выход</span><span class="tok__value">250 000</span></span>
+                    </p>
+                    <p class="journal-row__amount" data-testid="expense-item-amount">8,25 $</p>
+                  </li>
+
+                  <li class="journal-row" data-testid="expense-item">
+                    <div class="journal-row__when">
+                      <p class="journal-row__date" data-testid="expense-item-date">18 ноя 2026</p>
+                      <p class="journal-row__period">10:00 → 21:30</p>
+                    </div>
+                    <div class="journal-row__source">
+                      <p class="journal-row__source-label" data-testid="expense-item-source">смена</p>
+                      <p class="journal-row__source-note">2 сессии · окно смены</p>
+                    </div>
+                    <p class="journal-row__tokens" data-testid="expense-item-tokens">
+                      <span class="tok"><span class="tok__label">вход</span><span class="tok__value">4 120 000</span></span>
+                      <span class="tok"><span class="tok__label">выход</span><span class="tok__value">1 040 000</span></span>
+                      <span class="tok"><span class="tok__label">кэш-чтение</span><span class="tok__value">8 600 000</span></span>
+                      <span class="tok"><span class="tok__label">кэш-запись</span><span class="tok__value">190 000</span></span>
+                    </p>
+                    <p class="journal-row__amount" data-testid="expense-item-amount">31,25 $</p>
+                    <div class="journal-row__open">
+                      <button
+                        class="btn"
+                        type="button"
+                        data-testid="expense-open"
+                        aria-label="Сессии смены 18 ноя 2026 с 10:00 до 21:30"
+                      >
+                        Сессии
+                      </button>
+                    </div>
+                  </li>
+
+                  <li class="journal-row" data-testid="expense-item">
+                    <div class="journal-row__when">
+                      <p class="journal-row__date" data-testid="expense-item-date">18 ноя 2026</p>
+                    </div>
+                    <div class="journal-row__source">
+                      <p class="journal-row__source-label" data-testid="expense-item-source">ручная запись</p>
+                    </div>
+                    <p class="journal-row__tokens" data-testid="expense-item-tokens">
+                      <span class="tok"><span class="tok__label">вход</span><span class="tok__value">980 000</span></span>
+                      <span class="tok"><span class="tok__label">выход</span><span class="tok__value">145 000</span></span>
+                      <span class="tok"><span class="tok__label">кэш-запись</span><span class="tok__value">62 000</span></span>
+                    </p>
+                    <p class="journal-row__amount" data-testid="expense-item-amount">5,35 $</p>
+                  </li>
+
+                  <li class="journal-row" data-testid="expense-item">
+                    <div class="journal-row__when">
+                      <p class="journal-row__date" data-testid="expense-item-date">17 ноя 2026</p>
+                      <p class="journal-row__period">08:00 → 19:00</p>
+                    </div>
+                    <div class="journal-row__source">
+                      <p class="journal-row__source-label" data-testid="expense-item-source">смена</p>
+                      <p class="journal-row__source-note">4 сессии · окно смены</p>
+                    </div>
+                    <p class="journal-row__tokens" data-testid="expense-item-tokens">
+                      <span class="tok"><span class="tok__label">вход</span><span class="tok__value">6 750 000</span></span>
+                      <span class="tok"><span class="tok__label">выход</span><span class="tok__value">1 980 000</span></span>
+                      <span class="tok"><span class="tok__label">кэш-чтение</span><span class="tok__value">12 400 000</span></span>
+                      <span class="tok"><span class="tok__label">кэш-запись</span><span class="tok__value">410 000</span></span>
+                    </p>
+                    <p class="journal-row__amount" data-testid="expense-item-amount">55,21 $</p>
+                    <div class="journal-row__open">
+                      <button
+                        class="btn"
+                        type="button"
+                        data-testid="expense-open"
+                        aria-label="Сессии смены 17 ноя 2026 с 08:00 до 19:00"
+                      >
+                        Сессии
+                      </button>
+                    </div>
+                  </li>
+
+                  <li class="journal-row" data-testid="expense-item">
+                    <div class="journal-row__when">
+                      <p class="journal-row__date" data-testid="expense-item-date">16 ноя 2026</p>
+                    </div>
+                    <div class="journal-row__source">
+                      <p class="journal-row__source-label" data-testid="expense-item-source">ручная запись</p>
+                    </div>
+                    <p class="journal-row__tokens" data-testid="expense-item-tokens">
+                      <span class="tok"><span class="tok__label">кэш-чтение</span><span class="tok__value">1 400</span></span>
+                    </p>
+                    <p class="journal-row__amount" data-testid="expense-item-amount">0,0004 $</p>
+                  </li>
+
+                  <li class="journal-row" data-testid="expense-item">
+                    <div class="journal-row__when">
+                      <p class="journal-row__date" data-testid="expense-item-date">15 ноя 2026</p>
+                    </div>
+                    <div class="journal-row__source">
+                      <p class="journal-row__source-label" data-testid="expense-item-source">ручная запись</p>
+                    </div>
+                    <p class="journal-row__tokens" data-testid="expense-item-tokens">
+                      <span class="tok"><span class="tok__label">вход</span><span class="tok__value">250 000</span></span>
+                    </p>
+                    <p class="journal-row__amount" data-testid="expense-item-amount">0,75 $</p>
+                  </li>
+                </ul>
+              </section>
+            </main>
+
+            <footer class="footbar">
+              <p class="footbar__note">© 2026 Workflow</p>
+            </footer>
+          </div>
+        </div>
+      </figure>
+
+      <!-- ==================== КАДР 2: ОКНО «НОВАЯ ЗАПИСЬ» ==================== -->
+      <figure class="frame">
+        <figcaption class="frame__cap">
+          <span class="frame__name">2 · Окно «Новая запись» над журналом</span>
+          <span class="frame__meta">
+            В окне нет ни суммы, ни цен: человек вводит дату и четыре количества, сумму
+            считает сервер по ценам проекта. Подсказка называет считающего — иначе пустое
+            место под полями читается как незаполненное поле «Сумма». Журнал под окном
+            сокращён до трёх строк: здесь он фон, полный список — в кадре 1.
+          </span>
+        </figcaption>
+
+        <div class="app">
+          <aside class="sidebar">
+            <div class="brand">
+              <span class="brand__mark" aria-hidden="true">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+                  <path d="M2.5 5.5 8 2.5l5.5 3L8 8.5z" />
+                  <path d="M2.5 8.5 8 11.5l5.5-3" />
+                </svg>
+              </span>
+              <div>
+                <p class="brand__name">Workflow</p>
+                <p class="brand__sub">Отдел разработки</p>
+              </div>
+            </div>
+            <nav class="nav" aria-label="Разделы">
+              <p class="nav__label">Разделы</p>
+              <a class="nav__item" href="#" aria-current="page">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+                  <path d="M2 5.5A1.5 1.5 0 0 1 3.5 4h3l1.5 1.5h4A1.5 1.5 0 0 1 13.5 7v4.5A1.5 1.5 0 0 1 12 13H3.5A1.5 1.5 0 0 1 2 11.5z" />
+                </svg>
+                Проекты
+                <span class="nav__count">6</span>
+              </a>
+            </nav>
+          </aside>
+
+          <div class="main">
+            <header class="topbar">
+              <p class="crumbs">
+                Приложение
+                <span class="crumbs__sep" aria-hidden="true">/</span>
+                Проекты
+                <span class="crumbs__sep" aria-hidden="true">/</span>
+                <span class="crumbs__current">Workflow</span>
+              </p>
+              <button class="btn" type="button">← К проектам</button>
+            </header>
+
+            <main class="content">
+              <div class="page-head">
+                <div class="project-head">
+                  <h1 class="page-head__title">Workflow</h1>
+                  <p class="project-head__meta">
+                    <span class="project-repo">https://github.com/gidvantus/workflow</span>
+                    <span class="crumbs__sep" aria-hidden="true">·</span>
+                    <span class="project-spend"
+                      >Стоимость
+                      <span class="project-spend__value">119,23 $</span></span
+                    >
+                    <span class="crumbs__sep" aria-hidden="true">·</span>
+                    <span>Обновлён 20 ноя 2026</span>
+                  </p>
+                </div>
+              </div>
+
+              <div class="tabs" role="tablist" aria-label="Подразделы проекта">
+                <button class="tab" type="button" role="tab" aria-selected="false">Задачи</button>
+                <button class="tab" type="button" role="tab" aria-selected="false">Отделы</button>
+                <button class="tab" type="button" role="tab" aria-selected="true">Расходы</button>
+              </div>
+
+              <section class="card" aria-label="Расходы проекта">
+                <div class="card__head">
+                  <h2 class="card__title">Расходы проекта</h2>
+                  <div class="card__tools">
+                    <span class="card__meta">7 записей · 3 смены и 4 ручные записи</span>
+                    <div class="cost-sum">
+                      <span class="cost-sum__label">Итого</span>
+                      <span class="cost-sum__value">119,23 $</span>
+                    </div>
+                    <button class="btn btn--dark" type="button">Добавить запись</button>
+                  </div>
+                </div>
+
+                <div class="card__prices">
+                  <p class="prices__label">
+                    Цены за токены <span class="prices__unit">· $ за 1 млн</span>
+                  </p>
+                  <ul class="prices__list">
+                    <li class="tok"><span class="tok__label">вход</span><span class="tok__value">3,00</span></li>
+                    <li class="tok"><span class="tok__label">выход</span><span class="tok__value">15,00</span></li>
+                    <li class="tok"><span class="tok__label">кэш-чтение</span><span class="tok__value">0,30</span></li>
+                    <li class="tok"><span class="tok__label">кэш-запись</span><span class="tok__value">3,75</span></li>
+                  </ul>
+                  <button class="btn" type="button">Изменить</button>
+                </div>
+
+                <ul class="table__body">
+                  <li class="journal-row">
+                    <div class="journal-row__when">
+                      <p class="journal-row__date">19 ноя 2026</p>
+                      <p class="journal-row__period">09:00 → 17:00</p>
+                    </div>
+                    <div class="journal-row__source">
+                      <p class="journal-row__source-label">смена</p>
+                      <p class="journal-row__source-note">3 сессии · окно смены</p>
+                    </div>
+                    <p class="journal-row__tokens">
+                      <span class="tok"><span class="tok__label">вход</span><span class="tok__value">2 480 000</span></span>
+                      <span class="tok"><span class="tok__label">выход</span><span class="tok__value">610 000</span></span>
+                      <span class="tok"><span class="tok__label">кэш-чтение</span><span class="tok__value">3 100 000</span></span>
+                      <span class="tok"><span class="tok__label">кэш-запись</span><span class="tok__value">240 000</span></span>
+                    </p>
+                    <p class="journal-row__amount">18,42 $</p>
+                    <div class="journal-row__open"><button class="btn" type="button">Сессии</button></div>
+                  </li>
+
+                  <li class="journal-row">
+                    <div class="journal-row__when">
+                      <p class="journal-row__date">19 ноя 2026</p>
+                    </div>
+                    <div class="journal-row__source">
+                      <p class="journal-row__source-label">ручная запись</p>
+                    </div>
+                    <p class="journal-row__tokens">
+                      <span class="tok"><span class="tok__label">вход</span><span class="tok__value">1 500 000</span></span>
+                      <span class="tok"><span class="tok__label">выход</span><span class="tok__value">250 000</span></span>
+                    </p>
+                    <p class="journal-row__amount">8,25 $</p>
+                  </li>
+
+                  <li class="journal-row">
+                    <div class="journal-row__when">
+                      <p class="journal-row__date">18 ноя 2026</p>
+                      <p class="journal-row__period">10:00 → 21:30</p>
+                    </div>
+                    <div class="journal-row__source">
+                      <p class="journal-row__source-label">смена</p>
+                      <p class="journal-row__source-note">2 сессии · окно смены</p>
+                    </div>
+                    <p class="journal-row__tokens">
+                      <span class="tok"><span class="tok__label">вход</span><span class="tok__value">4 120 000</span></span>
+                      <span class="tok"><span class="tok__label">выход</span><span class="tok__value">1 040 000</span></span>
+                    </p>
+                    <p class="journal-row__amount">31,25 $</p>
+                    <div class="journal-row__open"><button class="btn" type="button">Сессии</button></div>
+                  </li>
+                </ul>
+              </section>
+            </main>
+
+            <div class="overlay">
+              <div class="dialog" role="dialog" aria-modal="true" aria-label="Новая запись" data-testid="expense-form">
+                <div class="dialog__head">
+                  <h2 class="dialog__title">Новая запись</h2>
+                  <button class="dialog__close" type="button" aria-label="Закрыть окно">
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                      <path d="M2 2l8 8M10 2l-8 8" />
+                    </svg>
+                  </button>
+                </div>
+
+                <form class="dialog__form">
+                  <div class="field">
+                    <label class="field__label" for="frame2-date">Дата</label>
+                    <input class="field__input" id="frame2-date" type="date" value="2026-11-20" data-testid="expense-form-date" />
+                  </div>
+
+                  <fieldset class="dialog__group">
+                    <legend class="field__label">Количество токенов</legend>
+                    <div class="form-grid">
+                      <div class="field field--tokens">
+                        <label class="field__label" for="frame2-in">Вход</label>
+                        <input class="field__input" id="frame2-in" type="number" min="0" step="1" placeholder="0" value="2100000" data-testid="expense-form-tokens-input" />
+                      </div>
+                      <div class="field field--tokens">
+                        <label class="field__label" for="frame2-out">Выход</label>
+                        <input class="field__input" id="frame2-out" type="number" min="0" step="1" placeholder="0" value="320000" data-testid="expense-form-tokens-output" />
+                      </div>
+                      <div class="field field--tokens">
+                        <label class="field__label" for="frame2-cr">Кэш-чтение</label>
+                        <input class="field__input" id="frame2-cr" type="number" min="0" step="1" placeholder="0" value="1400000" data-testid="expense-form-tokens-cache-read" />
+                      </div>
+                      <div class="field field--tokens">
+                        <label class="field__label" for="frame2-cw">Кэш-запись</label>
+                        <input class="field__input" id="frame2-cw" type="number" min="0" step="1" placeholder="0" value="" data-testid="expense-form-tokens-cache-write" />
+                      </div>
+                    </div>
+                  </fieldset>
+
+                  <p class="field__hint">Сумму посчитает сервер по ценам проекта.</p>
+                </form>
+
+                <div class="dialog__actions">
+                  <button class="btn" type="button" data-testid="expense-form-cancel">Отмена</button>
+                  <button class="btn btn--dark" type="button" data-testid="expense-form-submit">Сохранить</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </figure>
+
+      <!-- ==================== КАДР 3: ОКНО ЗАПИСИ В ОТКАЗАХ ==================== -->
+      <figure class="frame">
+        <figcaption class="frame__cap">
+          <span class="frame__name">3 · Окно записи в отказах</span>
+          <span class="frame__meta">
+            Четыре текста — дословно серверные, из контракта; своих формулировок фронт не
+            придумывает. Подсветка полей — разметка окна по введённым значениям, а не вторая
+            проверка: отказ всё равно приходит с сервера. Один текст в макете изменился:
+            подсказка «куда идти за ценами» больше не может звать на вкладку «Стоимость» —
+            цены живут в строке цен этой же вкладки.
+          </span>
+        </figcaption>
+
+        <div class="states">
+          <div class="state">
+            <p class="state__cap">
+              <strong>Дата не по формату.</strong> Поле даты подсвечено, текст — серверный.
+            </p>
+            <div class="dialog">
+              <div class="dialog__head">
+                <h2 class="dialog__title">Новая запись</h2>
+                <button class="dialog__close" type="button" aria-label="Закрыть окно">
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                    <path d="M2 2l8 8M10 2l-8 8" />
+                  </svg>
+                </button>
+              </div>
+              <form class="dialog__form">
+                <div class="field">
+                  <label class="field__label" for="f3a-date">Дата</label>
+                  <input class="field__input" id="f3a-date" type="text" value="20.11.2026" aria-invalid="true" />
+                </div>
+                <fieldset class="dialog__group">
+                  <legend class="field__label">Количество токенов</legend>
+                  <div class="form-grid">
+                    <div class="field field--tokens">
+                      <label class="field__label" for="f3a-in">Вход</label>
+                      <input class="field__input" id="f3a-in" type="number" placeholder="0" value="2100000" />
+                    </div>
+                    <div class="field field--tokens">
+                      <label class="field__label" for="f3a-out">Выход</label>
+                      <input class="field__input" id="f3a-out" type="number" placeholder="0" value="320000" />
+                    </div>
+                    <div class="field field--tokens">
+                      <label class="field__label" for="f3a-cr">Кэш-чтение</label>
+                      <input class="field__input" id="f3a-cr" type="number" placeholder="0" value="" />
+                    </div>
+                    <div class="field field--tokens">
+                      <label class="field__label" for="f3a-cw">Кэш-запись</label>
+                      <input class="field__input" id="f3a-cw" type="number" placeholder="0" value="" />
+                    </div>
+                  </div>
+                </fieldset>
+                <p class="field__hint">Сумму посчитает сервер по ценам проекта.</p>
+              </form>
+              <p class="error" role="alert" data-testid="expense-form-error">Дата указывается как ГГГГ-ММ-ДД, например 2026-11-05</p>
+              <div class="dialog__actions">
+                <button class="btn" type="button">Отмена</button>
+                <button class="btn btn--dark" type="button">Сохранить</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="state">
+            <p class="state__cap">
+              <strong>Количество не целое.</strong> Дробное число в поле «вход» — подсветка
+              одного поля, остальные не тронуты.
+            </p>
+            <div class="dialog">
+              <div class="dialog__head">
+                <h2 class="dialog__title">Новая запись</h2>
+                <button class="dialog__close" type="button" aria-label="Закрыть окно">
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                    <path d="M2 2l8 8M10 2l-8 8" />
+                  </svg>
+                </button>
+              </div>
+              <form class="dialog__form">
+                <div class="field">
+                  <label class="field__label" for="f3b-date">Дата</label>
+                  <input class="field__input" id="f3b-date" type="date" value="2026-11-20" />
+                </div>
+                <fieldset class="dialog__group">
+                  <legend class="field__label">Количество токенов</legend>
+                  <div class="form-grid">
+                    <div class="field field--tokens">
+                      <label class="field__label" for="f3b-in">Вход</label>
+                      <input class="field__input" id="f3b-in" type="text" value="1 500,5" aria-invalid="true" />
+                    </div>
+                    <div class="field field--tokens">
+                      <label class="field__label" for="f3b-out">Выход</label>
+                      <input class="field__input" id="f3b-out" type="number" placeholder="0" value="320000" />
+                    </div>
+                    <div class="field field--tokens">
+                      <label class="field__label" for="f3b-cr">Кэш-чтение</label>
+                      <input class="field__input" id="f3b-cr" type="number" placeholder="0" value="" />
+                    </div>
+                    <div class="field field--tokens">
+                      <label class="field__label" for="f3b-cw">Кэш-запись</label>
+                      <input class="field__input" id="f3b-cw" type="number" placeholder="0" value="" />
+                    </div>
+                  </div>
+                </fieldset>
+                <p class="field__hint">Сумму посчитает сервер по ценам проекта.</p>
+              </form>
+              <p class="error" role="alert" data-testid="expense-form-error">Количество токенов указывается целым неотрицательным числом</p>
+              <div class="dialog__actions">
+                <button class="btn" type="button">Отмена</button>
+                <button class="btn btn--dark" type="button">Сохранить</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="state">
+            <p class="state__cap">
+              <strong>Все четыре количества нули.</strong> Подсвечены все четыре поля: сервер
+              не называет, какое из них виновато, — виноваты все.
+            </p>
+            <div class="dialog">
+              <div class="dialog__head">
+                <h2 class="dialog__title">Новая запись</h2>
+                <button class="dialog__close" type="button" aria-label="Закрыть окно">
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                    <path d="M2 2l8 8M10 2l-8 8" />
+                  </svg>
+                </button>
+              </div>
+              <form class="dialog__form">
+                <div class="field">
+                  <label class="field__label" for="f3c-date">Дата</label>
+                  <input class="field__input" id="f3c-date" type="date" value="2026-11-20" />
+                </div>
+                <fieldset class="dialog__group">
+                  <legend class="field__label">Количество токенов</legend>
+                  <div class="form-grid">
+                    <div class="field field--tokens">
+                      <label class="field__label" for="f3c-in">Вход</label>
+                      <input class="field__input" id="f3c-in" type="number" placeholder="0" value="" aria-invalid="true" />
+                    </div>
+                    <div class="field field--tokens">
+                      <label class="field__label" for="f3c-out">Выход</label>
+                      <input class="field__input" id="f3c-out" type="number" placeholder="0" value="" aria-invalid="true" />
+                    </div>
+                    <div class="field field--tokens">
+                      <label class="field__label" for="f3c-cr">Кэш-чтение</label>
+                      <input class="field__input" id="f3c-cr" type="number" placeholder="0" value="" aria-invalid="true" />
+                    </div>
+                    <div class="field field--tokens">
+                      <label class="field__label" for="f3c-cw">Кэш-запись</label>
+                      <input class="field__input" id="f3c-cw" type="number" placeholder="0" value="" aria-invalid="true" />
+                    </div>
+                  </div>
+                </fieldset>
+                <p class="field__hint">Сумму посчитает сервер по ценам проекта.</p>
+              </form>
+              <p class="error" role="alert" data-testid="expense-form-error">Укажите хотя бы одно количество токенов</p>
+              <div class="dialog__actions">
+                <button class="btn" type="button">Отмена</button>
+                <button class="btn btn--dark" type="button">Сохранить</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="state">
+            <p class="state__cap">
+              <strong>Цены проекта не заданы.</strong> Текст серверный, под ним — единственная
+              строка, которую пишет фронт: путь к ценам. Теперь он ведёт в строку цен этой же
+              вкладки, а не на удалённую «Стоимость».
+            </p>
+            <div class="dialog">
+              <div class="dialog__head">
+                <h2 class="dialog__title">Новая запись</h2>
+                <button class="dialog__close" type="button" aria-label="Закрыть окно">
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                    <path d="M2 2l8 8M10 2l-8 8" />
+                  </svg>
+                </button>
+              </div>
+              <form class="dialog__form">
+                <div class="field">
+                  <label class="field__label" for="f3d-date">Дата</label>
+                  <input class="field__input" id="f3d-date" type="date" value="2026-11-20" />
+                </div>
+                <fieldset class="dialog__group">
+                  <legend class="field__label">Количество токенов</legend>
+                  <div class="form-grid">
+                    <div class="field field--tokens">
+                      <label class="field__label" for="f3d-in">Вход</label>
+                      <input class="field__input" id="f3d-in" type="number" placeholder="0" value="2100000" />
+                    </div>
+                    <div class="field field--tokens">
+                      <label class="field__label" for="f3d-out">Выход</label>
+                      <input class="field__input" id="f3d-out" type="number" placeholder="0" value="320000" />
+                    </div>
+                    <div class="field field--tokens">
+                      <label class="field__label" for="f3d-cr">Кэш-чтение</label>
+                      <input class="field__input" id="f3d-cr" type="number" placeholder="0" value="" />
+                    </div>
+                    <div class="field field--tokens">
+                      <label class="field__label" for="f3d-cw">Кэш-запись</label>
+                      <input class="field__input" id="f3d-cw" type="number" placeholder="0" value="" />
+                    </div>
+                  </div>
+                </fieldset>
+                <p class="field__hint">Сумму посчитает сервер по ценам проекта.</p>
+              </form>
+              <p class="error" role="alert" data-testid="expense-form-error">Цены проекта не заполнены</p>
+              <p class="field__hint">
+                Задайте цены кнопкой «Изменить» в строке цен на вкладке «Расходы».
+              </p>
+              <div class="dialog__actions">
+                <button class="btn" type="button">Отмена</button>
+                <button class="btn btn--dark" type="button">Сохранить</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </figure>
+
+      <!-- ==================== КАДР 4: ОКНО ЦЕН ==================== -->
+      <figure class="frame">
+        <figcaption class="frame__cap">
+          <span class="frame__name">4 · Окно «Цены за токены»: доллары за 1 млн</span>
+          <span class="frame__meta">
+            Четыре поля — те же четыре цены проекта, что и раньше, но единица теперь доллар
+            США за 1 000 000 токенов; подпись единицы стоит и в окне, и в строке цен. Окно
+            по-прежнему вызывает кнопка в строке цен этой вкладки: деньги живут в одном месте.
+            Вторая подсказка говорит, что уже записанные суммы не пересчитываются, — в
+            постановке это ручная работа человека, а не дефект.
+          </span>
+        </figcaption>
+
+        <div class="app">
+          <aside class="sidebar">
+            <div class="brand">
+              <span class="brand__mark" aria-hidden="true">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+                  <path d="M2.5 5.5 8 2.5l5.5 3L8 8.5z" />
+                  <path d="M2.5 8.5 8 11.5l5.5-3" />
+                </svg>
+              </span>
+              <div>
+                <p class="brand__name">Workflow</p>
+                <p class="brand__sub">Отдел разработки</p>
+              </div>
+            </div>
+            <nav class="nav" aria-label="Разделы">
+              <p class="nav__label">Разделы</p>
+              <a class="nav__item" href="#" aria-current="page">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+                  <path d="M2 5.5A1.5 1.5 0 0 1 3.5 4h3l1.5 1.5h4A1.5 1.5 0 0 1 13.5 7v4.5A1.5 1.5 0 0 1 12 13H3.5A1.5 1.5 0 0 1 2 11.5z" />
+                </svg>
+                Проекты
+                <span class="nav__count">6</span>
+              </a>
+            </nav>
+          </aside>
+
+          <div class="main">
+            <header class="topbar">
+              <p class="crumbs">
+                Приложение
+                <span class="crumbs__sep" aria-hidden="true">/</span>
+                Проекты
+                <span class="crumbs__sep" aria-hidden="true">/</span>
+                <span class="crumbs__current">Workflow</span>
+              </p>
+              <button class="btn" type="button">← К проектам</button>
+            </header>
+
+            <main class="content">
+              <div class="page-head">
+                <div class="project-head">
+                  <h1 class="page-head__title">Workflow</h1>
+                  <p class="project-head__meta">
+                    <span class="project-repo">https://github.com/gidvantus/workflow</span>
+                    <span class="crumbs__sep" aria-hidden="true">·</span>
+                    <span class="project-spend"
+                      >Стоимость
+                      <span class="project-spend__value">119,23 $</span></span
+                    >
+                    <span class="crumbs__sep" aria-hidden="true">·</span>
+                    <span>Обновлён 20 ноя 2026</span>
+                  </p>
+                </div>
+              </div>
+
+              <div class="tabs" role="tablist" aria-label="Подразделы проекта">
+                <button class="tab" type="button" role="tab" aria-selected="false">Задачи</button>
+                <button class="tab" type="button" role="tab" aria-selected="false">Отделы</button>
+                <button class="tab" type="button" role="tab" aria-selected="true">Расходы</button>
+              </div>
+
+              <section class="card" aria-label="Расходы проекта">
+                <div class="card__head">
+                  <h2 class="card__title">Расходы проекта</h2>
+                  <div class="card__tools">
+                    <span class="card__meta">7 записей · 3 смены и 4 ручные записи</span>
+                    <div class="cost-sum">
+                      <span class="cost-sum__label">Итого</span>
+                      <span class="cost-sum__value">119,23 $</span>
+                    </div>
+                    <button class="btn btn--dark" type="button">Добавить запись</button>
+                  </div>
+                </div>
+
+                <div class="card__prices">
+                  <p class="prices__label">
+                    Цены за токены <span class="prices__unit">· $ за 1 млн</span>
+                  </p>
+                  <ul class="prices__list">
+                    <li class="tok"><span class="tok__label">вход</span><span class="tok__value">3,00</span></li>
+                    <li class="tok"><span class="tok__label">выход</span><span class="tok__value">15,00</span></li>
+                    <li class="tok"><span class="tok__label">кэш-чтение</span><span class="tok__value">0,30</span></li>
+                    <li class="tok"><span class="tok__label">кэш-запись</span><span class="tok__value">3,75</span></li>
+                  </ul>
+                  <button class="btn" type="button">Изменить</button>
+                </div>
+
+                <ul class="table__body">
+                  <li class="journal-row">
+                    <div class="journal-row__when">
+                      <p class="journal-row__date">19 ноя 2026</p>
+                      <p class="journal-row__period">09:00 → 17:00</p>
+                    </div>
+                    <div class="journal-row__source">
+                      <p class="journal-row__source-label">смена</p>
+                      <p class="journal-row__source-note">3 сессии · окно смены</p>
+                    </div>
+                    <p class="journal-row__tokens">
+                      <span class="tok"><span class="tok__label">вход</span><span class="tok__value">2 480 000</span></span>
+                      <span class="tok"><span class="tok__label">выход</span><span class="tok__value">610 000</span></span>
+                    </p>
+                    <p class="journal-row__amount">18,42 $</p>
+                    <div class="journal-row__open"><button class="btn" type="button">Сессии</button></div>
+                  </li>
+
+                  <li class="journal-row">
+                    <div class="journal-row__when">
+                      <p class="journal-row__date">19 ноя 2026</p>
+                    </div>
+                    <div class="journal-row__source">
+                      <p class="journal-row__source-label">ручная запись</p>
+                    </div>
+                    <p class="journal-row__tokens">
+                      <span class="tok"><span class="tok__label">вход</span><span class="tok__value">1 500 000</span></span>
+                      <span class="tok"><span class="tok__label">выход</span><span class="tok__value">250 000</span></span>
+                    </p>
+                    <p class="journal-row__amount">8,25 $</p>
+                  </li>
+                </ul>
+              </section>
+            </main>
+
+            <div class="overlay">
+              <div class="dialog" role="dialog" aria-modal="true" aria-label="Цены за токены" data-testid="prices-form">
+                <div class="dialog__head">
+                  <h2 class="dialog__title">Цены за токены</h2>
+                  <button class="dialog__close" type="button" aria-label="Закрыть окно">
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                      <path d="M2 2l8 8M10 2l-8 8" />
+                    </svg>
+                  </button>
+                </div>
+
+                <form class="dialog__form">
+                  <p class="field__hint">В долларах США за 1 млн токенов.</p>
+                  <div class="form-grid">
+                    <div class="field field--price">
+                      <label class="field__label" for="p-in">Вход</label>
+                      <input class="field__input" id="p-in" type="text" inputmode="decimal" value="3,00" data-testid="prices-form-price-input" />
+                    </div>
+                    <div class="field field--price">
+                      <label class="field__label" for="p-out">Выход</label>
+                      <input class="field__input" id="p-out" type="text" inputmode="decimal" value="15,00" data-testid="prices-form-price-output" />
+                    </div>
+                    <div class="field field--price">
+                      <label class="field__label" for="p-cr">Кэш-чтение</label>
+                      <input class="field__input" id="p-cr" type="text" inputmode="decimal" value="0,30" data-testid="prices-form-price-cache-read" />
+                    </div>
+                    <div class="field field--price">
+                      <label class="field__label" for="p-cw">Кэш-запись</label>
+                      <input class="field__input" id="p-cw" type="text" inputmode="decimal" value="3,75" data-testid="prices-form-price-cache-write" />
+                    </div>
+                  </div>
+                  <p class="field__hint">
+                    Ноль — «не тарифицируется». Цены применяются к новым записям; суммы, уже
+                    записанные в журнал, не пересчитываются.
+                  </p>
+                </form>
+
+                <div class="dialog__actions">
+                  <button class="btn" type="button" data-testid="prices-form-cancel">Отмена</button>
+                  <button class="btn btn--dark" type="button" data-testid="prices-form-submit">Сохранить</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </figure>
+
+      <!-- ==================== КАДР 5: ДЕТАЛИЗАЦИЯ СМЕНЫ ==================== -->
+      <figure class="frame">
+        <figcaption class="frame__cap">
+          <span class="frame__name">5 · Детализация смены по кнопке «Сессии»</span>
+          <span class="frame__meta">
+            Прежний экран детализации, без переделки: возврат, строка итога смены и список
+            сессий. Суммы сессий пришли записанными — фронт их не складывает и не округляет.
+            Снимок цен смены (<code>usage_shifts.rates</code>) в детализации не печатается: в
+            контракте `data-testid` для него нет, и вторые цены на экране снова развели бы
+            деньги на два прайса. Цены видны в строке цен, а смена считается по ним.
+          </span>
+        </figcaption>
+
+        <div class="app">
+          <aside class="sidebar">
+            <div class="brand">
+              <span class="brand__mark" aria-hidden="true">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+                  <path d="M2.5 5.5 8 2.5l5.5 3L8 8.5z" />
+                  <path d="M2.5 8.5 8 11.5l5.5-3" />
+                </svg>
+              </span>
+              <div>
+                <p class="brand__name">Workflow</p>
+                <p class="brand__sub">Отдел разработки</p>
+              </div>
+            </div>
+            <nav class="nav" aria-label="Разделы">
+              <p class="nav__label">Разделы</p>
+              <a class="nav__item" href="#" aria-current="page">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+                  <path d="M2 5.5A1.5 1.5 0 0 1 3.5 4h3l1.5 1.5h4A1.5 1.5 0 0 1 13.5 7v4.5A1.5 1.5 0 0 1 12 13H3.5A1.5 1.5 0 0 1 2 11.5z" />
+                </svg>
+                Проекты
+                <span class="nav__count">6</span>
+              </a>
+            </nav>
+          </aside>
+
+          <div class="main">
+            <header class="topbar">
+              <p class="crumbs">
+                Приложение
+                <span class="crumbs__sep" aria-hidden="true">/</span>
+                Проекты
+                <span class="crumbs__sep" aria-hidden="true">/</span>
+                <span class="crumbs__current">Workflow</span>
+              </p>
+              <button class="btn" type="button">← К проектам</button>
+            </header>
+
+            <main class="content">
+              <div class="page-head">
+                <div class="project-head">
+                  <h1 class="page-head__title">Workflow</h1>
+                  <p class="project-head__meta">
+                    <span class="project-repo">https://github.com/gidvantus/workflow</span>
+                    <span class="crumbs__sep" aria-hidden="true">·</span>
+                    <span class="project-spend"
+                      >Стоимость
+                      <span class="project-spend__value">119,23 $</span></span
+                    >
+                    <span class="crumbs__sep" aria-hidden="true">·</span>
+                    <span>Обновлён 20 ноя 2026</span>
+                  </p>
+                </div>
+              </div>
+
+              <div class="tabs" role="tablist" aria-label="Подразделы проекта">
+                <button class="tab" type="button" role="tab" aria-selected="false">Задачи</button>
+                <button class="tab" type="button" role="tab" aria-selected="false">Отделы</button>
+                <button class="tab" type="button" role="tab" aria-selected="true">Расходы</button>
+              </div>
+
+              <section class="card" data-testid="expense-detail" aria-label="Смена">
+                <div class="card__head">
+                  <h2 class="card__title">
+                    Смена · <span data-testid="expense-detail-period">19.11 09:00 → 19.11 17:00</span>
+                  </h2>
+                  <button class="btn" type="button" data-testid="expense-detail-back">← К проекту</button>
+                </div>
+
+                <div class="card__body card__body--tight">
+                  <p class="expenses-total expenses-total--left">
+                    Сессий: <span class="expenses-total__value">3</span> · токенов: 8 430 000 ·
+                    сумма:
+                    <span class="expenses-total__value" data-testid="expense-detail-cost">18,42 $</span>
+                  </p>
+                </div>
+
+                <ul class="table__body">
+                  <li class="expense-session" data-testid="expense-session">
+                    <p class="expense-session__role" data-testid="expense-session-role">дизайнер</p>
+                    <p class="expense-session__issue" data-testid="expense-session-issue">#72 Один раздел «Расходы»</p>
+                    <p class="expense-session__turns">34 хода</p>
+                    <p class="expense-session__tokens" data-testid="expense-session-tokens">3 100 000</p>
+                    <p class="expense-session__amount" data-testid="expense-session-cost">9,15 $</p>
+                  </li>
+                  <li class="expense-session" data-testid="expense-session">
+                    <p class="expense-session__role" data-testid="expense-session-role">разработчик</p>
+                    <p class="expense-session__issue" data-testid="expense-session-issue">#69 Вкладка «Отделы» на странице проекта</p>
+                    <p class="expense-session__turns">52 хода</p>
+                    <p class="expense-session__tokens" data-testid="expense-session-tokens">2 480 000</p>
+                    <p class="expense-session__amount" data-testid="expense-session-cost">7,44 $</p>
+                  </li>
+                  <li class="expense-session" data-testid="expense-session">
+                    <p class="expense-session__role" data-testid="expense-session-role">тестировщик</p>
+                    <p class="expense-session__issue" data-testid="expense-session-issue">#68 Реестр проектов: публикация документа</p>
+                    <p class="expense-session__turns">21 ход</p>
+                    <p class="expense-session__tokens" data-testid="expense-session-tokens">2 850 000</p>
+                    <p class="expense-session__amount" data-testid="expense-session-cost">1,83 $</p>
+                  </li>
+                </ul>
+              </section>
+            </main>
+
+            <footer class="footbar">
+              <p class="footbar__note">© 2026 Workflow</p>
+            </footer>
+          </div>
+        </div>
+      </figure>
+
+      <!-- ==================== КАДР 6: СОСТОЯНИЯ ==================== -->
+      <figure class="frame">
+        <figcaption class="frame__cap">
+          <span class="frame__name">6 · Состояния журнала</span>
+          <span class="frame__meta">
+            Пять состояний одной карточки. Строка цен стоит и при загрузке, и при отказе
+            журнала: цены приходят с проектом, а не с журналом. У «Проекта не найден» строки
+            цен нет — проекта нет, значит и цен нет. Пустой журнал приглашает к действию и
+            говорит про обе половины: смены приходят сами, ручную запись добавляют кнопкой.
+          </span>
+        </figcaption>
+
+        <div class="states">
+          <div class="state">
+            <p class="state__cap"><strong>Загрузка.</strong> «Загрузка…» на месте строк.</p>
+            <section class="card" aria-label="Расходы проекта">
+              <div class="card__head">
+                <h2 class="card__title">Расходы проекта</h2>
+                <div class="card__tools">
+                  <button class="btn btn--dark" type="button">Добавить запись</button>
+                </div>
+              </div>
+              <div class="card__prices">
+                <p class="prices__label">
+                  Цены за токены <span class="prices__unit">· $ за 1 млн</span>
+                </p>
+                <ul class="prices__list">
+                  <li class="tok"><span class="tok__label">вход</span><span class="tok__value">3,00</span></li>
+                  <li class="tok"><span class="tok__label">выход</span><span class="tok__value">15,00</span></li>
+                  <li class="tok"><span class="tok__label">кэш-чтение</span><span class="tok__value">0,30</span></li>
+                  <li class="tok"><span class="tok__label">кэш-запись</span><span class="tok__value">3,75</span></li>
+                </ul>
+                <button class="btn" type="button">Изменить</button>
+              </div>
+              <div class="card__body">
+                <p class="state__line" data-testid="expenses-state" aria-live="polite">Загрузка…</p>
+              </div>
+            </section>
+          </div>
+
+          <div class="state">
+            <p class="state__cap">
+              <strong>Пусто.</strong> Ни смен, ни ручных записей: подпись и подсказка про две
+              дороги в журнал.
+            </p>
+            <section class="card" aria-label="Расходы проекта">
+              <div class="card__head">
+                <h2 class="card__title">Расходы проекта</h2>
+                <div class="card__tools">
+                  <span class="card__meta">0 записей</span>
+                  <div class="cost-sum">
+                    <span class="cost-sum__label">Итого</span>
+                    <span class="cost-sum__value">0,00 $</span>
+                  </div>
+                  <button class="btn btn--dark" type="button">Добавить запись</button>
+                </div>
+              </div>
+              <div class="card__prices">
+                <p class="prices__label">
+                  Цены за токены <span class="prices__unit">· $ за 1 млн</span>
+                </p>
+                <ul class="prices__list">
+                  <li class="tok"><span class="tok__label">вход</span><span class="tok__value">3,00</span></li>
+                  <li class="tok"><span class="tok__label">выход</span><span class="tok__value">15,00</span></li>
+                  <li class="tok"><span class="tok__label">кэш-чтение</span><span class="tok__value">0,30</span></li>
+                  <li class="tok"><span class="tok__label">кэш-запись</span><span class="tok__value">3,75</span></li>
+                </ul>
+                <button class="btn" type="button">Изменить</button>
+              </div>
+              <div class="card__body" data-testid="expenses-empty">
+                <p class="state__line">Пока нет записей</p>
+                <p class="state__hint">
+                  Смены приходят сами, когда отдел закрывает смену проекта. Ручную запись
+                  добавьте кнопкой «Добавить запись».
+                </p>
+              </div>
+            </section>
+          </div>
+
+          <div class="state">
+            <p class="state__cap">
+              <strong>Отказ загрузки.</strong> Текст из <code>detail</code> и «Повторить»
+              рядом; строка цен остаётся — цены не пропали, журнал не прочитался.
+            </p>
+            <section class="card" aria-label="Расходы проекта">
+              <div class="card__head">
+                <h2 class="card__title">Расходы проекта</h2>
+                <div class="card__tools">
+                  <button class="btn btn--dark" type="button">Добавить запись</button>
+                </div>
+              </div>
+              <div class="card__prices">
+                <p class="prices__label">
+                  Цены за токены <span class="prices__unit">· $ за 1 млн</span>
+                </p>
+                <ul class="prices__list">
+                  <li class="tok"><span class="tok__label">вход</span><span class="tok__value">3,00</span></li>
+                  <li class="tok"><span class="tok__label">выход</span><span class="tok__value">15,00</span></li>
+                  <li class="tok"><span class="tok__label">кэш-чтение</span><span class="tok__value">0,30</span></li>
+                  <li class="tok"><span class="tok__label">кэш-запись</span><span class="tok__value">3,75</span></li>
+                </ul>
+                <button class="btn" type="button">Изменить</button>
+              </div>
+              <div class="card__body">
+                <div class="state__error">
+                  <p class="error" role="alert" data-testid="expenses-error">Сервер не отвечает</p>
+                  <button class="btn" type="button" data-testid="expenses-retry">Повторить</button>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <div class="state">
+            <p class="state__cap">
+              <strong>Проект не найден.</strong> Ни цен, ни итога: числа нет, а не ноль.
+            </p>
+            <section class="card" aria-label="Расходы проекта">
+              <div class="card__head">
+                <h2 class="card__title">Расходы проекта</h2>
+                <div class="card__tools">
+                  <button class="btn btn--dark" type="button">Добавить запись</button>
+                </div>
+              </div>
+              <div class="card__body">
+                <div class="state__error">
+                  <p class="error" role="alert" data-testid="expense-form-error">Проект не найден</p>
+                  <button class="btn" type="button">Повторить</button>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <div class="state state--wide">
+            <p class="state__cap">
+              <strong>Цены не заданы.</strong> Четыре нуля — допустимое состояние проекта, но
+              сервер отклонит любую запись. Подпись строки красная, кнопка называется
+              «Задать цены», журнал при этом читается как обычно.
+            </p>
+            <section class="card" aria-label="Расходы проекта">
+              <div class="card__head">
+                <h2 class="card__title">Расходы проекта</h2>
+                <div class="card__tools">
+                  <span class="card__meta">7 записей · 3 смены и 4 ручные записи</span>
+                  <div class="cost-sum">
+                    <span class="cost-sum__label">Итого</span>
+                    <span class="cost-sum__value">119,23 $</span>
+                  </div>
+                  <button class="btn btn--dark" type="button">Добавить запись</button>
+                </div>
+              </div>
+              <div class="card__prices card__prices--unset" data-testid="expenses-prices">
+                <p class="prices__label">Цены не заданы</p>
+                <p class="prices__note">
+                  Пока все четыре цены нули, сервер отклонит любую запись.
+                </p>
+                <button class="btn btn--dark" type="button" data-testid="expenses-prices-edit">
+                  Задать цены
+                </button>
+              </div>
+              <ul class="table__body">
+                <li class="journal-row">
+                  <div class="journal-row__when">
+                    <p class="journal-row__date">19 ноя 2026</p>
+                    <p class="journal-row__period">09:00 → 17:00</p>
+                  </div>
+                  <div class="journal-row__source">
+                    <p class="journal-row__source-label">смена</p>
+                    <p class="journal-row__source-note">3 сессии · окно смены</p>
+                  </div>
+                  <p class="journal-row__tokens">
+                    <span class="tok"><span class="tok__label">вход</span><span class="tok__value">2 480 000</span></span>
+                    <span class="tok"><span class="tok__label">выход</span><span class="tok__value">610 000</span></span>
+                  </p>
+                  <p class="journal-row__amount">18,42 $</p>
+                  <div class="journal-row__open"><button class="btn" type="button">Сессии</button></div>
+                </li>
+                <li class="journal-row">
+                  <div class="journal-row__when">
+                    <p class="journal-row__date">19 ноя 2026</p>
+                  </div>
+                  <div class="journal-row__source">
+                    <p class="journal-row__source-label">ручная запись</p>
+                  </div>
+                  <p class="journal-row__tokens">
+                    <span class="tok"><span class="tok__label">вход</span><span class="tok__value">1 500 000</span></span>
+                  </p>
+                  <p class="journal-row__amount">8,25 $</p>
+                </li>
+              </ul>
+            </section>
+          </div>
+        </div>
+      </figure>
+
+      <footer class="sheet__head">
+        <p class="sheet__lead">
+          Что в макет не входит: реализация (схема, миграция <code>0014_usd_journal</code>,
+          <code>money.py</code>, серверный расчёт смены), разметка компонентов и обработчики,
+          поведение очереди надстройки, вкладки «Задачи» и «Отделы», рубли задач. Файлы —
+          <code>mockups/72/index.html</code> и <code>mockups/72/notes.md</code>.
+        </p>
+      </footer>
+    </div>
+  </body>
+</html>
