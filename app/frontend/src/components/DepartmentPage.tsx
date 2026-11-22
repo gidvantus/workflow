@@ -47,6 +47,7 @@ import {
 } from '../api/departments';
 import { ApiError, UNREACHABLE_TEXT } from '../api/http';
 import type { Project } from '../api/projects';
+import DepartmentProcess from './DepartmentProcess';
 
 /** Предел окон: тот же `WINDOWS_MAX`, что у сервера. Фронт лишь не даёт добавить седьмое. */
 const WINDOWS_MAX = 6;
@@ -269,6 +270,12 @@ export default function DepartmentPage({
   const [roles, setRoles] = useState<RolesState>({ status: 'loading' });
   const [busy, setBusy] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
+  /**
+   * Вкладка страницы: настройки отдела и процесс. Процесс — отдельный документ со своей
+   * парой ручек и своей кнопкой «Сохранить», поэтому он не часть формы настроек: одна
+   * форма с двумя «Сохранить» сохраняла бы половину того, что человек видит на экране.
+   */
+  const [tab, setTab] = useState<'settings' | 'process'>('settings');
 
   const needsRoles = department.fields.includes('roles');
   /**
@@ -773,6 +780,32 @@ export default function DepartmentPage({
           </div>
         </div>
 
+        <div className="dept-tabs" role="tablist" aria-label="Разделы отдела">
+          <button
+            className={tab === 'settings' ? 'dept-tabs__tab dept-tabs__tab--active' : 'dept-tabs__tab'}
+            type="button"
+            role="tab"
+            aria-selected={tab === 'settings'}
+            data-testid="department-tab-settings"
+            onClick={() => setTab('settings')}
+          >
+            Настройки
+          </button>
+          <button
+            className={tab === 'process' ? 'dept-tabs__tab dept-tabs__tab--active' : 'dept-tabs__tab'}
+            type="button"
+            role="tab"
+            aria-selected={tab === 'process'}
+            data-testid="department-tab-process"
+            onClick={() => setTab('process')}
+          >
+            Процесс
+          </button>
+        </div>
+
+        {tab === 'process' ? (
+          <DepartmentProcess departmentId={department.id} />
+        ) : (
         <form
           className="card"
           aria-label="Настройки отдела"
@@ -818,6 +851,7 @@ export default function DepartmentPage({
             </div>
           </div>
         </form>
+        )}
       </main>
     </>
   );

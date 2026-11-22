@@ -33,9 +33,15 @@ SQLAlchemy не увидит изменения, а `updated_at` не сдвин
 свои строки связи не теряет: физического удаления в приложении нет, поэтому набор ролей
 удалённого отдела остаётся в базе как есть. Ролей может не быть ни одной: пустой набор —
 это не ошибка, а «роли ещё не заполнены».
+
+Процесс отдела (`process`) — таблица ступеней конвейера документом: кто какую метку берёт
+и что ставит дальше. `NULL` — «своего процесса нет»: диспетчер исполняет умолчания, и
+выкатка ничего не меняет. Проверка документа — в `app/schemas/process.py`, образец — в
+`app/process_defaults.py`.
 """
 
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import (
     JSON,
@@ -64,6 +70,10 @@ ALIVE_CONDITION = text("deleted_at IS NULL")
 # Вся проверка окон живёт в Python, поэтому поведение обоих диалектов совпадает; на
 # JSON-операторы в запросах ручки не опираются.
 WINDOWS_JSON = JSON().with_variant(JSONB(), "postgresql")
+
+# Тип колонки процесса: тот же `JSON`/`JSONB`, что у окон. Проверка документа живёт в
+# `app/schemas/process.py`, а не в диалекте: JSON-операторов в запросах никто не использует.
+PROCESS_JSON = JSON().with_variant(JSONB(), "postgresql")
 
 # Лимит возврата задачи по умолчанию: столько раз задачу можно вернуть в работу, если
 # поле на странице правки оставили пустым.
@@ -112,6 +122,16 @@ class Department(Base):
         WINDOWS_JSON,
         nullable=False,
         default=list,
+    )
+    # Процесс отдела: таблица ступеней конвейера документом (форма — `app/process_defaults.py`,
+    # проверка — `app/schemas/process.py`). `NULL` — «своего процесса нет»: диспетчер
+    # исполняет умолчания, и до первой правки в вебе конвейер работает как раньше.
+    # Значение присваивается целиком, правки на месте (`MutableDict`) не используются —
+    # иначе SQLAlchemy не увидит изменения и `updated_at` не сдвинется.
+    process: Mapped[dict[str, Any] | None] = mapped_column(
+        PROCESS_JSON,
+        nullable=True,
+        default=None,
     )
     # Поля страницы правки: набор задаёт вид, сами значения — необязательные строки.
     repo_path: Mapped[str | None] = mapped_column(String(500), nullable=True)

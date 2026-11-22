@@ -32,24 +32,42 @@
 тоже. Окна не пересекаются, а касание концами (13:00–18:00 и 18:00–21:00) пересечением
 не считается. Набор заменяется целиком, как `role_ids`: сборки «итогового набора из
 базы» нет, потому что у окон нет второй половины, которую надо было бы доставать.
+
+**Процесс отдела** (`GET`/`PUT /api/departments/{id}/process`) — отдельная пара ручек, а
+не поле страницы правки: документ ступеней слишком велик для `PATCH`, и сохранять его
+надо целиком, вместе с пересборкой реестра. `GET` отдаёт сохранённый документ (или `null`,
+если своего процесса у отдела нет), умолчания, коды живых ролей и каталог стражей:
+своей копии справочников у фронта нет. `PUT` проверяет документ по таблице отказов,
+пишет колонку и **пересобирает реестр** — правка процесса обязана доехать до диспетчера
+в пределах интервала синхронизации, а не только выглядеть сохранённой на экране.
+Обе ручки браузерные, как `PATCH`: аутентификации в приложении нет.
 """
 
 import re
 from collections.abc import Sequence
 from datetime import UTC, datetime, time
-from typing import Annotated
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.projects import PROJECT_NOT_FOUND, _get_alive_project
+from app.api.registry import rebuild_registry
 from app.db import get_db
 from app.models.department import DEFAULT_MAX_REWORK, Department
 from app.models.department_kind import DepartmentKind
 from app.models.role import Role
+from app.process_defaults import GUARDS, default_process
 from app.schemas.department import DepartmentCreate, DepartmentResponse, DepartmentUpdate
+from app.schemas.process import (
+    ProcessError,
+    ProcessGuard,
+    ProcessResponse,
+    ProcessSaveResponse,
+    validate_process_document,
+)
 
 # Отделы проекта: список и создание.
 router = APIRouter(prefix="/api/projects/{project_id}/departments", tags=["departments"])
@@ -305,6 +323,17 @@ def _commit_or_conflict(db: Session) -> None:
         raise HTTPException(status.HTTP_409_CONFLICT, NAME_TAKEN) from error
 
 
+def _role_codes(db: Session) -> list[str]:
+    """Коды живых ролей справочника: ими ограничен `role` ступени процесса.
+
+    Порядок — по `id`, как в `GET /api/roles`: справочник маленький, и порядок ответа не
+    должен зависеть от того, как легли строки. Мягко удалённые роли не попадают: сессию по
+    удалённой роли диспетчер всё равно не поднимет.
+    """
+    statement = select(Role.code).where(Role.deleted_at.is_(None)).order_by(Role.id)
+    return [code for code in db.scalars(statement) if code]
+
+
 @router.get(
     "",
     response_model=list[DepartmentResponse],
@@ -452,6 +481,70 @@ def update_department(
     _commit_or_conflict(db)
     db.refresh(department)
     return department
+
+
+@items_router.get(
+    "/{department_id}/process",
+    response_model=ProcessResponse,
+    summary="Процесс отдела",
+    responses={
+        status.HTTP_404_NOT_FOUND: {"description": f"Отдела нет: «{DEPARTMENT_NOT_FOUND}»."},
+    },
+)
+def get_process(department_id: int, db: DbSession) -> ProcessResponse:
+    """Сохранённый процесс отдела, умолчания, роли и стражи.
+
+    `document: null` — своего процесса у отдела нет: диспетчер исполняет `defaults`, и это
+    нормальное состояние только что заведённого отдела, а не ошибка. `defaults` приходят
+    всегда: по ним экран рисует «Сбросить к умолчанию» без второго запроса.
+
+    Документ отдаётся как лежит в колонке, без пересборки: сохранённое и показанное на
+    экране обязано совпадать, иначе первое же «Сохранить» перепишет таблицу «само».
+    """
+    department = _get_alive_department(db, department_id)
+    return ProcessResponse(
+        document=department.process,
+        defaults=default_process(),
+        roles=_role_codes(db),
+        guards=[ProcessGuard(id=guard_id, title=title) for guard_id, title in GUARDS],
+    )
+
+
+@items_router.put(
+    "/{department_id}/process",
+    response_model=ProcessSaveResponse,
+    summary="Сохранить процесс отдела",
+    responses={
+        status.HTTP_404_NOT_FOUND: {"description": f"Отдела нет: «{DEPARTMENT_NOT_FOUND}»."},
+    },
+)
+def save_process(
+    department_id: int,
+    db: DbSession,
+    payload: Annotated[Any, Body()],
+) -> ProcessSaveResponse:
+    """Проверить документ, записать колонку и пересобрать реестр.
+
+    Тело — документ целиком, а не `PATCH`: таблица ступеней меняется только вместе с
+    именами меток, и «половина сохранённого процесса» — это документ, который никто не
+    проверял. Форма тела проверяется не моделью pydantic, а таблицей отказов
+    (`app/schemas/process.py`): порядок текстов — часть контракта.
+
+    Порядок записи — из постановки: сначала колонка, потом `rebuild_registry`. Если
+    пересборка упадёт, сохранённый процесс останется в базе, а реестр — прежним: ручка
+    ответит своей ошибкой, а следующий тик синхронизации привезёт документ отдела, как
+    только пересборка пройдёт. Обратный порядок («пересобрать, потом сохранить») показал
+    бы в реестре документ, которого нет в базе.
+    """
+    department = _get_alive_department(db, department_id)
+    try:
+        document = validate_process_document(payload, _role_codes(db))
+    except ProcessError as error:
+        raise _reject(str(error)) from None
+    department.process = document
+    _commit_or_conflict(db)
+    rebuilt = rebuild_registry(db)
+    return ProcessSaveResponse(revision=rebuilt.revision, document=document)
 
 
 @items_router.delete(

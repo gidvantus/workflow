@@ -1,0 +1,2602 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Макет #67 — конструктор переходов: экран «Процесс»</title>
+<!--
+  Макет постановки #67. Статичный: без сборки, без JS, без внешних шрифтов и иконок.
+
+  Токены и компоненты взяты из app/frontend/src/index.css (палитра :root, .app, .sidebar,
+  .nav, .topbar, .crumbs, .content, .page-head, .tabs, .btn, .card, .chip, .field,
+  .checkbox, .error, .state__line, .form-section, .form-foot, .form-actions, .footbar,
+  .status__dot). Новые классы (.proc-*, .lbl, .labels, .picker, .shot, .panel) в продукте
+  отсутствуют — их место в том же index.css, см. notes.md.
+-->
+<style>
+:root {
+  --canvas: #e8e6e0;
+  --chrome: #fcfbf8;
+  --rail: #edebe4;
+  --band: #f2f0ea;
+  --shell: #f7f6f3;
+  --panel: #ffffff;
+  --line: #ece9e2;
+  --border: #e4e1d9;
+  --ink: #17170f;
+  --muted: #6f6d64;
+  --muted-rail: #6b6a61;
+  --muted-2: #9c9a90;
+  --dark: #1b1b16;
+  --dark-hover: #2e2e26;
+  --green: #4a7a52;
+  --danger: #a63d2e;
+  --danger-soft: #fbeeea;
+
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  color: var(--ink);
+  background-color: var(--canvas);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 1.75rem;
+  background-color: var(--canvas);
+}
+
+/* ---------- подпись к кадру (это часть макета, не продукта) ---------- */
+
+.shot {
+  max-width: 80rem;
+  margin: 0 auto;
+}
+
+.shot + .shot { margin-top: 2.25rem; }
+
+.shot__caption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.75rem;
+  margin: 0 0 0.625rem;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.shot__caption strong {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+/* ---------- оболочка приложения ---------- */
+
+.app {
+  display: grid;
+  grid-template-columns: 15.5rem minmax(0, 1fr);
+  min-height: 24rem;
+  background-color: var(--chrome);
+  border: 1px solid var(--border);
+  border-radius: 1.125rem;
+  box-shadow: 0 30px 60px -48px rgba(23, 23, 15, 0.55);
+  overflow: hidden;
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 1.75rem;
+  padding: 1.25rem 1rem 1rem;
+  background-color: var(--rail);
+  border-right: 1px solid var(--border);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.25rem 0.375rem;
+}
+
+.brand__mark {
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  color: var(--shell);
+  background-color: var(--dark);
+  border-radius: 0.5rem;
+}
+
+.brand__name {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.brand__sub {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--muted-rail);
+}
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.nav__label {
+  margin: 0;
+  padding: 0 0.375rem;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-rail);
+}
+
+.nav__item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.625rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--muted-rail);
+  text-decoration: none;
+  border: 1px solid transparent;
+  border-radius: 0.5rem;
+}
+
+.nav__item[aria-current='page'] {
+  color: var(--ink);
+  background-color: var(--panel);
+  border-color: var(--border);
+}
+
+.nav__item svg { flex: none; }
+
+.nav__count {
+  margin-left: auto;
+  padding: 0.0625rem 0.375rem;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: var(--muted);
+  background-color: var(--band);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+  padding: 0.875rem 1.5rem;
+  background-color: var(--chrome);
+  border-bottom: 1px solid var(--border);
+}
+
+.crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+
+.crumbs__sep { color: var(--muted-2); }
+.crumbs__current { color: var(--ink); font-weight: 500; }
+
+.content {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  padding: 1.5rem;
+}
+
+.page-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.page-head__title {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 1.25;
+}
+
+.page-head__sub {
+  margin: 0.25rem 0 0;
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+
+/* Паспорт отдела: вид и дата правки, как на странице правки отдела. */
+.dept-head { min-width: 0; }
+
+.dept-head__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.5rem;
+  margin: 0.125rem 0 0;
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+
+/* ---------- подразделы отдела ---------- */
+
+.tabs {
+  display: flex;
+  gap: 0.25rem;
+  min-width: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.tab {
+  position: relative;
+  margin-bottom: -1px;
+  padding: 0.4375rem 0.75rem 0.5rem;
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.3;
+  color: var(--muted);
+  background-color: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+
+.tab[aria-selected='true'] {
+  color: var(--ink);
+  border-bottom-color: var(--ink);
+}
+
+/* ---------- кнопки ---------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  padding: 0.4375rem 0.75rem;
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.25;
+  color: var(--ink);
+  background-color: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  cursor: pointer;
+}
+
+.btn--dark {
+  padding: 0.5rem 0.9375rem;
+  color: var(--shell);
+  background-color: var(--dark);
+  border-color: var(--dark);
+}
+
+.btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+/* ---------- карточка ---------- */
+
+.card {
+  display: flex;
+  flex-direction: column;
+  background-color: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0.875rem;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.card__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  padding: 0.875rem 1.125rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.card__title {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.card__meta {
+  margin: 0.1875rem 0 0;
+  max-width: 64ch;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.card__tools {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.chip {
+  padding: 0.0625rem 0.375rem;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: var(--muted);
+  background-color: var(--band);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.card__body { padding: 1.5rem 1.125rem; }
+
+/* ---------- таблица ступеней ---------- */
+
+/*
+ * Колонки. Метки — ключи документа (dev, progress, areaBackend), поэтому моноширинный
+ * кегль 12 px и запятая за краем токена: строка не начинается со знака. «Кроме» шире
+ * всех: у маршрутной ступени там восемь ключей.
+ */
+.proc-head,
+.proc-row {
+  display: grid;
+  grid-template-columns:
+    3.25rem minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1.15fr) minmax(0, 0.9fr)
+    minmax(0, 0.7fr) minmax(0, 0.65fr) minmax(0, 0.85fr) 4.25rem 1.5rem;
+  gap: 0.5rem;
+  align-items: start;
+  padding: 0.5625rem 1.125rem;
+}
+
+.proc-head {
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted-rail);
+  background-color: var(--band);
+  border-bottom: 1px solid var(--line);
+}
+
+.proc-head span:nth-child(9) { text-align: center; }
+
+/* Роль — код из справочника, поэтому моноширинный и на шаг мельче меток: dev-fullstack
+   должен влезать в одну строку. */
+.proc-cell--role .role,
+.proc-row .role,
+.picker .role {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 0.6875rem;
+  line-height: 1.45;
+}
+
+.proc-body { margin: 0; padding: 0; list-style: none; }
+
+.proc-row {
+  border-bottom: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+}
+
+.proc-row:last-child { border-bottom: 0; }
+.proc-row:hover { background-color: #fbfaf7; }
+
+.proc-row__order {
+  padding-top: 0.0625rem;
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: var(--muted);
+  text-align: right;
+}
+
+.proc-row__step { min-width: 0; }
+
+.proc-row__title {
+  display: block;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+/* Вторая строка ячейки: id ступени из документа и её вид. id стоит здесь, потому что
+   тексты отказов сервера называют именно его: «У ступени «dev-backend»…». Вид:
+   сессия запускает агента, маршрут только раскладывает по путям, метки ничего не запускают. */
+.proc-row__kind {
+  display: block;
+  margin-top: 0.0625rem;
+  font-size: 0.6875rem;
+  line-height: 1.4;
+  color: var(--muted);
+  overflow-wrap: break-word;
+}
+
+.proc-row__id {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 0.6875rem;
+  color: var(--muted);
+}
+
+/* Ключ метки — служебное значение, поэтому моноширинный; запятая висит на предыдущем
+   токене, чтобы перенос не начинал строку с «,». Каждый ключ — атомарный inline-block:
+   переносится целиком на свою строку, а не рвётся посередине. */
+.lbl {
+  display: inline-block;
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 0.6875rem;
+  line-height: 1.5;
+  color: var(--ink);
+  overflow-wrap: normal;
+}
+
+.lbl:not(:last-child)::after {
+  content: ', ';
+  color: var(--muted-2);
+}
+
+/* Исключения и снятие — то, что ступень отсекает, а не то, что она делает: тише. */
+.proc-cell--unless .lbl,
+.proc-cell--drop .lbl { color: var(--muted); }
+
+.proc-cell--put .lbl { font-weight: 500; }
+
+.proc-cell {
+  min-width: 0;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+
+.proc-cell--guard,
+.proc-cell--role {
+  color: var(--ink);
+}
+
+.proc-cell--guard { font-size: 0.75rem; line-height: 1.45; color: var(--muted); }
+
+.proc-cell--none {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.proc-cell--enabled {
+  display: flex;
+  justify-content: center;
+  padding-top: 0.03125rem;
+}
+
+/* Клетка правки: метки в строке — кнопка, открывающая список с галочками. В покое она
+   неотличима от текста, фокус и наведение рисуют рамку. */
+.proc-cell--edit {
+  display: block;
+  width: 100%;
+  margin: -0.1875rem -0.3125rem;
+  padding: 0.1875rem 0.3125rem;
+  font: inherit;
+  text-align: left;
+  background-color: transparent;
+  border: 1px solid transparent;
+  border-radius: 0.375rem;
+  cursor: pointer;
+}
+
+.proc-cell--edit:hover { border-color: var(--border); }
+
+.proc-cell--edit[aria-expanded='true'] {
+  background-color: var(--panel);
+  border-color: var(--border);
+}
+
+.proc-cell--edit:focus-visible,
+.proc-cell--edit:focus {
+  outline: 2px solid var(--ink);
+  outline-offset: 1px;
+}
+
+/* Ступень, снятая с конвейера: заголовок остаётся читаемым, остальное тише —
+   строка не ошибка, она просто не берёт тикетов. */
+.proc-row--off { background-color: var(--band); }
+.proc-row--off:hover { background-color: var(--band); }
+.proc-row--off .proc-row__title { color: var(--muted); }
+.proc-row--off .lbl { color: var(--muted); }
+
+.checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4375rem;
+  font-size: 0.8125rem;
+  line-height: 1.35;
+  color: var(--ink);
+}
+
+.checkbox input {
+  flex: none;
+  width: 0.9375rem;
+  height: 0.9375rem;
+  margin: 0.0625rem 0 0;
+  accent-color: var(--dark);
+}
+
+/* ---------- отказ сервера над таблицей ---------- */
+
+.form-error {
+  margin: 0;
+  padding: 0.625rem 0.75rem;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--danger);
+  background-color: var(--danger-soft);
+  border-radius: 0.5rem;
+}
+
+.form-error + .proc-head { margin-top: 0.75rem; }
+
+/* ---------- блок имён меток ---------- */
+
+.form-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+  padding: 1.25rem 1.125rem;
+}
+
+.form-section + .form-section { border-top: 1px solid var(--line); }
+
+.form-section__title {
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.form-section__hint {
+  margin: 0.1875rem 0 0;
+  max-width: 62ch;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.labels {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem 1.25rem;
+  max-width: 46rem;
+}
+
+.labels__row {
+  display: grid;
+  grid-template-columns: 7.5rem minmax(0, 1fr);
+  align-items: center;
+  gap: 0.625rem;
+}
+
+.labels__key {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 0.75rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.field__input {
+  width: 100%;
+  padding: 0.375rem 0.5rem;
+  font: inherit;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  color: var(--ink);
+  background-color: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0.4375rem;
+}
+
+.labels__row .field__input {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 0.75rem;
+}
+
+/* ---------- полоса формы ---------- */
+
+.form-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.875rem 1.125rem;
+  background-color: var(--chrome);
+  border-top: 1px solid var(--border);
+}
+
+.form-foot__note {
+  margin: 0;
+  max-width: 76ch;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 0.75rem;
+}
+
+.form-actions__end {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4375rem;
+  font-size: 0.8125rem;
+  color: var(--ink);
+}
+
+.status__dot {
+  flex: none;
+  width: 0.4375rem;
+  height: 0.4375rem;
+  background-color: var(--green);
+  border-radius: 50%;
+}
+
+.status__dot--idle { background-color: var(--muted-2); }
+
+/* ---------- подвал приложения ---------- */
+
+.footbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1.5rem;
+  margin-top: auto;
+  padding: 0.875rem 1.5rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+}
+
+.footbar__note { margin: 0; }
+
+/* ---------- состояния ---------- */
+
+.state__line {
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+.state__hint {
+  margin: 0.375rem 0 0;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--muted);
+  max-width: 62ch;
+}
+
+.state__error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.625rem 1rem;
+}
+
+.state__hint code,
+.state__line code {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 0.75rem;
+  color: var(--muted);
+  background-color: var(--band);
+  padding: 0.0625rem 0.25rem;
+  border-radius: 0.25rem;
+}
+
+.error {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--danger);
+}
+
+/* Сетка состояний: два столбца, каждая карточка — кусок этого же экрана. */
+.panels {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.panel__caption {
+  margin: 0;
+  padding: 0.625rem 1.125rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--muted);
+  background-color: var(--band);
+  border-bottom: 1px solid var(--line);
+}
+
+.panel__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  padding: 1rem 1.125rem;
+}
+
+/* ---------- правка меток в строке ---------- */
+
+.picker {
+  position: relative;
+  z-index: 2;
+  width: min(24rem, calc(100% - 2.25rem));
+  margin: 0.375rem 0 0.75rem 7.75rem;
+  padding: 0.75rem;
+  background-color: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0.625rem;
+  box-shadow: 0 18px 32px -18px rgba(23, 23, 15, 0.35);
+}
+
+.picker__title {
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.picker__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.375rem 0.875rem;
+}
+
+.picker .checkbox span {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 0.75rem;
+}
+
+.picker__foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.625rem;
+}
+
+/* ---------- фокус ---------- */
+
+.btn:focus-visible,
+.tab:focus-visible,
+.nav__item:focus-visible,
+.field__input:focus-visible,
+.checkbox input:focus-visible,
+.proc-cell:focus-visible,
+.proc-add:focus-visible,
+.icon-btn:focus-visible,
+.rolecard:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+/* ---------- ≤ 1200 px: та же таблица, уже колонки ---------- */
+
+/*
+ * Ступень, «кроме» и «страж» теряют ширину первыми, но не пропадают: на 1200 содержимое
+ * карточки — около 800 px, и девять колонок ещё влезают без прокрутки.
+ */
+@media (max-width: 1200px) {
+  .proc-head,
+  .proc-row {
+    grid-template-columns:
+      3rem minmax(0, 1.4fr) minmax(0, 0.95fr) minmax(0, 1.05fr) minmax(0, 0.85fr)
+      minmax(0, 0.65fr) minmax(0, 0.6fr) minmax(0, 0.8fr) 4rem 1.375rem;
+    gap: 0.4375rem;
+    padding-left: 0.875rem;
+    padding-right: 0.875rem;
+  }
+}
+
+/* ---------- ≤ 900 px: меню полосой, ступень блоком ---------- */
+
+@media (max-width: 900px) {
+  .app { grid-template-columns: minmax(0, 1fr); }
+
+  .sidebar {
+    flex-direction: row;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.75rem 1rem;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .nav {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .nav__label { display: none; }
+  .nav__item { white-space: nowrap; }
+
+  .topbar { padding: 0.75rem 1rem; }
+  .content { padding: 1rem; }
+
+  /*
+   * Девять колонок в 343 px не читаются, поэтому каждая ступень — блок: номер и
+   * название строкой, под ними поля с подписями. Порядок полей тот же, что в таблице,
+   * поэтому глаз не переучивается. «Кроме» и «снимает» не прячутся.
+   */
+  .proc-head { display: none; }
+
+  .proc-row {
+    grid-template-columns: 2rem minmax(0, 1fr);
+    gap: 0.25rem 0.5rem;
+    padding: 0.875rem 1rem;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .proc-row__order { grid-column: 1; grid-row: 1; text-align: left; }
+  .proc-row__step { grid-column: 2; grid-row: 1; }
+
+  .proc-cell,
+  .proc-cell--enabled {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.125rem 0.375rem;
+    justify-content: flex-start;
+  }
+
+  .proc-cell::before {
+    content: attr(data-label) ':';
+    font-size: 0.6875rem;
+    color: var(--muted-rail);
+  }
+
+  .proc-cell--edit {
+    width: auto;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .proc-cell--edit::before {
+    content: attr(data-label) ':';
+    font-size: 0.6875rem;
+    color: var(--muted-rail);
+    margin-right: 0.25rem;
+  }
+
+  .proc-row .lbl { font-size: 0.75rem; }
+
+  .panels { grid-template-columns: minmax(0, 1fr); }
+
+  .labels { grid-template-columns: minmax(0, 1fr); max-width: none; }
+
+  .picker { margin-left: 0; width: 100%; }
+
+  .page-head__title { font-size: 1.375rem; }
+}
+
+/* ---------- ≤ 600 px: одна колонка ---------- */
+
+@media (max-width: 600px) {
+  body { padding: 0.75rem; }
+
+  .app { border-radius: 0.875rem; }
+
+  .sidebar { flex-wrap: wrap; gap: 0.5rem 0.75rem; }
+  .brand__sub { display: none; }
+
+  .card__body { padding: 1.25rem 1rem; }
+  .form-section { padding: 1.125rem 1rem; }
+  .form-foot { padding: 0.875rem 1rem; }
+
+  /* Кнопки в стопку на всю ширину: «Сохранить» — последним, как в форме отдела. */
+  .form-actions { flex-direction: column; align-items: stretch; }
+  .form-actions__end { flex-direction: column; margin-left: 0; }
+  .form-actions .btn { width: 100%; }
+
+  .panel__body { padding: 1rem; }
+  .panel__caption { padding: 0.625rem 1rem; }
+
+  .footbar { padding: 0.75rem 1rem; }
+  .topbar .btn { width: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none; animation: none; }
+}
+
+/* ---------- карта связей ролей ---------- */
+
+.map { padding: 1.25rem 1.125rem 1rem; }
+
+/* Схема шире телефона: на узком экране она прокручивается вбок, а не сжимается в нечитаемое. */
+.map__scroll { overflow-x: auto; }
+
+.map__pan {
+  display: none;
+  margin: 0.5rem 0 0;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.map__svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.map__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem 1.25rem;
+  margin: 0.875rem 0 0;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.map__legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4375rem;
+}
+
+.map__line {
+  width: 1.75rem;
+  border-top: 1.5px solid var(--muted-2);
+}
+
+.map__line--dash { border-top-style: dashed; }
+
+/* ---------- справочник лейблов: две колонки, как просили ---------- */
+
+.ref {
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  overflow: hidden;
+}
+
+.ref__head,
+.ref__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 1rem;
+  padding: 0.4375rem 0.875rem;
+}
+
+.ref__head {
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted-rail);
+  background-color: var(--band);
+  border-bottom: 1px solid var(--line);
+}
+
+.ref__row { border-bottom: 1px solid var(--line); }
+.ref__row:last-child { border-bottom: 0; }
+.ref__row:hover { background-color: #fbfaf7; }
+
+.ref__state { min-width: 0; }
+
+.ref__title {
+  display: block;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+
+.ref__key {
+  display: block;
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 0.6875rem;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.ref__row .field__input {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 0.75rem;
+}
+
+/* ---------- добавить и удалить ступень ---------- */
+
+.proc-cell--remove {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.icon-btn {
+  display: grid;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  font: inherit;
+  font-size: 1rem;
+  line-height: 1;
+  color: var(--muted-2);
+  background-color: transparent;
+  border: 1px solid transparent;
+  border-radius: 0.375rem;
+  cursor: pointer;
+}
+
+.icon-btn:hover {
+  color: var(--danger);
+  border-color: var(--border);
+  background-color: var(--panel);
+}
+
+.proc-add {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.75rem 1.125rem;
+  font: inherit;
+  font-size: 0.8125rem;
+  color: var(--ink);
+  text-align: left;
+  background-color: transparent;
+  border: 0;
+  border-top: 1px solid var(--line);
+  cursor: pointer;
+}
+
+/* Пустая таблица: место, где были ступени, приглашает добавить первую. */
+.proc-empty {
+  padding: 1.75rem 1.125rem 1.25rem;
+  text-align: center;
+  background-color: #fbfaf7;
+  border-top: 1px solid var(--line);
+}
+
+.proc-empty__title {
+  margin: 0 0 0.375rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.proc-empty__hint {
+  max-width: 34rem;
+  margin: 0 auto 1rem;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.proc-empty__add {
+  width: auto;
+  margin: 0 auto;
+  padding: 0.5rem 0.875rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  background-color: #ffffff;
+}
+
+.proc-add:hover { background-color: #fbfaf7; }
+
+.proc-add__plus {
+  display: grid;
+  place-items: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  font-size: 0.8125rem;
+  line-height: 1;
+  color: var(--shell);
+  background-color: var(--dark);
+  border-radius: 0.3125rem;
+}
+
+.proc-add__hint {
+  margin-left: auto;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+/* ---------- мастер новой ступени ---------- */
+
+.dialog {
+  background-color: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  box-shadow: 0 24px 48px -40px rgba(23, 23, 15, 0.6);
+  overflow: hidden;
+}
+
+.dialog__head {
+  padding: 1.125rem 1.25rem 0.875rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.dialog__eyebrow {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--muted-rail);
+}
+
+.dialog__title {
+  margin: 0.25rem 0 0;
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.stepper {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem 0.4375rem;
+  margin: 0.875rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.stepper__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.1875rem 0.5625rem 0.1875rem 0.1875rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.stepper__item > span {
+  display: grid;
+  place-items: center;
+  width: 1.125rem;
+  height: 1.125rem;
+  font-size: 0.6875rem;
+  border-radius: 50%;
+  background-color: var(--band);
+  color: var(--muted);
+}
+
+.stepper__item--done { color: var(--ink); }
+.stepper__item--done > span { background-color: var(--ink); color: var(--shell); }
+
+.stepper__item--on { color: var(--ink); border-color: var(--ink); }
+.stepper__item--on > span { background-color: var(--dark); color: var(--shell); }
+
+.dialog__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+  padding: 1.125rem 1.25rem;
+}
+
+.dialog__lead {
+  margin: 0;
+  max-width: 72ch;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.dialog__hint {
+  margin: 0;
+  max-width: 72ch;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.dialog__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 0.75rem;
+  padding: 0.875rem 1.25rem;
+  background-color: var(--chrome);
+  border-top: 1px solid var(--border);
+}
+
+.dialog__step-note {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.dialog__foot-end {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
+/* Кто выполняет — главный вопрос шага, поэтому карточки крупные и с подписью роли. */
+.rolecards {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.625rem;
+}
+
+.rolecard {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3125rem;
+  padding: 0.75rem 0.8125rem;
+  background-color: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  cursor: pointer;
+}
+
+.rolecard:hover { border-color: var(--muted-2); }
+
+.rolecard--on {
+  background-color: #fbfaf7;
+  border-color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--ink);
+}
+
+.rolecard__title {
+  display: block;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.rolecard__code {
+  display: block;
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 0.6875rem;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.rolecard__note {
+  display: block;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+/* Два списка меток в шаге «триггер»: входящие слева, кроме справа. */
+.dialog__pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.875rem;
+}
+
+.pickbox {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5625rem;
+  padding: 0.75rem 0.8125rem;
+  background-color: var(--chrome);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+}
+
+.pickbox__title {
+  margin: 0;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.pickbox__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.375rem 0.75rem;
+}
+
+.pickbox__hint {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+/* Строка «порядок» в мастере: показывает, куда ступень встанет в таблице. */
+.dialog__order {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem 0.75rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.dialog__order b {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.rolecard__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.rolecard__mark {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 0.75rem;
+  color: var(--ink);
+}
+
+.btn--danger {
+  color: var(--shell);
+  background-color: var(--danger);
+  border-color: var(--danger);
+}
+
+.btn--danger:hover { background-color: #8f3326; border-color: #8f3326; }
+
+/* Следствие удаления — списком: что именно перестанет работать. */
+.dialog__list {
+  margin: 0;
+  max-width: 72ch;
+  padding-left: 1.125rem;
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.dialog__list li + li { margin-top: 0.1875rem; }
+
+@media (max-width: 1200px) {
+  .rolecards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 900px) {
+  /* Кнопка удаления уходит в правый верхний угол блока ступени. */
+  .proc-row { position: relative; }
+
+  .proc-cell--remove {
+    position: absolute;
+    top: 0.625rem;
+    right: 0.75rem;
+  }
+
+  .proc-cell--remove::before { content: none; }
+
+  .map__svg { min-width: 46rem; }
+  .map__pan { display: block; }
+  .map__legend { font-size: 0.6875rem; }
+}
+
+@media (max-width: 600px) {
+  .ref__head { display: none; }
+
+  .ref__row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.25rem;
+    padding: 0.5625rem 0.75rem;
+  }
+
+  .dialog__pair { grid-template-columns: minmax(0, 1fr); }
+  .rolecards { grid-template-columns: minmax(0, 1fr); }
+  .pickbox__grid { grid-template-columns: minmax(0, 1fr); }
+  .proc-add__hint { display: none; }
+}
+</style>
+</head>
+<body>
+
+<!-- ============================ Кадр 1 ============================ -->
+
+<section class="shot">
+  <p class="shot__caption">
+    <strong>Кадр 1 — «Процесс» на странице отдела: карта, ступени, справочник лейблов</strong>
+    Сверху карта связей ролей — кто кому передаёт тикет. Дальше таблица из 13 ступеней, которую
+    читает диспетчер: первая ступень, у которой стоят все «входящие» и не стоит ни одна «кроме»,
+    берёт тикет. Внизу справочник лейблов и полоса формы.
+  </p>
+
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand__mark" aria-hidden="true">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+            <path d="M2.5 5.5 8 2.5l5.5 3L8 8.5z"></path>
+            <path d="M2.5 8.5 8 11.5l5.5-3"></path>
+          </svg>
+        </span>
+        <span>
+          <p class="brand__name">Workflow</p>
+          <p class="brand__sub">Отдел разработки</p>
+        </span>
+      </div>
+
+      <nav class="nav" aria-label="Разделы">
+        <p class="nav__label">Разделы</p>
+        <a class="nav__item" href="#" aria-current="page">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+            <path d="M2 5.5A1.5 1.5 0 0 1 3.5 4h3l1.5 1.5h4A1.5 1.5 0 0 1 13.5 7v4.5A1.5 1.5 0 0 1 12 13H3.5A1.5 1.5 0 0 1 2 11.5z"></path>
+          </svg>
+          Проекты
+          <span class="nav__count">4</span>
+        </a>
+        <a class="nav__item" href="#">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true">
+            <path d="M8 2.5a2.75 2.75 0 1 1 0 5.5 2.75 2.75 0 0 1 0-5.5z"></path>
+            <path d="M2.75 13.5c0-2.4 2.35-4 5.25-4s5.25 1.6 5.25 4"></path>
+          </svg>
+          Роли
+        </a>
+      </nav>
+    </aside>
+
+    <div class="main">
+      <header class="topbar">
+        <p class="crumbs">
+          Приложение
+          <span class="crumbs__sep" aria-hidden="true">/</span>
+          Проекты
+          <span class="crumbs__sep" aria-hidden="true">/</span>
+          Workflow
+          <span class="crumbs__sep" aria-hidden="true">/</span>
+          <span class="crumbs__current">Разработка</span>
+        </p>
+        <button class="btn" type="button">← К проекту</button>
+      </header>
+
+      <main class="content">
+        <div class="page-head">
+          <div class="dept-head">
+            <h1 class="page-head__title">Разработка</h1>
+            <p class="page-head__sub">Кто берёт задачу и какую метку ставит дальше — таблица, которой живёт конвейер.</p>
+            <p class="dept-head__meta">
+              <span>Вид: Разработки</span>
+              <span class="crumbs__sep" aria-hidden="true">·</span>
+              <span>Обновлён 22 ноя 2026</span>
+            </p>
+          </div>
+        </div>
+
+        <!-- Карта связей ролей: обзор конвейера на общей странице отдела, до вкладок. -->
+        <section class="card map" aria-label="Карта связей ролей">
+          <div class="card__head">
+            <div>
+              <h2 class="card__title">Карта связей ролей</h2>
+              <p class="card__meta">
+                Кто кому передаёт тикет и по какой метке. Подпись на стрелке — ключ лейбла,
+                по которому тикет уходит на следующий этап.
+              </p>
+            </div>
+            <div class="card__tools">
+              <span class="chip">5 этапов · 9 ролей</span>
+            </div>
+          </div>
+
+          <div class="map__body">
+            <div class="map__scroll">
+            <svg class="map__svg" viewBox="0 0 1000 262" role="img"
+                 aria-label="Дизайн передаёт разработке по метке dev, разработка — код-ревью по review, код-ревью — тестированию по test, тестирование — слиянию по ok; доработка после теста возвращает тикет разработке по failed.">
+              <defs>
+                <marker id="mapArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <path d="M0 0 L10 5 L0 10 Z" fill="#9c9a90"></path>
+                </marker>
+                <marker id="mapArrowDash" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                  <path d="M0 0 L10 5 L0 10 Z" fill="#b9b7ad"></path>
+                </marker>
+              </defs>
+
+              <!-- маршрутизатор: раскладывает по площади тикета, до первой сессии -->
+              <rect x="220" y="4" width="168" height="34" rx="8" fill="#f2f0ea" stroke="#e4e1d9"></rect>
+              <text x="304" y="20" text-anchor="middle" font-size="11.5" font-weight="600" fill="#17170f">Маршрут по путям</text>
+              <text x="304" y="31" text-anchor="middle" font-size="9" fill="#6f6d64">до первой сессии</text>
+              <line x1="304" y1="40" x2="304" y2="52" stroke="#9c9a90" stroke-width="1.5" marker-end="url(#mapArrow)"></line>
+
+              <!-- этап 1 -->
+              <rect x="40" y="56" width="118" height="116" rx="10" fill="#ffffff" stroke="#e4e1d9"></rect>
+              <text x="56" y="78" font-size="12.5" font-weight="600" fill="#17170f">Дизайн</text>
+              <text x="56" y="96" font-size="9.5" font-family="ui-monospace, Consolas, monospace" fill="#6f6d64">design</text>
+              <text x="56" y="152" font-size="10" fill="#9c9a90">макет к тикету</text>
+
+              <!-- этап 2 -->
+              <rect x="220" y="56" width="168" height="116" rx="10" fill="#ffffff" stroke="#e4e1d9"></rect>
+              <text x="236" y="78" font-size="12.5" font-weight="600" fill="#17170f">Разработка</text>
+              <text x="236" y="96" font-size="9.5" font-family="ui-monospace, Consolas, monospace" fill="#6f6d64">dev-backend</text>
+              <text x="236" y="108" font-size="9.5" font-family="ui-monospace, Consolas, monospace" fill="#6f6d64">dev-frontend</text>
+              <text x="236" y="120" font-size="9.5" font-family="ui-monospace, Consolas, monospace" fill="#6f6d64">dev-fullstack</text>
+              <text x="236" y="132" font-size="9.5" font-family="ui-monospace, Consolas, monospace" fill="#6f6d64">dev-fullstack-frontend</text>
+              <text x="236" y="152" font-size="10" fill="#9c9a90">4 ступени</text>
+
+              <!-- этап 3 -->
+              <rect x="450" y="56" width="128" height="116" rx="10" fill="#ffffff" stroke="#e4e1d9"></rect>
+              <text x="466" y="78" font-size="12.5" font-weight="600" fill="#17170f">Код-ревью</text>
+              <text x="466" y="96" font-size="9.5" font-family="ui-monospace, Consolas, monospace" fill="#6f6d64">code-review</text>
+              <text x="466" y="152" font-size="10" fill="#9c9a90">PR и чеклист</text>
+
+              <!-- этап 4 -->
+              <rect x="648" y="56" width="128" height="116" rx="10" fill="#ffffff" stroke="#e4e1d9"></rect>
+              <text x="664" y="78" font-size="12.5" font-weight="600" fill="#17170f">Тестирование</text>
+              <text x="664" y="96" font-size="9.5" font-family="ui-monospace, Consolas, monospace" fill="#6f6d64">tester</text>
+              <text x="664" y="152" font-size="10" fill="#9c9a90">стенд</text>
+
+              <!-- этап 5 -->
+              <rect x="846" y="56" width="132" height="116" rx="10" fill="#ffffff" stroke="#e4e1d9"></rect>
+              <text x="862" y="78" font-size="12.5" font-weight="600" fill="#17170f">Слияние</text>
+              <text x="862" y="96" font-size="9.5" font-family="ui-monospace, Consolas, monospace" fill="#6f6d64">devops-delivery</text>
+              <text x="862" y="152" font-size="10" fill="#9c9a90">PR и ветка</text>
+
+              <!-- передачи: подпись — ключ лейбла, по которому тикет уходит дальше -->
+              <line x1="158" y1="108" x2="214" y2="108" stroke="#9c9a90" stroke-width="1.5" marker-end="url(#mapArrow)"></line>
+              <text x="186" y="100" text-anchor="middle" font-size="9.5" font-family="ui-monospace, Consolas, monospace" fill="#17170f">dev</text>
+
+              <line x1="388" y1="108" x2="444" y2="108" stroke="#9c9a90" stroke-width="1.5" marker-end="url(#mapArrow)"></line>
+              <text x="416" y="100" text-anchor="middle" font-size="9.5" font-family="ui-monospace, Consolas, monospace" fill="#17170f">review</text>
+
+              <line x1="578" y1="108" x2="642" y2="108" stroke="#9c9a90" stroke-width="1.5" marker-end="url(#mapArrow)"></line>
+              <text x="610" y="100" text-anchor="middle" font-size="9.5" font-family="ui-monospace, Consolas, monospace" fill="#17170f">test</text>
+
+              <line x1="776" y1="108" x2="840" y2="108" stroke="#9c9a90" stroke-width="1.5" marker-end="url(#mapArrow)"></line>
+              <text x="808" y="100" text-anchor="middle" font-size="9.5" font-family="ui-monospace, Consolas, monospace" fill="#17170f">ok</text>
+
+              <!-- возврат после проваленного теста -->
+              <path d="M712 172 V216 Q712 224 704 224 H312 Q304 224 304 216 V178"
+                    fill="none" stroke="#b9b7ad" stroke-width="1.5" stroke-dasharray="4 4"
+                    marker-end="url(#mapArrowDash)"></path>
+              <text x="508" y="242" text-anchor="middle" font-size="10" fill="#6f6d64">доработка после теста — тикет снова у разработчика</text>
+              <text x="508" y="256" text-anchor="middle" font-size="9.5" font-family="ui-monospace, Consolas, monospace" fill="#9c9a90">failed</text>
+            </svg>
+            </div>
+            <p class="map__pan">Схема прокручивается вбок</p>
+
+            <p class="map__legend">
+              <span><i class="map__line" aria-hidden="true"></i>передача по метке</span>
+              <span><i class="map__line map__line--dash" aria-hidden="true"></i>возврат в работу</span>
+              <span>внутри разработки «Передать фронтенд» переводит полный стек с бэкенда на фронтенд тем же ходом</span>
+            </p>
+          </div>
+        </section>
+
+        <div class="tabs" role="tablist" aria-label="Подразделы отдела">
+          <button class="tab" type="button" role="tab" aria-selected="false" aria-controls="panel-settings">
+            Настройки
+          </button>
+          <button class="tab" type="button" role="tab" id="tab-process" aria-selected="true"
+                  aria-controls="panel-process" data-testid="department-tab-process">
+            Процесс
+          </button>
+        </div>
+
+        <form class="card" role="tabpanel" id="panel-process" aria-labelledby="tab-process"
+              aria-label="Процесс отдела" data-testid="department-process">
+
+          <div class="card__head">
+            <div>
+              <h2 class="card__title">Ступени конвейера</h2>
+              <p class="card__meta">
+                Диспетчер проверяет таблицу раз в 5 минут и берёт первый подходящий тикет.
+                Процесс сохранён в отделе — здесь, а не в коде.
+              </p>
+            </div>
+            <div class="card__tools">
+              <span class="chip">13 ступеней</span>
+            </div>
+          </div>
+
+          <div class="proc-head" role="presentation">
+            <span>Порядок</span>
+            <span>Ступень</span>
+            <span>Входящие метки</span>
+            <span>Кроме</span>
+            <span>Ставит</span>
+            <span>Снимает</span>
+            <span>Страж</span>
+            <span>Роль</span>
+            <span>Включена</span>
+            <span aria-hidden="true"></span>
+          </div>
+
+          <ul class="proc-body">
+            <li class="proc-row" data-testid="process-step-row">
+              <span class="proc-row__order" data-testid="process-step-priority">1</span>
+              <span class="proc-row__step">
+                <span class="proc-row__title" data-testid="process-step-title">Макет постановки</span>
+                <span class="proc-row__kind"><span class="proc-row__id">mockup</span> · сессия</span>
+              </span>
+              <button class="proc-cell proc-cell--edit" type="button" data-label="Входящие" data-testid="process-step-when">
+                <span class="lbl">mockup</span>
+              </button>
+              <button class="proc-cell proc-cell--edit" type="button" data-label="Кроме" data-testid="process-step-unless">
+                <span class="lbl">mockupsReady</span>
+              </button>
+              <button class="proc-cell proc-cell--edit proc-cell--put" type="button" data-label="Ставит" data-testid="process-step-put">
+                <span class="lbl">progress</span>
+              </button>
+              <span class="proc-cell proc-cell--none" data-label="Снимает" data-testid="process-step-drop">—</span>
+              <span class="proc-cell proc-cell--guard" data-label="Страж" data-testid="process-step-guard">Макет</span>
+              <span class="proc-cell proc-cell--role" data-label="Роль" data-testid="process-step-role"><span class="role">design</span></span>
+              <span class="proc-cell proc-cell--enabled" data-label="Включена">
+                <label class="checkbox"><input type="checkbox" checked data-testid="process-step-enabled"></label>
+              </span>
+              <span class="proc-cell proc-cell--remove"><button class="icon-btn" type="button" aria-label="Удалить ступень" data-testid="process-step-remove">×</button></span>
+            </li>
+
+            <li class="proc-row" data-testid="process-step-row">
+              <span class="proc-row__order" data-testid="process-step-priority">61</span>
+              <span class="proc-row__step">
+                <span class="proc-row__title" data-testid="process-step-title">Маршрут по путям</span>
+                <span class="proc-row__kind"><span class="proc-row__id">route</span> · маршрут</span>
+              </span>
+              <button class="proc-cell proc-cell--edit" type="button" data-label="Входящие" data-testid="process-step-when">
+                <span class="lbl">dev</span>
+              </button>
+              <button class="proc-cell proc-cell--edit proc-cell--unless" type="button" data-label="Кроме" data-testid="process-step-unless">
+                <span class="lbl">progress</span><span class="lbl">review</span><span class="lbl">test</span><span class="lbl">ok</span><span class="lbl">failed</span><span class="lbl">areaBackend</span><span class="lbl">areaFrontend</span><span class="lbl">areaFullstack</span>
+              </button>
+              <span class="proc-cell proc-cell--none" data-label="Ставит" data-testid="process-step-put">—</span>
+              <span class="proc-cell proc-cell--none" data-label="Снимает" data-testid="process-step-drop">—</span>
+              <span class="proc-cell proc-cell--guard" data-label="Страж" data-testid="process-step-guard">Маршрут</span>
+              <span class="proc-cell proc-cell--role" data-label="Роль" data-testid="process-step-role">—</span>
+              <span class="proc-cell proc-cell--enabled" data-label="Включена">
+                <label class="checkbox"><input type="checkbox" checked data-testid="process-step-enabled"></label>
+              </span>
+              <span class="proc-cell proc-cell--remove"><button class="icon-btn" type="button" aria-label="Удалить ступень" data-testid="process-step-remove">×</button></span>
+            </li>
+
+            <li class="proc-row" data-testid="process-step-row">
+              <span class="proc-row__order" data-testid="process-step-priority">121</span>
+              <span class="proc-row__step">
+                <span class="proc-row__title" data-testid="process-step-title">Передать фронтенд</span>
+                <span class="proc-row__kind"><span class="proc-row__id">handoff-frontend</span> · метки</span>
+              </span>
+              <button class="proc-cell proc-cell--edit" type="button" data-label="Входящие" data-testid="process-step-when">
+                <span class="lbl">test</span><span class="lbl">areaFullstack</span>
+              </button>
+              <button class="proc-cell proc-cell--edit proc-cell--unless" type="button" data-label="Кроме" data-testid="process-step-unless">
+                <span class="lbl">phaseFrontend</span>
+              </button>
+              <button class="proc-cell proc-cell--edit proc-cell--put" type="button" data-label="Ставит" data-testid="process-step-put">
+                <span class="lbl">frontend</span>
+              </button>
+              <button class="proc-cell proc-cell--edit proc-cell--drop" type="button" data-label="Снимает" data-testid="process-step-drop">
+                <span class="lbl">test</span>
+              </button>
+              <span class="proc-cell proc-cell--none" data-label="Страж" data-testid="process-step-guard">—</span>
+              <span class="proc-cell proc-cell--role" data-label="Роль" data-testid="process-step-role">—</span>
+              <span class="proc-cell proc-cell--enabled" data-label="Включена">
+                <label class="checkbox"><input type="checkbox" checked data-testid="process-step-enabled"></label>
+              </span>
+              <span class="proc-cell proc-cell--remove"><button class="icon-btn" type="button" aria-label="Удалить ступень" data-testid="process-step-remove">×</button></span>
+            </li>
+
+            <li class="proc-row" data-testid="process-step-row">
+              <span class="proc-row__order" data-testid="process-step-priority">181</span>
+              <span class="proc-row__step">
+                <span class="proc-row__title" data-testid="process-step-title">Код-ревью</span>
+                <span class="proc-row__kind"><span class="proc-row__id">review</span> · сессия</span>
+              </span>
+              <button class="proc-cell proc-cell--edit" type="button" data-label="Входящие" data-testid="process-step-when">
+                <span class="lbl">review</span>
+              </button>
+              <span class="proc-cell proc-cell--none" data-label="Кроме" data-testid="process-step-unless">—</span>
+              <span class="proc-cell proc-cell--none" data-label="Ставит" data-testid="process-step-put">—</span>
+              <span class="proc-cell proc-cell--none" data-label="Снимает" data-testid="process-step-drop">—</span>
+              <span class="proc-cell proc-cell--guard" data-label="Страж" data-testid="process-step-guard">Есть что ревьюить</span>
+              <span class="proc-cell proc-cell--role" data-label="Роль" data-testid="process-step-role"><span class="role">code-review</span></span>
+              <span class="proc-cell proc-cell--enabled" data-label="Включена">
+                <label class="checkbox"><input type="checkbox" checked data-testid="process-step-enabled"></label>
+              </span>
+              <span class="proc-cell proc-cell--remove"><button class="icon-btn" type="button" aria-label="Удалить ступень" data-testid="process-step-remove">×</button></span>
+            </li>
+
+            <li class="proc-row" data-testid="process-step-row">
+              <span class="proc-row__order" data-testid="process-step-priority">241</span>
+              <span class="proc-row__step">
+                <span class="proc-row__title" data-testid="process-step-title">Тестирование</span>
+                <span class="proc-row__kind"><span class="proc-row__id">test</span> · сессия</span>
+              </span>
+              <button class="proc-cell proc-cell--edit" type="button" data-label="Входящие" data-testid="process-step-when">
+                <span class="lbl">test</span>
+              </button>
+              <span class="proc-cell proc-cell--none" data-label="Кроме" data-testid="process-step-unless">—</span>
+              <span class="proc-cell proc-cell--none" data-label="Ставит" data-testid="process-step-put">—</span>
+              <span class="proc-cell proc-cell--none" data-label="Снимает" data-testid="process-step-drop">—</span>
+              <span class="proc-cell proc-cell--none" data-label="Страж" data-testid="process-step-guard">—</span>
+              <span class="proc-cell proc-cell--role" data-label="Роль" data-testid="process-step-role"><span class="role">tester</span></span>
+              <span class="proc-cell proc-cell--enabled" data-label="Включена">
+                <label class="checkbox"><input type="checkbox" checked data-testid="process-step-enabled"></label>
+              </span>
+              <span class="proc-cell proc-cell--remove"><button class="icon-btn" type="button" aria-label="Удалить ступень" data-testid="process-step-remove">×</button></span>
+            </li>
+
+            <li class="proc-row" data-testid="process-step-row">
+              <span class="proc-row__order" data-testid="process-step-priority">301</span>
+              <span class="proc-row__step">
+                <span class="proc-row__title" data-testid="process-step-title">Слияние PR</span>
+                <span class="proc-row__kind"><span class="proc-row__id">merge</span> · сессия</span>
+              </span>
+              <button class="proc-cell proc-cell--edit" type="button" data-label="Входящие" data-testid="process-step-when">
+                <span class="lbl">ok</span>
+              </button>
+              <span class="proc-cell proc-cell--none" data-label="Кроме" data-testid="process-step-unless">—</span>
+              <span class="proc-cell proc-cell--none" data-label="Ставит" data-testid="process-step-put">—</span>
+              <span class="proc-cell proc-cell--none" data-label="Снимает" data-testid="process-step-drop">—</span>
+              <span class="proc-cell proc-cell--guard" data-label="Страж" data-testid="process-step-guard">PR уже слит</span>
+              <span class="proc-cell proc-cell--role" data-label="Роль" data-testid="process-step-role"><span class="role">devops-delivery</span></span>
+              <span class="proc-cell proc-cell--enabled" data-label="Включена">
+                <label class="checkbox"><input type="checkbox" checked data-testid="process-step-enabled"></label>
+              </span>
+              <span class="proc-cell proc-cell--remove"><button class="icon-btn" type="button" aria-label="Удалить ступень" data-testid="process-step-remove">×</button></span>
+            </li>
+
+            <li class="proc-row" data-testid="process-step-row">
+              <span class="proc-row__order" data-testid="process-step-priority">361</span>
+              <span class="proc-row__step">
+                <span class="proc-row__title" data-testid="process-step-title">Доработка после теста</span>
+                <span class="proc-row__kind"><span class="proc-row__id">rework-test</span> · сессия</span>
+              </span>
+              <button class="proc-cell proc-cell--edit" type="button" data-label="Входящие" data-testid="process-step-when">
+                <span class="lbl">failed</span>
+              </button>
+              <span class="proc-cell proc-cell--none" data-label="Кроме" data-testid="process-step-unless">—</span>
+              <button class="proc-cell proc-cell--edit proc-cell--put" type="button" data-label="Ставит" data-testid="process-step-put">
+                <span class="lbl">progress</span>
+              </button>
+              <button class="proc-cell proc-cell--edit proc-cell--drop" type="button" data-label="Снимает" data-testid="process-step-drop">
+                <span class="lbl">failed</span>
+              </button>
+              <span class="proc-cell proc-cell--guard" data-label="Страж" data-testid="process-step-guard">Выдача</span>
+              <span class="proc-cell proc-cell--role" data-label="Роль" data-testid="process-step-role"><span class="role">by-findings</span></span>
+              <span class="proc-cell proc-cell--enabled" data-label="Включена">
+                <label class="checkbox"><input type="checkbox" checked data-testid="process-step-enabled"></label>
+              </span>
+              <span class="proc-cell proc-cell--remove"><button class="icon-btn" type="button" aria-label="Удалить ступень" data-testid="process-step-remove">×</button></span>
+            </li>
+
+            <li class="proc-row" data-testid="process-step-row">
+              <span class="proc-row__order" data-testid="process-step-priority">421</span>
+              <span class="proc-row__step">
+                <span class="proc-row__title" data-testid="process-step-title">Бэкенд</span>
+                <span class="proc-row__kind"><span class="proc-row__id">dev-backend</span> · сессия</span>
+              </span>
+              <button class="proc-cell proc-cell--edit" type="button" data-label="Входящие" data-testid="process-step-when">
+                <span class="lbl">dev</span><span class="lbl">areaBackend</span>
+              </button>
+              <button class="proc-cell proc-cell--edit proc-cell--unless" type="button" data-label="Кроме" data-testid="process-step-unless">
+                <span class="lbl">progress</span><span class="lbl">review</span><span class="lbl">test</span><span class="lbl">ok</span><span class="lbl">failed</span>
+              </button>
+              <button class="proc-cell proc-cell--edit proc-cell--put" type="button" data-label="Ставит" data-testid="process-step-put">
+                <span class="lbl">progress</span>
+              </button>
+              <button class="proc-cell proc-cell--edit proc-cell--drop" type="button" data-label="Снимает" data-testid="process-step-drop">
+                <span class="lbl">dev</span>
+              </button>
+              <span class="proc-cell proc-cell--guard" data-label="Страж" data-testid="process-step-guard">Выдача</span>
+              <span class="proc-cell proc-cell--role" data-label="Роль" data-testid="process-step-role"><span class="role">dev-backend</span></span>
+              <span class="proc-cell proc-cell--enabled" data-label="Включена">
+                <label class="checkbox"><input type="checkbox" checked data-testid="process-step-enabled"></label>
+              </span>
+              <span class="proc-cell proc-cell--remove"><button class="icon-btn" type="button" aria-label="Удалить ступень" data-testid="process-step-remove">×</button></span>
+            </li>
+
+            <li class="proc-row" data-testid="process-step-row">
+              <span class="proc-row__order" data-testid="process-step-priority">481</span>
+              <span class="proc-row__step">
+                <span class="proc-row__title" data-testid="process-step-title">Фронтенд</span>
+                <span class="proc-row__kind"><span class="proc-row__id">dev-frontend</span> · сессия</span>
+              </span>
+              <button class="proc-cell proc-cell--edit" type="button" data-label="Входящие" data-testid="process-step-when">
+                <span class="lbl">dev</span><span class="lbl">areaFrontend</span>
+              </button>
+              <button class="proc-cell proc-cell--edit proc-cell--unless" type="button" data-label="Кроме" data-testid="process-step-unless">
+                <span class="lbl">progress</span><span class="lbl">review</span><span class="lbl">test</span><span class="lbl">ok</span><span class="lbl">failed</span>
+              </button>
+              <button class="proc-cell proc-cell--edit proc-cell--put" type="button" data-label="Ставит" data-testid="process-step-put">
+                <span class="lbl">progress</span>
+              </button>
+              <button class="proc-cell proc-cell--edit proc-cell--drop" type="button" data-label="Снимает" data-testid="process-step-drop">
+                <span class="lbl">dev</span>
+              </button>
+              <span class="proc-cell proc-cell--guard" data-label="Страж" data-testid="process-step-guard">Выдача</span>
+              <span class="proc-cell proc-cell--role" data-label="Роль" data-testid="process-step-role"><span class="role">dev-frontend</span></span>
+              <span class="proc-cell proc-cell--enabled" data-label="Включена">
+                <label class="checkbox"><input type="checkbox" checked data-testid="process-step-enabled"></label>
+              </span>
+              <span class="proc-cell proc-cell--remove"><button class="icon-btn" type="button" aria-label="Удалить ступень" data-testid="process-step-remove">×</button></span>
+            </li>
+
+            <li class="proc-row" data-testid="process-step-row">
+              <span class="proc-row__order" data-testid="process-step-priority">541</span>
+              <span class="proc-row__step">
+                <span class="proc-row__title" data-testid="process-step-title">Полный стек: бэкенд</span>
+                <span class="proc-row__kind"><span class="proc-row__id">dev-fullstack-backend</span> · сессия</span>
+              </span>
+              <button class="proc-cell proc-cell--edit" type="button" data-label="Входящие" data-testid="process-step-when">
+                <span class="lbl">dev</span><span class="lbl">areaFullstack</span>
+              </button>
+              <button class="proc-cell proc-cell--edit proc-cell--unless" type="button" data-label="Кроме" data-testid="process-step-unless">
+                <span class="lbl">progress</span><span class="lbl">review</span><span class="lbl">test</span><span class="lbl">ok</span><span class="lbl">failed</span>
+              </button>
+              <button class="proc-cell proc-cell--edit proc-cell--put" type="button" data-label="Ставит" data-testid="process-step-put">
+                <span class="lbl">progress</span>
+              </button>
+              <button class="proc-cell proc-cell--edit proc-cell--drop" type="button" data-label="Снимает" data-testid="process-step-drop">
+                <span class="lbl">dev</span>
+              </button>
+              <span class="proc-cell proc-cell--guard" data-label="Страж" data-testid="process-step-guard">Выдача</span>
+              <span class="proc-cell proc-cell--role" data-label="Роль" data-testid="process-step-role"><span class="role">dev-backend</span></span>
+              <span class="proc-cell proc-cell--enabled" data-label="Включена">
+                <label class="checkbox"><input type="checkbox" checked data-testid="process-step-enabled"></label>
+              </span>
+              <span class="proc-cell proc-cell--remove"><button class="icon-btn" type="button" aria-label="Удалить ступень" data-testid="process-step-remove">×</button></span>
+            </li>
+
+            <li class="proc-row" data-testid="process-step-row">
+              <span class="proc-row__order" data-testid="process-step-priority">601</span>
+              <span class="proc-row__step">
+                <span class="proc-row__title" data-testid="process-step-title">Полный стек: фронтенд</span>
+                <span class="proc-row__kind"><span class="proc-row__id">dev-fullstack-frontend</span> · сессия</span>
+              </span>
+              <button class="proc-cell proc-cell--edit" type="button" data-label="Входящие" data-testid="process-step-when">
+                <span class="lbl">frontend</span>
+              </button>
+              <button class="proc-cell proc-cell--edit proc-cell--unless" type="button" data-label="Кроме" data-testid="process-step-unless">
+                <span class="lbl">progress</span><span class="lbl">review</span><span class="lbl">test</span><span class="lbl">ok</span><span class="lbl">failed</span>
+              </button>
+              <button class="proc-cell proc-cell--edit proc-cell--put" type="button" data-label="Ставит" data-testid="process-step-put">
+                <span class="lbl">progress</span><span class="lbl">phaseFrontend</span>
+              </button>
+              <button class="proc-cell proc-cell--edit proc-cell--drop" type="button" data-label="Снимает" data-testid="process-step-drop">
+                <span class="lbl">frontend</span>
+              </button>
+              <span class="proc-cell proc-cell--guard" data-label="Страж" data-testid="process-step-guard">Выдача</span>
+              <span class="proc-cell proc-cell--role" data-label="Роль" data-testid="process-step-role"><span class="role">dev-frontend</span></span>
+              <span class="proc-cell proc-cell--enabled" data-label="Включена">
+                <label class="checkbox"><input type="checkbox" checked data-testid="process-step-enabled"></label>
+              </span>
+              <span class="proc-cell proc-cell--remove"><button class="icon-btn" type="button" aria-label="Удалить ступень" data-testid="process-step-remove">×</button></span>
+            </li>
+
+            <li class="proc-row" data-testid="process-step-row">
+              <span class="proc-row__order" data-testid="process-step-priority">661</span>
+              <span class="proc-row__step">
+                <span class="proc-row__title" data-testid="process-step-title">Полный стек</span>
+                <span class="proc-row__kind"><span class="proc-row__id">dev-fullstack-default</span> · сессия</span>
+              </span>
+              <button class="proc-cell proc-cell--edit" type="button" data-label="Входящие" data-testid="process-step-when">
+                <span class="lbl">dev</span>
+              </button>
+              <button class="proc-cell proc-cell--edit proc-cell--unless" type="button" data-label="Кроме" data-testid="process-step-unless">
+                <span class="lbl">progress</span><span class="lbl">review</span><span class="lbl">test</span><span class="lbl">ok</span><span class="lbl">failed</span>
+              </button>
+              <button class="proc-cell proc-cell--edit proc-cell--put" type="button" data-label="Ставит" data-testid="process-step-put">
+                <span class="lbl">progress</span>
+              </button>
+              <button class="proc-cell proc-cell--edit proc-cell--drop" type="button" data-label="Снимает" data-testid="process-step-drop">
+                <span class="lbl">dev</span>
+              </button>
+              <span class="proc-cell proc-cell--guard" data-label="Страж" data-testid="process-step-guard">Выдача</span>
+              <span class="proc-cell proc-cell--role" data-label="Роль" data-testid="process-step-role"><span class="role">dev-fullstack</span></span>
+              <span class="proc-cell proc-cell--enabled" data-label="Включена">
+                <label class="checkbox"><input type="checkbox" checked data-testid="process-step-enabled"></label>
+              </span>
+              <span class="proc-cell proc-cell--remove"><button class="icon-btn" type="button" aria-label="Удалить ступень" data-testid="process-step-remove">×</button></span>
+            </li>
+
+            <li class="proc-row" data-testid="process-step-row">
+              <span class="proc-row__order" data-testid="process-step-priority">721</span>
+              <span class="proc-row__step">
+                <span class="proc-row__title" data-testid="process-step-title">Продолжить</span>
+                <span class="proc-row__kind"><span class="proc-row__id">continue</span> · сессия</span>
+              </span>
+              <button class="proc-cell proc-cell--edit" type="button" data-label="Входящие" data-testid="process-step-when">
+                <span class="lbl">progress</span>
+              </button>
+              <span class="proc-cell proc-cell--none" data-label="Кроме" data-testid="process-step-unless">—</span>
+              <span class="proc-cell proc-cell--none" data-label="Ставит" data-testid="process-step-put">—</span>
+              <span class="proc-cell proc-cell--none" data-label="Снимает" data-testid="process-step-drop">—</span>
+              <span class="proc-cell proc-cell--guard" data-label="Страж" data-testid="process-step-guard">Выдача</span>
+              <span class="proc-cell proc-cell--role" data-label="Роль" data-testid="process-step-role"><span class="role">by-area</span></span>
+              <span class="proc-cell proc-cell--enabled" data-label="Включена">
+                <label class="checkbox"><input type="checkbox" checked data-testid="process-step-enabled"></label>
+              </span>
+              <span class="proc-cell proc-cell--remove"><button class="icon-btn" type="button" aria-label="Удалить ступень" data-testid="process-step-remove">×</button></span>
+            </li>
+          </ul>
+
+          <button class="proc-add" type="button" data-testid="process-step-add">
+            <span class="proc-add__plus" aria-hidden="true">+</span>
+            Добавить ступень
+            <span class="proc-add__hint">мастер спросит этап, роль и метки</span>
+          </button>
+
+          <div class="form-section">
+            <div>
+              <h2 class="form-section__title">Справочник лейблов</h2>
+              <p class="form-section__hint">
+                Отдельный реестр: слева состояние этапа, справа имя лейбла на GitHub. Ключ под
+                состоянием — то, что стоит в ступенях. Переименовали лейбл — ступени не трогали.
+              </p>
+            </div>
+
+            <div class="ref">
+              <div class="ref__head" role="presentation">
+                <span>Состояние этапа</span>
+                <span>Название лейбла</span>
+              </div>
+              <div class="ref__row">
+                <span class="ref__state">
+                  <span class="ref__title">Готова к разработке</span>
+                  <span class="ref__key">dev</span>
+                </span>
+                <input class="field__input" type="text" value="ready-for-dev" data-testid="process-label-dev">
+              </div>
+              <div class="ref__row">
+                <span class="ref__state">
+                  <span class="ref__title">Готова к фронтенду</span>
+                  <span class="ref__key">frontend</span>
+                </span>
+                <input class="field__input" type="text" value="ready-for-frontend" data-testid="process-label-frontend">
+              </div>
+              <div class="ref__row">
+                <span class="ref__state">
+                  <span class="ref__title">Площадь: бэкенд</span>
+                  <span class="ref__key">areaBackend</span>
+                </span>
+                <input class="field__input" type="text" value="area:backend" data-testid="process-label-areaBackend">
+              </div>
+              <div class="ref__row">
+                <span class="ref__state">
+                  <span class="ref__title">Площадь: фронтенд</span>
+                  <span class="ref__key">areaFrontend</span>
+                </span>
+                <input class="field__input" type="text" value="area:frontend" data-testid="process-label-areaFrontend">
+              </div>
+              <div class="ref__row">
+                <span class="ref__state">
+                  <span class="ref__title">Площадь: полный стек</span>
+                  <span class="ref__key">areaFullstack</span>
+                </span>
+                <input class="field__input" type="text" value="area:fullstack" data-testid="process-label-areaFullstack">
+              </div>
+              <div class="ref__row">
+                <span class="ref__state">
+                  <span class="ref__title">Фаза: фронтенд</span>
+                  <span class="ref__key">phaseFrontend</span>
+                </span>
+                <input class="field__input" type="text" value="phase:frontend" data-testid="process-label-phaseFrontend">
+              </div>
+              <div class="ref__row">
+                <span class="ref__state">
+                  <span class="ref__title">Нужен макет</span>
+                  <span class="ref__key">mockup</span>
+                </span>
+                <input class="field__input" type="text" value="needs-mockup" data-testid="process-label-mockup">
+              </div>
+              <div class="ref__row">
+                <span class="ref__state">
+                  <span class="ref__title">Макет сдан</span>
+                  <span class="ref__key">mockupsReady</span>
+                </span>
+                <input class="field__input" type="text" value="mockups-ready" data-testid="process-label-mockupsReady">
+              </div>
+              <div class="ref__row">
+                <span class="ref__state">
+                  <span class="ref__title">В работе</span>
+                  <span class="ref__key">progress</span>
+                </span>
+                <input class="field__input" type="text" value="in-progress" data-testid="process-label-progress">
+              </div>
+              <div class="ref__row">
+                <span class="ref__state">
+                  <span class="ref__title">Ждёт код-ревью</span>
+                  <span class="ref__key">review</span>
+                </span>
+                <input class="field__input" type="text" value="for-code-review" data-testid="process-label-review">
+              </div>
+              <div class="ref__row">
+                <span class="ref__state">
+                  <span class="ref__title">Готова к тесту</span>
+                  <span class="ref__key">test</span>
+                </span>
+                <input class="field__input" type="text" value="ready-for-test" data-testid="process-label-test">
+              </div>
+              <div class="ref__row">
+                <span class="ref__state">
+                  <span class="ref__title">Протестирована</span>
+                  <span class="ref__key">ok</span>
+                </span>
+                <input class="field__input" type="text" value="tested" data-testid="process-label-ok">
+              </div>
+              <div class="ref__row">
+                <span class="ref__state">
+                  <span class="ref__title">Тест провален</span>
+                  <span class="ref__key">failed</span>
+                </span>
+                <input class="field__input" type="text" value="test-failed" data-testid="process-label-failed">
+              </div>
+              <div class="ref__row">
+                <span class="ref__state">
+                  <span class="ref__title">Слита</span>
+                  <span class="ref__key">merged</span>
+                </span>
+                <input class="field__input" type="text" value="merged" data-testid="process-label-merged">
+              </div>
+            </div>
+          </div>
+
+          <div class="form-foot">
+            <p class="form-foot__note">
+              Сохранение сразу пересобирает документ реестра: диспетчер увидит новую таблицу
+              при следующей синхронизации, в пределах 5 минут.
+            </p>
+            <div class="form-actions">
+              <span class="status" data-testid="process-saved">
+                <span class="status__dot" aria-hidden="true"></span>
+                Сохранено: ревизия 41
+              </span>
+              <div class="form-actions__end">
+                <button class="btn" type="button" data-testid="process-reset">Сбросить к умолчанию</button>
+                <button class="btn btn--dark" type="button" data-testid="process-save">Сохранить</button>
+              </div>
+            </div>
+          </div>
+        </form>
+      </main>
+
+      <footer class="footbar">
+        <p class="footbar__note">© 2026 Workflow</p>
+      </footer>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ Кадр 2 ============================ -->
+
+<section class="shot">
+  <p class="shot__caption">
+    <strong>Кадр 2 — мастер новой ступени: главный вопрос «кто выполняет»</strong>
+    Ступень собирается по шагам: этап → кто выполняет → триггер → метки → проверка. Роль
+    спрашивается крупно и карточками, потому что вся ступень — это «кому отдать тикет».
+  </p>
+
+  <!-- Шаг 2: роль -->
+  <div class="dialog">
+    <div class="dialog__head">
+      <p class="dialog__eyebrow">Новая ступень · Ревью миграций</p>
+      <h3 class="dialog__title">Кто выполняет работу</h3>
+      <ol class="stepper">
+        <li class="stepper__item stepper__item--done"><span aria-hidden="true">✓</span>Этап</li>
+        <li class="stepper__item stepper__item--on"><span aria-hidden="true">2</span>Кто выполняет</li>
+        <li class="stepper__item"><span aria-hidden="true">3</span>Триггер</li>
+        <li class="stepper__item"><span aria-hidden="true">4</span>Метки</li>
+        <li class="stepper__item"><span aria-hidden="true">5</span>Проверка</li>
+      </ol>
+    </div>
+
+    <div class="dialog__body">
+      <p class="dialog__lead">
+        Диспетчер отдаст тикет этой роли, когда тот дойдёт до ступени. Без роли ступень только
+        переставляет метки и никого не запускает — так работают «Маршрут по путям» и «Передать
+        фронтенд».
+      </p>
+
+      <div class="rolecards">
+        <label class="rolecard">
+          <span class="rolecard__head">
+            <span class="rolecard__title">Бэкенд</span>
+            <span class="rolecard__mark" aria-hidden="true"></span>
+          </span>
+          <span class="rolecard__code">dev-backend</span>
+          <span class="rolecard__note">API, схема, миграции: сессия с веткой и PR.</span>
+        </label>
+
+        <label class="rolecard">
+          <span class="rolecard__head">
+            <span class="rolecard__title">Фронтенд</span>
+            <span class="rolecard__mark" aria-hidden="true"></span>
+          </span>
+          <span class="rolecard__code">dev-frontend</span>
+          <span class="rolecard__note">Экраны и стили, свой PR.</span>
+        </label>
+
+        <label class="rolecard">
+          <span class="rolecard__head">
+            <span class="rolecard__title">Полный стек</span>
+            <span class="rolecard__mark" aria-hidden="true"></span>
+          </span>
+          <span class="rolecard__code">dev-fullstack</span>
+          <span class="rolecard__note">Сам решает, где править: бэкенд или фронтенд.</span>
+        </label>
+
+        <label class="rolecard rolecard--on">
+          <span class="rolecard__head">
+            <span class="rolecard__title">Код-ревью</span>
+            <span class="rolecard__mark" aria-hidden="true">✓</span>
+          </span>
+          <span class="rolecard__code">code-review</span>
+          <span class="rolecard__note">Смотрит PR по чеклисту и выносит вердикт.</span>
+        </label>
+
+        <label class="rolecard">
+          <span class="rolecard__head">
+            <span class="rolecard__title">Тестировщик</span>
+            <span class="rolecard__mark" aria-hidden="true"></span>
+          </span>
+          <span class="rolecard__code">tester</span>
+          <span class="rolecard__note">Стенд, проверки, вердикт по тикету.</span>
+        </label>
+
+        <label class="rolecard">
+          <span class="rolecard__head">
+            <span class="rolecard__title">Деплой</span>
+            <span class="rolecard__mark" aria-hidden="true"></span>
+          </span>
+          <span class="rolecard__code">devops-delivery</span>
+          <span class="rolecard__note">Сливает PR и убирает ветку.</span>
+        </label>
+
+        <label class="rolecard">
+          <span class="rolecard__head">
+            <span class="rolecard__title">По площади тикета</span>
+            <span class="rolecard__mark" aria-hidden="true"></span>
+          </span>
+          <span class="rolecard__code">by-area</span>
+          <span class="rolecard__note">Роль берётся из метки area:* — выбирать не надо.</span>
+        </label>
+
+        <label class="rolecard">
+          <span class="rolecard__head">
+            <span class="rolecard__title">По замечаниям</span>
+            <span class="rolecard__mark" aria-hidden="true"></span>
+          </span>
+          <span class="rolecard__code">by-findings</span>
+          <span class="rolecard__note">Исполнитель тот, чей тест провалился.</span>
+        </label>
+      </div>
+
+      <p class="dialog__hint">
+        Список ролей приходит с сервера: роль, которой нет в справочнике ролей проекта, сюда не
+        попадает.
+      </p>
+    </div>
+
+    <div class="dialog__foot">
+      <span class="dialog__step-note">Шаг 2 из 5</span>
+      <div class="dialog__foot-end">
+        <button class="btn" type="button">Назад</button>
+        <button class="btn btn--dark" type="button">Далее</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Шаг 3: триггер -->
+  <div class="dialog" style="margin-top: 1rem">
+    <div class="dialog__head">
+      <p class="dialog__eyebrow">Новая ступень · Ревью миграций</p>
+      <h3 class="dialog__title">Когда ступень срабатывает</h3>
+      <ol class="stepper">
+        <li class="stepper__item stepper__item--done"><span aria-hidden="true">✓</span>Этап</li>
+        <li class="stepper__item stepper__item--done"><span aria-hidden="true">✓</span>Кто выполняет</li>
+        <li class="stepper__item stepper__item--on"><span aria-hidden="true">3</span>Триггер</li>
+        <li class="stepper__item"><span aria-hidden="true">4</span>Метки</li>
+        <li class="stepper__item"><span aria-hidden="true">5</span>Проверка</li>
+      </ol>
+    </div>
+
+    <div class="dialog__body">
+      <p class="dialog__lead">
+        Ступень берёт тикет, у которого стоят все входящие метки и ни одной из «кроме».
+        Если подходят несколько ступеней, побеждает меньший порядок.
+      </p>
+
+      <div class="dialog__pair">
+        <div class="pickbox">
+          <p class="pickbox__title">Входящие метки — тикет должен нести все</p>
+          <div class="pickbox__grid">
+            <label class="checkbox"><input type="checkbox"><span>dev</span></label>
+            <label class="checkbox"><input type="checkbox"><span>frontend</span></label>
+            <label class="checkbox"><input type="checkbox" checked><span>areaBackend</span></label>
+            <label class="checkbox"><input type="checkbox"><span>areaFrontend</span></label>
+            <label class="checkbox"><input type="checkbox"><span>areaFullstack</span></label>
+            <label class="checkbox"><input type="checkbox"><span>phaseFrontend</span></label>
+            <label class="checkbox"><input type="checkbox"><span>mockup</span></label>
+            <label class="checkbox"><input type="checkbox"><span>mockupsReady</span></label>
+            <label class="checkbox"><input type="checkbox"><span>progress</span></label>
+            <label class="checkbox"><input type="checkbox" checked><span>review</span></label>
+            <label class="checkbox"><input type="checkbox"><span>test</span></label>
+            <label class="checkbox"><input type="checkbox"><span>ok</span></label>
+            <label class="checkbox"><input type="checkbox"><span>failed</span></label>
+            <label class="checkbox"><input type="checkbox"><span>merged</span></label>
+          </div>
+          <p class="pickbox__hint">Выбрано 2: ступень возьмёт тикет с обоими лейблами.</p>
+        </div>
+
+        <div class="pickbox">
+          <p class="pickbox__title">Кроме — ни одной из этих</p>
+          <div class="pickbox__grid">
+            <label class="checkbox"><input type="checkbox"><span>dev</span></label>
+            <label class="checkbox"><input type="checkbox"><span>frontend</span></label>
+            <label class="checkbox"><input type="checkbox"><span>areaBackend</span></label>
+            <label class="checkbox"><input type="checkbox" checked><span>areaFrontend</span></label>
+            <label class="checkbox"><input type="checkbox" checked><span>areaFullstack</span></label>
+            <label class="checkbox"><input type="checkbox"><span>phaseFrontend</span></label>
+            <label class="checkbox"><input type="checkbox"><span>mockup</span></label>
+            <label class="checkbox"><input type="checkbox"><span>mockupsReady</span></label>
+            <label class="checkbox"><input type="checkbox"><span>progress</span></label>
+            <label class="checkbox"><input type="checkbox"><span>review</span></label>
+            <label class="checkbox"><input type="checkbox"><span>test</span></label>
+            <label class="checkbox"><input type="checkbox"><span>ok</span></label>
+            <label class="checkbox"><input type="checkbox"><span>failed</span></label>
+            <label class="checkbox"><input type="checkbox"><span>merged</span></label>
+          </div>
+          <p class="pickbox__hint">Пусто — ступень не отсекает ничего.</p>
+        </div>
+      </div>
+
+      <p class="dialog__order">
+        Порядок
+        <b>451</b>
+        — встанет между «Бэкенд» (421) и «Фронтенд» (481); диспетчер проверит её раньше фронтенда
+      </p>
+    </div>
+
+    <div class="dialog__foot">
+      <span class="dialog__step-note">Шаг 3 из 5 · дальше метки, которые ступень ставит и снимает, и проверка</span>
+      <div class="dialog__foot-end">
+        <button class="btn" type="button">Назад</button>
+        <button class="btn btn--dark" type="button">Далее</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ Кадр 3 ============================ -->
+
+<section class="shot">
+  <p class="shot__caption">
+    <strong>Кадр 3 — состояния экрана</strong>
+    Каждый блок — та же карточка в другом состоянии. Тексты отказов пишет сервер, экран
+    показывает их дословно.
+  </p>
+
+  <div class="panels">
+    <div class="card">
+      <p class="panel__caption">Загрузка документа</p>
+      <div class="panel__body">
+        <p class="state__line" aria-live="polite">Загрузка…</p>
+        <p class="state__hint">Таблицы ещё нет: ступени и имена меток приходят одним ответом.</p>
+      </div>
+      <div class="form-foot">
+        <div class="form-actions">
+          <span class="status"><span class="status__dot status__dot--idle" aria-hidden="true"></span>Не сохранено</span>
+          <div class="form-actions__end">
+            <button class="btn" type="button" disabled>Сбросить к умолчанию</button>
+            <button class="btn btn--dark" type="button" disabled>Сохранить</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <p class="panel__caption">Сохранение</p>
+      <div class="panel__body">
+        <p class="state__hint">
+          Пока запрос в полёте, обе кнопки погашены: введённое нельзя менять, иначе экран
+          разойдётся с тем, что уходит на сервер.
+        </p>
+      </div>
+      <div class="form-foot">
+        <div class="form-actions">
+          <span class="status"><span class="status__dot status__dot--idle" aria-hidden="true"></span>Сохранено: ревизия 41</span>
+          <div class="form-actions__end">
+            <button class="btn" type="button" disabled>Сбросить к умолчанию</button>
+            <button class="btn btn--dark" type="button" disabled>Сохраняю…</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <p class="panel__caption">Отказ 422 — текст над таблицей, введённое на месте</p>
+      <div class="panel__body">
+        <p class="form-error" role="alert" data-testid="process-error">
+          Неизвестный ключ метки в ступени «dev-backend»: «reviewer»
+        </p>
+        <p class="state__hint">
+          Отказ висит до следующего сохранения. Форма не сбрасывается: человек правит ту
+          строку, которую ругал сервер, и ничего не теряет.
+        </p>
+      </div>
+    </div>
+
+    <div class="card">
+      <p class="panel__caption">Успех и «Сбросить к умолчанию»</p>
+      <div class="panel__body">
+        <p class="state__hint">После ответа <code>200</code> в полосе формы — номер ревизии реестра, которую создало это сохранение.</p>
+        <p class="state__hint">Сброс запроса не делает: 13 ступеней подставляются из умолчаний сервера, поэтому полоса честно говорит, что это ещё не сохранено.</p>
+      </div>
+      <div class="form-foot">
+        <div class="form-actions">
+          <span class="status"><span class="status__dot" aria-hidden="true"></span>Сохранено: ревизия 42</span>
+          <div class="form-actions__end">
+            <button class="btn" type="button" disabled>Сбросить к умолчанию</button>
+            <button class="btn btn--dark" type="button" disabled>Сохранить</button>
+          </div>
+        </div>
+        <div class="form-actions">
+          <span class="status"><span class="status__dot status__dot--idle" aria-hidden="true"></span>Заполнено умолчаниями — не сохранено</span>
+          <div class="form-actions__end">
+            <button class="btn" type="button">Сбросить к умолчанию</button>
+            <button class="btn btn--dark" type="button">Сохранить</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <p class="panel__caption">Сохранено — номер ревизии не пришёл</p>
+      <div class="panel__body">
+        <p class="state__hint">
+          Номер ревизии есть только в ответе <code>PUT</code>. После перезагрузки страницы его
+          взять неоткуда, поэтому полоса говорит «Сохранено» без числа, а не придумывает его.
+        </p>
+      </div>
+      <div class="form-foot">
+        <div class="form-actions">
+          <span class="status"><span class="status__dot" aria-hidden="true"></span>Сохранено</span>
+          <div class="form-actions__end">
+            <button class="btn" type="button" disabled>Сбросить к умолчанию</button>
+            <button class="btn btn--dark" type="button">Сохранить</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <p class="panel__caption">Ступеней нет — пустой процесс</p>
+      <div class="panel__body">
+        <p class="state__hint">
+          Процесс без ступеней сохраняется, но конвейер будет простаивать. «Сбросить
+          к умолчанию» вернёт 13 ступеней одним нажатием.
+        </p>
+      </div>
+      <div class="proc-empty">
+        <p class="proc-empty__title">Ступеней нет</p>
+        <p class="proc-empty__hint">
+          Диспетчер не возьмёт ни одного тикета, пока в таблице пусто. Начните с первой —
+          мастер спросит этап, роль и метки.
+        </p>
+        <button class="proc-add proc-empty__add" type="button" data-testid="process-step-add">
+          <span class="proc-add__plus" aria-hidden="true">+</span>
+          Добавить ступень
+        </button>
+      </div>
+      <div class="form-foot">
+        <div class="form-actions">
+          <span class="status"><span class="status__dot status__dot--idle" aria-hidden="true"></span>Не сохранено</span>
+          <div class="form-actions__end">
+            <button class="btn" type="button">Сбросить к умолчанию</button>
+            <button class="btn btn--dark" type="button">Сохранить</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <p class="panel__caption">Отдела нет — 404</p>
+      <div class="panel__body">
+        <div class="state__error">
+          <p class="error" role="alert">Отдел не найден</p>
+        </div>
+        <p class="state__hint">Формы нет вовсе: сохранять некуда. Экран возвращает человека к списку отделов.</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <p class="panel__caption">Сервер не отвечает</p>
+      <div class="panel__body">
+        <div class="state__error">
+          <p class="error" role="alert">Сервер не отвечает</p>
+          <button class="btn" type="button">Повторить</button>
+        </div>
+        <p class="state__hint">Тот же текст, что у остальных экранов при недоступном API.</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <p class="panel__caption">Процесса ещё нет — работают умолчания</p>
+      <div class="panel__body">
+        <p class="state__line">У отдела нет своего процесса — показаны умолчания.</p>
+        <p class="state__hint">
+          Таблица заполнена 13 ступенями из <code>defaults</code>, и конвейер уже работает
+          именно так. Первое сохранение создаст документ отдела.
+        </p>
+      </div>
+      <div class="form-foot">
+        <div class="form-actions">
+          <span class="status"><span class="status__dot status__dot--idle" aria-hidden="true"></span>Умолчания, не сохранено</span>
+          <div class="form-actions__end">
+            <button class="btn" type="button" disabled>Сбросить к умолчанию</button>
+            <button class="btn btn--dark" type="button">Сохранить</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ Кадр 4 ============================ -->
+
+<section class="shot">
+  <p class="shot__caption">
+    <strong>Кадр 4 — правка, выключение и удаление ступени</strong>
+    Метки в ячейке — кнопка: нажали — раскрылся список с галочками. Выключенная ступень
+    остаётся в таблице, но тише: она не берёт ни одного тикета. Удаление спрашивает
+    подтверждение и говорит, что перестанет работать.
+  </p>
+
+  <div class="card">
+    <p class="panel__caption">Строка «Бэкенд» — раскрыт список «кроме»</p>
+
+    <div class="proc-head" role="presentation">
+      <span>Порядок</span>
+      <span>Ступень</span>
+      <span>Входящие метки</span>
+      <span>Кроме</span>
+      <span>Ставит</span>
+      <span>Снимает</span>
+      <span>Страж</span>
+      <span>Роль</span>
+      <span>Включена</span>
+            <span aria-hidden="true"></span>
+    </div>
+
+    <ul class="proc-body">
+      <li class="proc-row">
+        <span class="proc-row__order" data-testid="process-step-priority">421</span>
+        <span class="proc-row__step">
+          <span class="proc-row__title">Бэкенд</span>
+          <span class="proc-row__kind"><span class="proc-row__id">dev-backend</span> · сессия</span>
+        </span>
+        <button class="proc-cell proc-cell--edit" type="button" data-label="Входящие">
+          <span class="lbl">dev</span><span class="lbl">areaBackend</span>
+        </button>
+        <button class="proc-cell proc-cell--edit proc-cell--unless" type="button" aria-expanded="true" data-label="Кроме">
+          <span class="lbl">progress</span><span class="lbl">review</span><span class="lbl">test</span><span class="lbl">ok</span><span class="lbl">failed</span>
+        </button>
+        <button class="proc-cell proc-cell--edit proc-cell--put" type="button" data-label="Ставит">
+          <span class="lbl">progress</span>
+        </button>
+        <button class="proc-cell proc-cell--edit proc-cell--drop" type="button" data-label="Снимает">
+          <span class="lbl">dev</span>
+        </button>
+        <span class="proc-cell proc-cell--guard" data-label="Страж">Выдача</span>
+        <span class="proc-cell proc-cell--role" data-label="Роль"><span class="role">dev-backend</span></span>
+        <span class="proc-cell proc-cell--enabled" data-label="Включена">
+          <label class="checkbox"><input type="checkbox" checked data-testid="process-step-enabled"></label>
+        </span>
+        <span class="proc-cell proc-cell--remove"><button class="icon-btn" type="button" aria-label="Удалить ступень" data-testid="process-step-remove">×</button></span>
+      </li>
+    </ul>
+
+    <div class="picker">
+      <p class="picker__title">Кроме меток</p>
+      <div class="picker__grid">
+        <label class="checkbox"><input type="checkbox" checked><span>progress</span></label>
+        <label class="checkbox"><input type="checkbox" checked><span>review</span></label>
+        <label class="checkbox"><input type="checkbox" checked><span>test</span></label>
+        <label class="checkbox"><input type="checkbox" checked><span>ok</span></label>
+        <label class="checkbox"><input type="checkbox" checked><span>failed</span></label>
+        <label class="checkbox"><input type="checkbox"><span>dev</span></label>
+        <label class="checkbox"><input type="checkbox"><span>frontend</span></label>
+        <label class="checkbox"><input type="checkbox"><span>areaBackend</span></label>
+        <label class="checkbox"><input type="checkbox"><span>areaFrontend</span></label>
+        <label class="checkbox"><input type="checkbox"><span>areaFullstack</span></label>
+        <label class="checkbox"><input type="checkbox"><span>phaseFrontend</span></label>
+        <label class="checkbox"><input type="checkbox"><span>mockup</span></label>
+        <label class="checkbox"><input type="checkbox"><span>mockupsReady</span></label>
+        <label class="checkbox"><input type="checkbox"><span>merged</span></label>
+      </div>
+      <div class="picker__foot">
+        <button class="btn" type="button">Готово</button>
+      </div>
+    </div>
+
+    <p class="panel__caption">Та же строка со снятой галочкой «включена»</p>
+
+    <ul class="proc-body">
+      <li class="proc-row proc-row--off">
+        <span class="proc-row__order" data-testid="process-step-priority">421</span>
+        <span class="proc-row__step">
+          <span class="proc-row__title">Бэкенд</span>
+          <span class="proc-row__kind"><span class="proc-row__id">dev-backend</span> · сессия</span>
+        </span>
+        <button class="proc-cell proc-cell--edit" type="button" data-label="Входящие">
+          <span class="lbl">dev</span><span class="lbl">areaBackend</span>
+        </button>
+        <button class="proc-cell proc-cell--edit" type="button" data-label="Кроме">
+          <span class="lbl">progress</span><span class="lbl">review</span><span class="lbl">test</span><span class="lbl">ok</span><span class="lbl">failed</span>
+        </button>
+        <button class="proc-cell proc-cell--edit" type="button" data-label="Ставит">
+          <span class="lbl">progress</span>
+        </button>
+        <button class="proc-cell proc-cell--edit" type="button" data-label="Снимает">
+          <span class="lbl">dev</span>
+        </button>
+        <span class="proc-cell proc-cell--guard" data-label="Страж">Выдача</span>
+        <span class="proc-cell proc-cell--role" data-label="Роль"><span class="role">dev-backend</span></span>
+        <span class="proc-cell proc-cell--enabled" data-label="Включена">
+          <label class="checkbox"><input type="checkbox" data-testid="process-step-enabled"></label>
+        </span>
+        <span class="proc-cell proc-cell--remove"><button class="icon-btn" type="button" aria-label="Удалить ступень" data-testid="process-step-remove">×</button></span>
+      </li>
+    </ul>
+  </div>
+
+  <!-- Удаление спрашивает и объясняет следствие: молча строки из конвейера не уходят. -->
+  <div class="dialog" style="margin-top: 1rem">
+    <div class="dialog__head">
+      <p class="dialog__eyebrow">Удаление ступени</p>
+      <h3 class="dialog__title">Удалить ступень «Код-ревью»?</h3>
+    </div>
+
+    <div class="dialog__body">
+      <p class="dialog__lead">
+        Правило исчезнет из процесса сразу после «Сохранить» — не раньше. Что изменится:
+      </p>
+      <ul class="dialog__list">
+        <li>тикеты с лейблом <code>for-code-review</code> перестанут находить исполнителя: следующей подходящей ступени нет;</li>
+        <li>проверки <code>same-head</code> и <code>checklist-gate</code> больше не запускаются — их вызывает только эта ступень;</li>
+        <li>уже начатые ревью не отменяются: они идут своей сессией.</li>
+      </ul>
+      <p class="dialog__hint">
+        Вместо удаления можно снять галочку «включена»: ступень останется в таблице и не будет
+        брать тикеты — вернуть её потом проще.
+      </p>
+    </div>
+
+    <div class="dialog__foot">
+      <span class="dialog__step-note">Ступень 181 · Код-ревью</span>
+      <div class="dialog__foot-end">
+        <button class="btn" type="button">Отмена</button>
+        <button class="btn btn--danger" type="button" data-testid="process-step-remove-confirm">Удалить ступень</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+</body>
+</html>

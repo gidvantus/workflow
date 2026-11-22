@@ -325,6 +325,12 @@ export function projectFields(project) {
     labels: isObject(department.labels) ? department.labels : undefined,
     // Каталоги половин работы. Необязательны: по умолчанию работают AREA_PREFIXES.
     areas: isObject(department.areas) ? department.areas : undefined,
+    // Процесс отдела — таблица ступеней конвейера, сохранённая в вебе. Веб отдаёт ключ
+    // всегда, а «своего процесса нет» — это `null`: так в кеше не остаётся прежняя таблица
+    // (см. `overlay()`). Внутри диспетчера отсутствие процесса — `undefined`, и тогда
+    // исполняются умолчания (`plugins/process.mjs`). Проверка документа — дело диспетчера:
+    // реестр отдаёт то, что лежит в базе.
+    process: isObject(department.process) ? department.process : undefined,
   }
 }
 
