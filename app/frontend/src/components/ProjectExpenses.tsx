@@ -1,36 +1,53 @@
 /**
- * Карточка «Расходы проекта»: итог журнала, список смен и детализация одной смены.
+ * Карточка «Расходы проекта» — единственный раздел денег проекта.
  *
- * Третья вкладка страницы проекта. Журнал — снимок закрытых смен: harness посчитал цену
- * сам и прислал смену с тарифами и сессиями, поэтому здесь нет ни формулы, ни курса, ни
- * пересчёта — только чтение четырёх ручек из `api/usage.ts`.
+ * До #72 деньги жили на двух вкладках: ручные записи в «Стоимости», смены в «Расходах»,
+ * и одна и та же стоимость проекта стояла на экране дважды и по-разному. Теперь журнал
+ * один: `GET /api/projects/{id}/expenses` отдаёт обе половины одним списком, строку
+ * отличает `kind` — `manual` или `shift`. Вкладка «Стоимость» удалена, а второе число
+ * осталось одно — в паспорте проекта, чтобы человек мог проверить первое.
  *
- * Деньги фронт не складывает и не округляет до хранения: сумма проекта — `totals.cost_usd`
- * из ответа, сумма смены — `cost_usd` её строки, сумма сессии — её собственная `cost_usd`.
- * Округление до двух знаков — только вид (`12,34 $`), а не вычисление.
+ * Что здесь читается и как показывается:
  *
- * Состояния: загрузка, пустой журнал («Пока нет данных о расходе»), отказ с «Повторить»
- * и недоступный `api` («Сервер не отвечает»). У детализации свои состояния: «Загрузка…»,
- * отказ с дословным текстом сервера (`404 Смена не найдена`) и возврат «← К проекту».
+ * - итог (`total`) и суммы строк (`amount`) — строки с шестью знаками, посчитанные
+ *   сервером. Фронт их не складывает и не пересчитывает: `formatCost` выбирает, сколько
+ *   знаков показать (`119,23 $`, а ненулевую мелочь — `0,0004 $`);
+ * - цены проекта ($ за 1 000 000 токенов) печатаются строкой под шапкой; окно их правки
+ *   живёт здесь же, потому что деньги проекта теперь в одном месте;
+ * - различие половин — два признака, а не цвет: у смены есть вторая строка даты
+ *   (интервал) и кнопка «Сессии», у ручной записи нет ни того, ни другого. Числа ручной
+ *   записи и есть запись, раскрывать её некуда;
+ * - детализация смены — прежний экран: возврат, итог смены и список сессий. Снимок цен
+ *   смены (`rates`) не печатается: вторые цены на экране снова развели бы деньги на два
+ *   прайса, а цена видна в строке цен.
  *
- * `projectRef` — id проекта из реестра отдела: журнал живёт отдельно от справочника
- * `projects`. `rebuild` берёт для реестра `project.code or str(project.id)`
- * (`app/api/registry.py`), поэтому страница проекта передаёт сюда
- * `project.code ?? String(project.id)` — ту же пару, что попадает в документ реестра.
+ * Состояния карточки: загрузка, пустой журнал, отказ с дословным текстом сервера и
+ * «Повторить», «Проект не найден» (ни цен, ни итога — числа нет, а не ноль) и «цены не
+ * заданы» (подпись красная, кнопка зовёт задать цены). Строка цен остаётся на месте и при
+ * загрузке, и при отказе журнала: цены приходят с проектом, а не с журналом.
  */
 
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 
+import type { JournalEntry, JournalTokens } from '../api/expenses';
 import { ApiError, UNREACHABLE_TEXT } from '../api/http';
-import {
-  loadProjectUsage,
-  loadShiftDetail,
-  type ProjectUsage,
-  type UsageSession,
-  type UsageShift,
-  type UsageShiftDetail,
-  type UsageTokens,
-} from '../api/usage';
+import type { Project } from '../api/projects';
+import { loadShiftDetail, type UsageSession, type UsageShiftDetail } from '../api/usage';
+import { formatCost, formatPrice, formatSpentOn, formatTokens } from '../format';
+
+/**
+ * Отказ «проекта нет»: в этом состоянии карточка не показывает ни цен, ни итога.
+ * Текст сверяется дословно — он приходит от сервера и на экран уходит как есть.
+ */
+const PROJECT_NOT_FOUND_TEXT = 'Проект не найден';
+
+/** Четыре вида токенов в порядке показа: две пары в двух колонках (`.journal-row__tokens`). */
+const TOKEN_FIELDS: { key: keyof JournalTokens; label: string }[] = [
+  { key: 'in', label: 'вход' },
+  { key: 'out', label: 'выход' },
+  { key: 'cacheRead', label: 'кэш-чтение' },
+  { key: 'cacheWrite', label: 'кэш-запись' },
+];
 
 /** Две цифры: часы, минуты, дни и месяцы в журнале набраны одного размера. */
 function pad(value: number): string {
@@ -38,65 +55,94 @@ function pad(value: number): string {
 }
 
 /**
- * Момент в виде `01.11 13:00` — по местному времени браузера.
+ * Время момента по местному времени браузера: `09:00`.
  *
  * Строку с датой фронт не разбирает вручную: сервер присылает ISO с часовым поясом, а
  * показывать смену человеку надо в его времени. Нечитаемая дата — пустая строка: рисовать
  * вместо неё выдуманное число хуже, чем не рисовать ничего.
+ */
+function formatClock(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/**
+ * Момент в виде `19.11 09:00` — по местному времени браузера.
+ *
+ * Дата внутри дня печатается и у начала, и у конца смены: окно может перейти через
+ * полночь, и тогда `22:00 → 03:00` без дат читалось бы как три часа вместо пяти.
  */
 function formatMoment(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
     return '';
   }
-  return `${pad(date.getDate())}.${pad(date.getMonth() + 1)} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  return `${pad(date.getDate())}.${pad(date.getMonth() + 1)} ${formatClock(value)}`;
 }
 
-/** Интервал смены: `01.11 13:00 → 02.11 04:00`. */
+/** Интервал смены для детализации: `19.11 09:00 → 19.11 17:00`. */
 function formatPeriod(startedAt: string, endedAt: string): string {
   return `${formatMoment(startedAt)} → ${formatMoment(endedAt)}`;
 }
 
-/** Тысячи через пробел: `1234567` → `1 234 567`. */
-function groupDigits(value: number): string {
-  return value.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+/** Интервал смены в строке журнала: `09:00 → 17:00` — дата уже стоит слева. */
+function formatClockRange(startedAt: string, endedAt: string): string {
+  return `${formatClock(startedAt)} → ${formatClock(endedAt)}`;
 }
 
-/**
- * Деньги для экрана: строка ответа с шестью знаками → `12,34 $`.
- *
- * Округление до копеек — вид, а не пересчёт: в хранилище и в ответах остаются те же
- * шесть знаков, и следующая смена их не «поправит». Нечисловая строка показывается как
- * есть — выдумывать за сервер сумму фронт не должен.
- */
-function formatMoney(amount: string): string {
-  const value = Number(amount.trim().replace(',', '.'));
-  if (!Number.isFinite(value)) {
-    return amount.trim();
+/** Смена в русском счёте: «1 смена», «2 смены», «5 смен». */
+function shiftsLabel(count: number): string {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  if (mod10 === 1 && mod100 !== 11) {
+    return `${count} смена`;
   }
-  const [whole = '0', fraction = '00'] = value.toFixed(2).split('.');
-  return `${whole.replace(/\B(?=(\d{3})+(?!\d))/g, ' ')},${fraction} $`;
-}
-
-/** Токены одной парой чисел: журнал показывает их общим счётом, а не разбивкой. */
-function tokensTotal(tokens: UsageTokens): number {
-  return tokens.in + tokens.out + tokens.cacheRead + tokens.cacheWrite;
-}
-
-/** Токены для экрана: `1 234 567`. */
-function formatTokens(tokens: UsageTokens): string {
-  return groupDigits(tokensTotal(tokens));
-}
-
-/** Причина закрытия смены по-русски; неизвестную показываем как есть. */
-function reasonLabel(reason: string): string {
-  if (reason === 'window') {
-    return 'окно смены';
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) {
+    return `${count} смены`;
   }
-  if (reason === 'manual') {
-    return 'вручную';
+  return `${count} смен`;
+}
+
+/** Запись в русском счёте: «1 запись», «2 записи», «7 записей». */
+function entriesLabel(count: number): string {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  if (mod10 === 1 && mod100 !== 11) {
+    return `${count} запись`;
   }
-  return reason;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) {
+    return `${count} записи`;
+  }
+  return `${count} записей`;
+}
+
+/** Ручная запись в русском счёте: «1 ручная запись», «4 ручные записи», «5 ручных записей». */
+function manualLabel(count: number): string {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  if (mod10 === 1 && mod100 !== 11) {
+    return `${count} ручная запись`;
+  }
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) {
+    return `${count} ручные записи`;
+  }
+  return `${count} ручных записей`;
+}
+
+/** Сессия в русском счёте для подписи под меткой смены: «3 сессии». */
+function sessionsLabel(count: number): string {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  if (mod10 === 1 && mod100 !== 11) {
+    return `${count} сессия`;
+  }
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) {
+    return `${count} сессии`;
+  }
+  return `${count} сессий`;
 }
 
 /** Ходы с правильным окончанием: «1 ход», «2 хода», «5 ходов». */
@@ -112,6 +158,17 @@ function turnsLabel(count: number): string {
   return `${count} ходов`;
 }
 
+/** Причина закрытия смены по-русски; неизвестную показываем как есть. */
+function reasonLabel(reason: string): string {
+  if (reason === 'window') {
+    return 'окно смены';
+  }
+  if (reason === 'manual') {
+    return 'вручную';
+  }
+  return reason;
+}
+
 /** Тикет сессии: «#57 Название», только номер или «без тикета». */
 function issueLabel(session: UsageSession): string {
   if (session.issue_number === null) {
@@ -124,58 +181,97 @@ function issueLabel(session: UsageSession): string {
   return `${number} ${session.issue_title}`;
 }
 
-type UsageState =
-  | { status: 'loading' }
-  | { status: 'ready'; usage: ProjectUsage }
-  | { status: 'empty' }
-  | { status: 'error'; errorText: string };
+/** Счётчик записей: «7 записей · 3 смены и 4 ручные записи» — по половинам журнала. */
+function journalCount(entries: JournalEntry[]): string {
+  const shifts = entries.filter((entry) => entry.kind === 'shift').length;
+  const manual = entries.length - shifts;
+  const base = entriesLabel(entries.length);
+  if (shifts === 0 || manual === 0) {
+    return base;
+  }
+  return `${base} · ${shiftsLabel(shifts)} и ${manualLabel(manual)}`;
+}
+
+/** Сумма токенов строки для итога смены: складывается только для показа. */
+function tokensTotal(tokens: JournalTokens): number {
+  return tokens.in + tokens.out + tokens.cacheRead + tokens.cacheWrite;
+}
 
 type DetailState =
   | { status: 'closed' }
-  | { status: 'loading' }
+  | { status: 'loading'; shiftId: number }
   | { status: 'ready'; shift: UsageShiftDetail }
   | { status: 'error'; errorText: string };
 
-type ShiftRowProps = {
-  shift: UsageShift;
-  onOpen: (shift: UsageShift) => void;
+type JournalRowProps = {
+  entry: JournalEntry;
+  onOpen: (shiftId: number) => void;
 };
 
-/** Строка журнала: интервал, причина, число сессий, токены, сумма и вход в детализацию. */
-function ShiftRow({ shift, onOpen }: ShiftRowProps): JSX.Element {
-  const period = formatPeriod(shift.started_at, shift.ended_at);
+/**
+ * Строка журнала: пять колонок вместо трёх у ручной записи и шести у смены.
+ *
+ * Источник — общий признак строки, а не повод рисовать вторую вкладку, поэтому у обеих
+ * половин одна сетка `when · source · tokens · amount · open`. Пустые виды токенов не
+ * печатаются: ноль в этой ведомости не факт, а отсутствие факта.
+ */
+function JournalRow({ entry, onOpen }: JournalRowProps): JSX.Element {
+  const isShift = entry.kind === 'shift';
+  const spentOn = formatSpentOn(entry.spent_on);
+  const period =
+    entry.started_at !== undefined && entry.ended_at !== undefined
+      ? formatClockRange(entry.started_at, entry.ended_at)
+      : null;
   return (
-    <li className="expense-row" data-testid="expense-item">
-      <p className="expense-row__date" data-testid="expense-item-period">
-        {period}
-      </p>
-      <p className="expense-row__reason" data-testid="expense-item-reason">
-        {reasonLabel(shift.reason)}
-      </p>
-      <p className="expense-row__count" data-testid="expense-item-sessions">
-        {shift.sessions_count}
-      </p>
-      <p className="expense-row__tokens" data-testid="expense-item-tokens">
-        {formatTokens(shift.tokens)}
-      </p>
-      <p className="expense-row__amount" data-testid="expense-item-cost">
-        {formatMoney(shift.cost_usd)}
-      </p>
-      <div className="expense-row__open">
-        {/* Доступное имя начинается с видимой подписи «Сессии» (WCAG 2.5.3, «Label in
-            Name»): человек, управляющий голосом, произносит то, что видит, а скринридер
-            читает то же действие. Период отличает строки между собой, но видимую подпись
-            не подменяет. */}
-        <button
-          className="btn"
-          type="button"
-          data-testid="expense-open"
-          aria-label={`Сессии смены ${period}`}
-          onClick={() => onOpen(shift)}
-        >
-          Сессии
-        </button>
+    <li className="journal-row" data-testid="expense-item">
+      <div className="journal-row__when">
+        <p className="journal-row__date" data-testid="expense-item-date">
+          {spentOn}
+        </p>
+        {period !== null && <p className="journal-row__period">{period}</p>}
       </div>
+      <div className="journal-row__source">
+        <p className="journal-row__source-label" data-testid="expense-item-source">
+          {isShift ? 'смена' : 'ручная запись'}
+        </p>
+        {isShift && entry.sessions_count !== undefined && entry.reason !== undefined && (
+          <p className="journal-row__source-note">
+            {sessionsLabel(entry.sessions_count)} · {reasonLabel(entry.reason)}
+          </p>
+        )}
+      </div>
+      <p className="journal-row__tokens" data-testid="expense-item-tokens">
+        {TOKEN_FIELDS.map(({ key, label }) =>
+          entry.tokens[key] === 0 ? null : (
+            <span className="tok" key={key}>
+              <span className="tok__label">{label}</span>
+              <span className="tok__value">{formatTokens(entry.tokens[key])}</span>
+            </span>
+          ),
+        )}
+      </p>
+      <p className="journal-row__amount" data-testid="expense-item-amount">
+        {formatCost(entry.amount)}
+      </p>
+      {isShift && (
+        <div className="journal-row__open">
+          {/* Доступное имя начинается с видимой подписи «Сессии» (WCAG 2.5.3, «Label in
+              Name»): человек, управляющий голосом, произносит то, что видит, а скринридер
+              читает то же действие. Дата и интервал отличают строки между собой, но
+              видимую подпись не подменяют. */}
+          <button
+            className="btn"
+            type="button"
+            data-testid="expense-open"
+            aria-label={`Сессии смены ${spentOn} с ${
+              entry.started_at === undefined ? '' : formatClock(entry.started_at)
+            } до ${entry.ended_at === undefined ? '' : formatClock(entry.ended_at)}`}
+            onClick={() => onOpen(entry.id)}
+          >
+            Сессии
+          </button>
+        </div>
+      )}
     </li>
   );
 }
@@ -184,7 +280,7 @@ type SessionRowProps = {
   session: UsageSession;
 };
 
-/** Строка сессии: роль, тикет, ходы, токены и цена. */
+/** Строка сессии: роль, тикет, ходы, токены и цена. Суммы пришли записанными. */
 function SessionRow({ session }: SessionRowProps): JSX.Element {
   return (
     <li className="expense-session" data-testid="expense-session">
@@ -196,108 +292,92 @@ function SessionRow({ session }: SessionRowProps): JSX.Element {
       </p>
       <p className="expense-session__turns">{turnsLabel(session.turns)}</p>
       <p className="expense-session__tokens" data-testid="expense-session-tokens">
-        {formatTokens(session.tokens)}
+        {formatTokens(tokensTotal(session.tokens))}
       </p>
       <p className="expense-session__amount" data-testid="expense-session-cost">
-        {formatMoney(session.cost_usd)}
+        {formatCost(session.cost_usd)}
       </p>
     </li>
   );
 }
 
 type ProjectExpensesProps = {
-  /** id проекта в реестре отдела (`project_ref` журнала). */
-  projectRef: string;
+  /** Карточка целиком: по ней печатаются цены строки цен и суммы не трогаются. */
+  project: Project;
+  /** Обе половины журнала: пустой массив — журнал прочитан и пуст. */
+  entries: JournalEntry[];
+  /** Итог проекта строкой с шестью знаками; `null` — журнал ещё не прочитан. */
+  total: string | null;
+  loading: boolean;
+  /** Текст отказа дословно из `detail`; `null` — отказа нет. */
+  errorText: string | null;
+  onRetry: () => void;
+  onCreate: () => void;
+  onEditPrices: () => void;
 };
 
-export default function ProjectExpenses({ projectRef }: ProjectExpensesProps): JSX.Element {
-  const listTitleId = useId();
-  const detailTitleId = useId();
-  const [usage, setUsage] = useState<UsageState>({ status: 'loading' });
+export default function ProjectExpenses({
+  project,
+  entries,
+  total,
+  loading,
+  errorText,
+  onRetry,
+  onCreate,
+  onEditPrices,
+}: ProjectExpensesProps): JSX.Element {
   const [detail, setDetail] = useState<DetailState>({ status: 'closed' });
-  /** id смены, ответ на которую сейчас ждём: чужие ответы отбрасываются. */
-  const pendingShift = useRef<number | null>(null);
+  // Номер последнего запроса детализации: ответ, пришедший после возврата к журналу, на
+  // экран не попадает. Без него «← К проекту», нажатое во время загрузки, открывало бы
+  // чужую смену на месте уже закрытой карточки.
+  const detailRequest = useRef(0);
+  const ready = !loading && errorText === null;
+  // Четыре нуля — допустимое состояние проекта, но запись с такими ценами сервер
+  // отклонит, поэтому строка цен говорит об этом сама, до нажатия «Сохранить».
+  const pricesUnset = [
+    project.price_input,
+    project.price_output,
+    project.price_cache_read,
+    project.price_cache_write,
+  ].every((price) => Number(price) === 0);
+  const pricesVisible = errorText !== PROJECT_NOT_FOUND_TEXT;
 
-  /** Журнал проекта всегда читается с сервера: «Повторить» — это повторный запрос. */
-  const loadUsage = useCallback(async (): Promise<void> => {
-    setUsage({ status: 'loading' });
-    try {
-      const loaded = await loadProjectUsage(projectRef);
-      // `null` — `404`: смен ещё нет. Это пустой журнал, а не отказ.
-      if (loaded === null || loaded.shifts.length === 0) {
-        setUsage({ status: 'empty' });
-        return;
-      }
-      setUsage({ status: 'ready', usage: loaded });
-    } catch (error) {
-      setUsage({
-        status: 'error',
-        errorText: error instanceof ApiError ? error.message : UNREACHABLE_TEXT,
-      });
-    }
-  }, [projectRef]);
-
-  useEffect(() => {
-    void loadUsage();
-  }, [loadUsage]);
-
-  /**
-   * Детализация читается отдельным запросом: в списке сессий нет.
-   *
-   * Открыть смену, вернуться и открыть другую можно быстрее, чем придёт первый ответ
-   * (таймаут запроса — 5 с). Без памяти о том, чей ответ ждём, опоздавший ответ первой
-   * смены подменил бы экран второй, поэтому `pendingShift` хранит последний запрошенный
-   * id, а чужие ответы отбрасываются — и данные, и отказ.
-   */
-  const loadDetail = useCallback(async (shiftId: number): Promise<void> => {
-    pendingShift.current = shiftId;
-    setDetail({ status: 'loading' });
-    try {
-      const loaded = await loadShiftDetail(shiftId);
-      if (pendingShift.current !== shiftId) {
-        return;
-      }
-      setDetail({ status: 'ready', shift: loaded });
-    } catch (error) {
-      if (pendingShift.current !== shiftId) {
-        return;
-      }
-      setDetail({
-        status: 'error',
-        errorText: error instanceof ApiError ? error.message : UNREACHABLE_TEXT,
-      });
-    }
+  const closeDetail = useCallback((): void => {
+    detailRequest.current += 1;
+    setDetail({ status: 'closed' });
   }, []);
 
-  /** Возврат к журналу: запрошенная смена забывается, опоздавший ответ уже не нужен. */
-  function closeDetail(): void {
-    pendingShift.current = null;
-    setDetail({ status: 'closed' });
-  }
+  const openShift = useCallback((shiftId: number): void => {
+    detailRequest.current += 1;
+    const request = detailRequest.current;
+    setDetail({ status: 'loading', shiftId });
+    void (async (): Promise<void> => {
+      try {
+        const loaded = await loadShiftDetail(shiftId);
+        if (detailRequest.current === request) {
+          setDetail({ status: 'ready', shift: loaded });
+        }
+      } catch (error) {
+        if (detailRequest.current === request) {
+          setDetail({
+            status: 'error',
+            errorText: error instanceof ApiError ? error.message : UNREACHABLE_TEXT,
+          });
+        }
+      }
+    })();
+  }, []);
 
-  function handleOpen(shift: UsageShift): void {
-    void loadDetail(shift.id);
-  }
-
-  /**
-   * Состояния карточки одной смены. Возврат есть в каждом из них: иначе отказ `404 Смена
-   * не найдена` запирал бы человека в детализации без выхода.
-   */
-  if (detail.status !== 'closed') {
-    const shift = detail.status === 'ready' ? detail.shift : null;
+  if (detail.status === 'ready') {
+    const { shift } = detail;
     return (
-      <section className="card" data-testid="expense-detail" aria-labelledby={detailTitleId}>
+      <section className="card" data-testid="expense-detail" aria-label="Смена">
         <div className="card__head">
-          <h2 className="card__title" id={detailTitleId}>
-            {'Смена'}
-            {shift !== null && (
-              <>
-                {' · '}
-                <span data-testid="expense-detail-period">
-                  {formatPeriod(shift.started_at, shift.ended_at)}
-                </span>
-              </>
-            )}
+          <h2 className="card__title">
+            Смена ·{' '}
+            <span data-testid="expense-detail-period">
+              {formatPeriod(shift.started_at, shift.ended_at)}
+            </span>
           </h2>
           <button
             className="btn"
@@ -309,80 +389,127 @@ export default function ProjectExpenses({ projectRef }: ProjectExpensesProps): J
           </button>
         </div>
 
-        {detail.status === 'loading' && (
-          <div className="card__body">
-            <p className="state__line" data-testid="expense-detail-state" aria-live="polite">
-              Загрузка…
-            </p>
-          </div>
-        )}
+        <div className="card__body card__body--tight">
+          <p className="expenses-total expenses-total--left">
+            {'Сессий: '}
+            <span className="expenses-total__value">{shift.sessions_count}</span>
+            {' · токенов: '}
+            {formatTokens(tokensTotal(shift.tokens))}
+            {' · сумма: '}
+            <span className="expenses-total__value" data-testid="expense-detail-cost">
+              {formatCost(shift.cost_usd)}
+            </span>
+          </p>
+        </div>
 
-        {detail.status === 'error' && (
-          <div className="card__body">
-            <p className="error" data-testid="expense-detail-error" role="alert">
-              {detail.errorText}
-            </p>
-          </div>
-        )}
-
-        {shift !== null && (
-          <>
-            <div className="card__body card__body--tight">
-              <p className="expenses-total expenses-total--left">
-                {'Сессий: '}
-                <span className="expenses-total__value">{shift.sessions.length}</span>
-                {' · токенов: '}
-                {formatTokens(shift.tokens)}
-                {' · сумма: '}
-                <span className="expenses-total__value" data-testid="expense-detail-cost">
-                  {formatMoney(shift.cost_usd)}
-                </span>
-              </p>
-            </div>
-            {shift.sessions.length === 0 ? (
-              <div className="card__body">
-                <p className="state__line" data-testid="expense-detail-empty">
-                  В этой смене нет сессий
-                </p>
-              </div>
-            ) : (
-              <ul className="table__body" data-testid="expense-session-list">
-                {shift.sessions.map((session) => (
-                  <SessionRow key={session.session} session={session} />
-                ))}
-              </ul>
-            )}
-          </>
-        )}
+        <ul className="table__body">
+          {shift.sessions.map((session) => (
+            <SessionRow key={session.session} session={session} />
+          ))}
+        </ul>
       </section>
     );
   }
 
   return (
-    <section className="card" aria-labelledby={listTitleId}>
+    <section className="card card--journal" aria-label="Расходы проекта" data-testid="expenses-card">
       <div className="card__head">
-        <h2 className="card__title" id={listTitleId}>
-          Расходы проекта
-        </h2>
-        {usage.status === 'ready' && (
-          // Итог — только когда есть хотя бы одна смена: нулевую сумму за пустой журнал
-          // экран не рисует, «Пока нет данных о расходе» и есть ответ.
-          <p className="expenses-total" data-testid="expense-total">
-            {'Смен: '}
-            <span data-testid="expense-total-shifts">{usage.usage.totals.shifts}</span>
-            {' · сессий: '}
-            <span data-testid="expense-total-sessions">{usage.usage.totals.sessions}</span>
-            {' · токенов: '}
-            {formatTokens(usage.usage.totals.tokens)}
-            {' · сумма: '}
-            <span className="expenses-total__value" data-testid="expense-total-cost">
-              {formatMoney(usage.usage.totals.cost_usd)}
+        <h2 className="card__title">Расходы проекта</h2>
+        <div className="card__tools">
+          {ready && (
+            <span className="card__meta" data-testid="expenses-count">
+              {journalCount(entries)}
             </span>
-          </p>
-        )}
+          )}
+          {ready && total !== null && (
+            <div className="cost-sum">
+              <span className="cost-sum__label">Итого</span>
+              <span className="cost-sum__value" data-testid="expenses-total">
+                {formatCost(total)}
+              </span>
+            </div>
+          )}
+          <button
+            className="btn btn--dark"
+            type="button"
+            data-testid="expense-create"
+            onClick={onCreate}
+          >
+            Добавить запись
+          </button>
+        </div>
       </div>
 
-      {usage.status === 'loading' && (
+      {pricesVisible && (
+        <div
+          className={pricesUnset ? 'card__prices card__prices--unset' : 'card__prices'}
+          data-testid="expenses-prices"
+        >
+          {pricesUnset ? (
+            <>
+              <p className="prices__label">Цены не заданы</p>
+              <p className="prices__note">
+                Пока все четыре цены нули, сервер отклонит любую запись.
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="prices__label">
+                Цены за токены <span className="prices__unit">· $ за 1 млн</span>
+              </p>
+              <ul className="prices__list">
+                <li className="tok">
+                  <span className="tok__label">вход</span>
+                  <span className="tok__value">{formatPrice(project.price_input)}</span>
+                </li>
+                <li className="tok">
+                  <span className="tok__label">выход</span>
+                  <span className="tok__value">{formatPrice(project.price_output)}</span>
+                </li>
+                <li className="tok">
+                  <span className="tok__label">кэш-чтение</span>
+                  <span className="tok__value">{formatPrice(project.price_cache_read)}</span>
+                </li>
+                <li className="tok">
+                  <span className="tok__label">кэш-запись</span>
+                  <span className="tok__value">{formatPrice(project.price_cache_write)}</span>
+                </li>
+              </ul>
+            </>
+          )}
+          <button
+            className={pricesUnset ? 'btn btn--dark' : 'btn'}
+            type="button"
+            data-testid="expenses-prices-edit"
+            onClick={onEditPrices}
+          >
+            {pricesUnset ? 'Задать цены' : 'Изменить'}
+          </button>
+        </div>
+      )}
+
+      {detail.status === 'loading' && (
+        <div className="card__body">
+          <p className="state__line" aria-live="polite">
+            Загрузка…
+          </p>
+        </div>
+      )}
+
+      {detail.status === 'error' && (
+        <div className="card__body">
+          <div className="state__error">
+            <p className="error" role="alert">
+              {detail.errorText}
+            </p>
+            <button className="btn" type="button" onClick={closeDetail}>
+              ← К проекту
+            </button>
+          </div>
+        </div>
+      )}
+
+      {detail.status === 'closed' && loading && (
         <div className="card__body">
           <p className="state__line" data-testid="expenses-state" aria-live="polite">
             Загрузка…
@@ -390,45 +517,33 @@ export default function ProjectExpenses({ projectRef }: ProjectExpensesProps): J
         </div>
       )}
 
-      {usage.status === 'error' && (
+      {detail.status === 'closed' && errorText !== null && (
         <div className="card__body">
           <div className="state__error">
-            <p className="error" data-testid="expense-error" role="alert">
-              {usage.errorText}
+            <p className="error" role="alert" data-testid="expenses-error">
+              {errorText}
             </p>
-            <button
-              className="btn"
-              type="button"
-              data-testid="expenses-retry"
-              onClick={() => void loadUsage()}
-            >
+            <button className="btn" type="button" data-testid="expenses-retry" onClick={onRetry}>
               Повторить
             </button>
           </div>
         </div>
       )}
 
-      {usage.status === 'empty' && (
-        <div className="card__body">
-          <p className="state__line" data-testid="expenses-empty">
-            Пока нет данных о расходе
-          </p>
+      {detail.status === 'closed' && ready && entries.length === 0 && (
+        <div className="card__body" data-testid="expenses-empty">
+          <p className="state__line">Пока нет записей</p>
           <p className="state__hint">
-            Журнал пополнится, когда смена проекта закроется и пришлёт свой расход.
-          </p>
-          {/* Ссылку журнала видно глазами: `404` у смен не отличается от «журнал пуст», и
-              при расхождении id проекта веба и id реестра отдела это единственный признак,
-              что смотрим не на тот проект. */}
-          <p className="state__hint" data-testid="expenses-ref">
-            {`Запрошен журнал проекта «${projectRef}»`}
+            Смены приходят сами, когда отдел закрывает смену проекта. Ручную запись добавьте
+            кнопкой «Добавить запись».
           </p>
         </div>
       )}
 
-      {usage.status === 'ready' && (
+      {detail.status === 'closed' && ready && entries.length > 0 && (
         <ul className="table__body" data-testid="expenses-list">
-          {usage.usage.shifts.map((shift) => (
-            <ShiftRow key={shift.id} shift={shift} onOpen={handleOpen} />
+          {entries.map((entry) => (
+            <JournalRow key={`${entry.kind}-${entry.id}`} entry={entry} onOpen={openShift} />
           ))}
         </ul>
       )}

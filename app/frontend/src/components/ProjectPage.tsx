@@ -1,13 +1,13 @@
 /**
  * Страница проекта: крошки, кнопка «← К проектам», паспорт проекта, полоса подразделов
- * с четырьмя вкладками — «Задачи», «Отделы», «Расходы» и «Стоимость» — и карточка
- * выбранного подраздела под ней.
+ * с тремя вкладками — «Задачи», «Отделы» и «Расходы» — и карточка выбранного подраздела
+ * под ней.
  *
  * Адреса у страницы нет: это состояние раздела «Проекты», а не маршрут. Поэтому объект
  * проекта приходит со списка, а ручки чтения одного проекта (`GET /api/projects/{id}`)
  * в приложении нет. Если проект успели удалить в другой вкладке, отделам это покажет
  * вложенный `GET` текстом `404 «Проект не найден»` в карточке отделов, задачам —
- * создание задачи тем же текстом, журналам расходов и стоимости — чтение журнала.
+ * создание задачи тем же текстом, журналу расходов — чтение журнала.
  *
  * Панели «Состояние сервиса» здесь нет: она живёт на экране «Проектов». Формы правки и
  * удаления проекта на странице тоже нет — это действия списка.
@@ -17,42 +17,35 @@
  * страница (`DepartmentPage`): полей у отдела десять плюс уведомления, в окно они не
  * влезают. После сохранения список отделов перечитывается, оптимистичных обновлений нет.
  *
- * Вкладка «Расходы» — журнал расхода смен (`ProjectExpenses`). Его данные живут не в
- * справочнике проектов, а в отдельном журнале, который ключуется `project_ref` — id
- * проекта из реестра отдела. Ручка `rebuild` собирает документ реестра как
- * `project.code or str(project.id)` (`app/api/registry.py`), поэтому ссылка журнала
- * считается так же: `project.code ?? String(project.id)`. Свой запрос вкладка делает
- * сама, как только страница открылась: списки задач и отделов читаются так же, и
- * переключение вкладки запросов не повторяет.
+ * Вкладка «Расходы» — единственный раздел денег проекта (#72). Журнал один: ручные записи
+ * и смены приходят одним списком `/api/projects/{id}/expenses`, и карточка показывает обе
+ * половины вместе (`ProjectExpenses`). Отдельной вкладки «Стоимость» больше нет — раньше
+ * там жил второй журнал в рублях, и одна и та же стоимость проекта печаталась на экране
+ * дважды. Её итог остался в паспорте как проверка первого числа, а цены за токены
+ * правятся окном прямо из строки цен этой вкладки.
  *
- * Вкладка «Стоимость» — деньги проекта в рублях (#53): карточка с итогом, строкой цен за
- * токены, журналом ручных записей по дате (`ExpenseList`) и окном записи. Это не тот же
- * экран, что «Расходы»: у #57 смены в долларах считает harness, здесь суммы в рублях
- * считает сервер по ценам проекта. Две вкладки — два экрана, поэтому у здешних
- * `data-testid` префикс `costs-`/`cost-` там, где они совпали бы с `expenses-*` соседней
- * вкладки: обе панели есть в разметке всегда, и одинаковый `data-testid` сделал бы выбор
- * однозначным только по видимости. Оба журнала читаются при открытии страницы,
- * показывается только выбранный; переключение вкладки запросов не повторяет.
+ * Журнал читается при открытии страницы, а не при первом заходе на вкладку: итог нужен
+ * паспорту, и списки задач и отделов читаются так же — переключение вкладки запросов
+ * не повторяет.
  *
- * Цены проекта приходят вместе с объектом проекта, а правятся своим окном с вкладки
- * «Стоимость»; ответ `PATCH` и есть новый проект, поэтому страница берёт из него и
- * паспорт, и строку цен.
+ * Цены проекта приходят вместе с объектом проекта, а правятся своим окном с этой вкладки;
+ * ответ `PATCH` и есть новый проект, поэтому страница берёт из него и паспорт, и строку
+ * цен.
  */
 
 import { useCallback, useEffect, useId, useState } from 'react';
 
 import { deleteDepartment, listDepartments, type Department } from '../api/departments';
-import { listExpenses, type Expense } from '../api/expenses';
+import { listExpenses, type JournalEntry } from '../api/expenses';
 import { ApiError, UNREACHABLE_TEXT } from '../api/http';
 import type { Project } from '../api/projects';
 import { listTasks, type Task } from '../api/tasks';
-import { formatMoney } from '../format';
+import { formatCost } from '../format';
 import ConfirmDialog from './ConfirmDialog';
 import DepartmentCreateDialog from './DepartmentCreateDialog';
 import DepartmentList from './DepartmentList';
 import DepartmentPage from './DepartmentPage';
 import ExpenseFormDialog from './ExpenseFormDialog';
-import ExpenseList from './ExpenseList';
 import ProjectExpenses from './ProjectExpenses';
 import ProjectPricesDialog from './ProjectPricesDialog';
 import TaskFormDialog from './TaskFormDialog';
@@ -87,8 +80,8 @@ function formatDate(iso: string): string {
   return `${date.getDate()} ${month} ${date.getFullYear()}`;
 }
 
-/** Открытая вкладка подразделов. */
-type Tab = 'tasks' | 'departments' | 'expenses' | 'costs';
+/** Открытая вкладка подразделов. Денежный раздел один — «Расходы». */
+type Tab = 'tasks' | 'departments' | 'expenses';
 
 /** Состояние списка задач: загрузка, готовые данные или ошибка загрузки. */
 type TasksState =
@@ -103,14 +96,14 @@ type DepartmentsState =
   | { status: 'error'; errorText: string };
 
 /**
- * Состояние журнала стоимости: загрузка, записи с итогом проекта или ошибка загрузки.
+ * Состояние журнала расходов: загрузка, обе половины с итогом проекта или ошибка загрузки.
  *
  * `total` — хранимая стоимость проекта из ответа сервера; она же показывается в паспорте,
  * поэтому лежит здесь, а не в карточке журнала.
  */
 type ExpensesState =
   | { status: 'loading' }
-  | { status: 'ready'; expenses: Expense[]; total: string }
+  | { status: 'ready'; entries: JournalEntry[]; total: string }
   | { status: 'error'; errorText: string };
 
 /**
@@ -192,7 +185,7 @@ export default function ProjectPage({
     setExpenses({ status: 'loading' });
     try {
       const journal = await listExpenses(project.id);
-      setExpenses({ status: 'ready', expenses: journal.items, total: journal.total });
+      setExpenses({ status: 'ready', entries: journal.items, total: journal.total });
     } catch (error) {
       setExpenses({
         status: 'error',
@@ -252,15 +245,6 @@ export default function ProjectPage({
   const tasksPanelId = `${tabsId}-panel-tasks`;
   const departmentsPanelId = `${tabsId}-panel-departments`;
   const expensesPanelId = `${tabsId}-panel-expenses`;
-  const costsPanelId = `${tabsId}-panel-costs`;
-
-  // Журнал расхода ключуется id проекта из реестра отдела, а не `projects.id` базы.
-  // `rebuild` собирает документ реестра как `project.code or str(project.id)`
-  // (`app/api/registry.py`), поэтому ссылка повторяет именно эту пару: код проекта, а
-  // если он не задан (или пуст) — числовой id. Пустой код — это «код не задан», а не
-  // ссылка `""`: с ней запрос ушёл бы в `/api/projects//usage`.
-  const projectCode = project.code?.trim() ?? '';
-  const projectRef = projectCode === '' ? String(project.id) : projectCode;
 
   // Правка отдела — отдельная страница вместо содержимого проекта: так же, как
   // `ProjectsPage` показывает `ProjectPage`. Возврат из неё состояние вкладки не трогает —
@@ -307,10 +291,10 @@ export default function ProjectPage({
                 {project.repo_url}
               </span>
               {/* Стоимость проекта — та же служебная строка паспорта, что и «Обновлён»:
-                  не метрика и не дашборд. Пока журнал не прочитан, ни числа, ни слова
-                  «Стоимость» нет: пустая подпись «Стоимость —» читалась бы как ноль.
-                  Слово «Стоимость», а не «Расходы»: «Расходы» — имя соседней вкладки с
-                  долларовым журналом смен, и одна подпись на два разных числа путала бы. */}
+                  не метрика и не дашборд. Её число равно итогу в шапке журнала расходов —
+                  это не дубль, а проверка: если два числа разойдутся, человек поверит тому,
+                  что ближе. Пока журнал не прочитан, ни числа, ни слова «Стоимость» нет:
+                  пустая подпись «Стоимость —» читалась бы как ноль. */}
               {expenses.status === 'ready' && (
                 <>
                   <span className="crumbs__sep" aria-hidden="true">
@@ -319,7 +303,7 @@ export default function ProjectPage({
                   <span className="project-spend">
                     Стоимость{' '}
                     <span className="project-spend__value" data-testid="project-total">
-                      {formatMoney(expenses.total)}
+                      {formatCost(expenses.total)}
                     </span>
                   </span>
                 </>
@@ -344,12 +328,10 @@ export default function ProjectPage({
           </div>
         </div>
 
-        {/* Полоса подразделов: четыре вкладки одного уровня, у выбранной `aria-selected`.
+        {/* Полоса подразделов: три вкладки одного уровня, у выбранной `aria-selected`.
             Подписи без счётчиков и пилюль — это переключатель содержимого, а не
-            украшение шапки. «Расходы» и «Стоимость» — разные экраны: в «Расходах»
-            смены harness в долларах, в «Стоимости» ручные записи в рублях по ценам
-            проекта. Одна вкладка на обе не годится: одинаковых `data-testid` и одной
-            подписи «Расходы» на два разных журнала быть не должно. */}
+            украшение шапки. Денежный раздел один: «Расходы» — журнал ручных записей и
+            смен вместе, поэтому второй вкладки с тем же итогом больше нет. */}
         <div className="tabs" role="tablist" aria-label="Подразделы проекта">
           <button
             className="tab"
@@ -387,21 +369,9 @@ export default function ProjectPage({
           >
             Расходы
           </button>
-          <button
-            className="tab"
-            type="button"
-            role="tab"
-            id={`${tabsId}-costs`}
-            aria-selected={activeTab === 'costs'}
-            aria-controls={costsPanelId}
-            data-testid="project-tab-costs"
-            onClick={() => setActiveTab('costs')}
-          >
-            Стоимость
-          </button>
         </div>
 
-        {/* Все четыре панели есть в разметке всегда, невыбранная скрыта атрибутом `hidden`:
+        {/* Все панели есть в разметке всегда, невыбранная скрыта атрибутом `hidden`:
             так `aria-controls` у каждой вкладки ссылается на существующую область, а не
             в пустоту (`aria-valid-attr-value`), и скрытая панель недоступна ни глазу, ни
             скринридеру. Своего `display` у панели нет, поэтому пользовательское
@@ -444,21 +414,12 @@ export default function ProjectPage({
           aria-labelledby={`${tabsId}-expenses`}
           hidden={activeTab !== 'expenses'}
         >
-          <ProjectExpenses projectRef={projectRef} />
-        </div>
-
-        <div
-          role="tabpanel"
-          id={costsPanelId}
-          aria-labelledby={`${tabsId}-costs`}
-          hidden={activeTab !== 'costs'}
-        >
-          <ExpenseList
-            expenses={expenses.status === 'ready' ? expenses.expenses : []}
+          <ProjectExpenses
+            project={project}
+            entries={expenses.status === 'ready' ? expenses.entries : []}
             total={expenses.status === 'ready' ? expenses.total : null}
             loading={expenses.status === 'loading'}
             errorText={expenses.status === 'error' ? expenses.errorText : null}
-            prices={project}
             onRetry={() => void loadExpenses()}
             onCreate={() => setExpenseFormOpen(true)}
             onEditPrices={() => setPricesOpen(true)}
