@@ -2215,9 +2215,11 @@ body {
   color: var(--muted);
 }
 
-/* Ключ метки — служебное значение, поэтому моноширинный; запятая висит на предыдущем
-   токене, чтобы перенос не начинал строку с «,». Каждый ключ — атомарный inline-block:
-   переносится на свою строку целиком, а не рвётся посередине. */
+/* Ключ метки — служебное значение, поэтому моноширинный; запятая стоит внутри того же
+   токена, чтобы перенос не начинал строку с «,». Каждый ключ — атомарный inline-block:
+   переносится на свою строку целиком, а не рвётся посередине. Запятая — настоящий текст,
+   а не `::after`: иначе имя кнопки для скринридера расходится с видимым текстом
+   (`label-content-name-mismatch`, WCAG 2.5.3). */
 .lbl {
   display: inline-block;
   font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
@@ -2227,8 +2229,7 @@ body {
   overflow-wrap: normal;
 }
 
-.lbl:not(:last-child)::after {
-  content: ', ';
+.lbl__sep {
   color: var(--muted-2);
 }
 
@@ -2333,5 +2334,247 @@ body {
   font-size: 0.75rem;
   line-height: 1.45;
   color: var(--muted);
+}
+
+/* ---------- процесс отдела: ширины экрана ---------- */
+
+/* Макет `mockups/67/notes.md`, «Брейкпоинты»: пока таблица остаётся таблицей (≥901), она
+   стоит в карточке без собственной прокрутки; ≤900 — ступень становится блоком с подписями
+   полей; ≤600 — одна колонка, справочник лейблов строкой «состояние → ключ → поле». */
+
+/* Десять колонок в карточку: ширину столбцов задаёт таблица, а не содержимое. Без этого
+   селекты ролей и стражей распирают таблицу на сотню пикселей и она уезжает в собственный
+   горизонтальный скролл — макет запрещает его ровно на этих ширинах. Ширины подобраны по
+   содержимому: ключи меток переносятся, «Порядок» и «Включена» влезают в шапку. Граница —
+   901, а не 1201: на 1000–1200 таблица тоже обязана влезать, иначе последняя колонка
+   уезжает за край карточки. */
+@media (min-width: 901px) {
+  .proc-table-wrap {
+    overflow-x: visible;
+  }
+
+  .proc-table {
+    table-layout: fixed;
+  }
+
+  /* Шапка может переноситься: иначе слово шире столбца вылезает за правый край таблицы и
+     увозит за собой весь ряд (`scrollWidth` больше `clientWidth`). */
+  .proc-table th {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .proc-table th:nth-child(1) {
+    width: 7%;
+  }
+
+  .proc-table th:nth-child(2) {
+    width: 14%;
+  }
+
+  .proc-table th:nth-child(3) {
+    width: 10%;
+  }
+
+  .proc-table th:nth-child(4) {
+    width: 10%;
+  }
+
+  .proc-table th:nth-child(5) {
+    width: 10%;
+  }
+
+  .proc-table th:nth-child(6) {
+    width: 9%;
+  }
+
+  .proc-table th:nth-child(7) {
+    width: 9%;
+  }
+
+  .proc-table th:nth-child(8) {
+    width: 12%;
+  }
+
+  .proc-table th:nth-child(9) {
+    width: 12%;
+  }
+
+  .proc-table th:nth-child(10) {
+    width: 7%;
+  }
+
+  .proc-row .field__input,
+  .proc-row .field__select {
+    min-width: 0;
+  }
+
+  /* В ячейке горизонтальные отступы поля отнимают у подписи селекта больше, чем видно:
+     «сессия» и «маршрут» перестают обрезаться в столбце «Вид». */
+  .proc-row .field__select {
+    padding-right: 1.125rem;
+    padding-left: 0.375rem;
+  }
+}
+
+/* ≤900: шапки таблицы нет, каждая ступень — блок, а подпись поля стоит в самой ячейке
+   (`data-label`). Иначе десять колонок живут в горизонтальной прокрутке, и последние из них
+   («Роль», «Включена») не достать без прокрутки вбок. */
+@media (max-width: 900px) {
+  .proc-table-wrap {
+    overflow-x: visible;
+  }
+
+  .proc-table,
+  .proc-table tbody,
+  .proc-table tr,
+  .proc-table td {
+    display: block;
+  }
+
+  .proc-table thead {
+    display: none;
+  }
+
+  /* Специфичность важнее порядка: `.proc-table tr` выше делает `display: block`, поэтому
+     сетка строки адресуется двумя классами и перебивает это правило. */
+  .proc-table .proc-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas:
+      'title title'
+      'priority kind'
+      'when when'
+      'unless unless'
+      'put put'
+      'drop drop'
+      'guard role'
+      'enabled enabled';
+    gap: 0.5rem 0.75rem;
+    padding: 0.75rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .proc-row td {
+    display: block;
+    padding: 0;
+    border-bottom: 0;
+  }
+
+  .proc-row td::before {
+    display: block;
+    margin-bottom: 0.25rem;
+    content: attr(data-label);
+    font-size: 0.6875rem;
+    color: var(--muted);
+  }
+
+  .proc-col--title {
+    grid-area: title;
+  }
+
+  .proc-col--priority {
+    grid-area: priority;
+  }
+
+  .proc-col--kind {
+    grid-area: kind;
+  }
+
+  .proc-cell--when {
+    grid-area: when;
+  }
+
+  .proc-cell--unless {
+    grid-area: unless;
+  }
+
+  .proc-cell--put {
+    grid-area: put;
+  }
+
+  .proc-cell--drop {
+    grid-area: drop;
+  }
+
+  .proc-col--guard {
+    grid-area: guard;
+  }
+
+  .proc-col--role {
+    grid-area: role;
+  }
+
+  .proc-col--enabled {
+    grid-area: enabled;
+  }
+
+  .proc-row .field__input,
+  .proc-row .field__select {
+    min-width: 0;
+  }
+
+  .proc-cell__pick {
+    margin: 0;
+  }
+
+  .proc-picker-row td {
+    display: block;
+    padding: 0 0.75rem 0.75rem;
+  }
+
+  .proc-picker {
+    width: 100%;
+  }
+}
+
+/* ≤600: одна колонка в ступени, справочник лейблов строкой «состояние → ключ → поле»,
+   кнопки полосы формы на всю ширину (общий блок ≤600 выше уже растягивает `.form-actions`). */
+@media (max-width: 600px) {
+  .proc-row {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      'title'
+      'priority'
+      'kind'
+      'when'
+      'unless'
+      'put'
+      'drop'
+      'guard'
+      'role'
+      'enabled';
+  }
+
+  .proc-labels__grid {
+    grid-template-columns: 1fr;
+  }
+
+  .proc-labels__grid .proc-cell {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .proc-labels__grid .proc-cell__title {
+    flex: 0 0 auto;
+  }
+
+  /* Поле имени не сжимается до нечитаемого: если подпись «состояние · ключ» съела строку,
+     поле уходит на следующую во всю ширину. */
+  .proc-labels__grid .field__input {
+    flex: 1 1 8rem;
+    min-width: 0;
+  }
+
+  .proc .form-actions {
+    align-items: stretch;
+  }
+
+  .proc-saved {
+    width: 100%;
+    margin-right: 0;
+  }
 }
 

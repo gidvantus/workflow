@@ -90,6 +90,14 @@ const PICKER_TITLES: Record<PickerField, string> = {
   drop: 'Снимает — эти метки уйдут у тикета',
 };
 
+/** Подписи полей ступени в блоке на узком экране (≤900): шапки таблицы там нет. */
+const CELL_LABELS: Record<PickerField, string> = {
+  when: 'Входящие',
+  unless: 'Кроме',
+  put: 'Ставит',
+  drop: 'Снимает',
+};
+
 /**
  * Сохранённость формы: что показать в строке состояния над таблицей.
  *
@@ -206,26 +214,39 @@ function LabelCell({
   onToggle: () => void;
 }): JSX.Element {
   return (
-    <td className={`proc-cell proc-cell--${field}`}>
-      <button
-        className="proc-cell__pick"
-        type="button"
-        data-testid={testId}
-        aria-expanded={open}
-        aria-controls={panelId}
-        aria-label={`${CELL_TITLES[field]} ступени «${step.title}»`}
-        onClick={onToggle}
-      >
-        {value.length === 0 ? (
-          <span className="proc-cell__none">—</span>
-        ) : (
-          value.map((key) => (
-            <span className="lbl" key={key}>
-              {key}
-            </span>
-          ))
-        )}
-      </button>
+    /* Ячейка — обычный `table-cell`: `display: flex` на самом `td` выбрасывает его из
+       раскладки таблицы, и десять колонок перестают совпадать с шапкой. Столбик из
+       кнопки собирает `.proc-cell` внутри. */
+    <td className={`proc-cell-cell proc-cell--${field}`} data-label={CELL_LABELS[field]}>
+      <div className="proc-cell">
+        {/* Имя кнопки начинается с видимых ключей: скринридер называет то же, что видно
+            глазами (`label-content-name-mismatch`, WCAG 2.5.3). Пустая ячейка говорит
+            «нет меток» — прочерк сам по себе ничего не называет. */}
+        <button
+          className="proc-cell__pick"
+          type="button"
+          data-testid={testId}
+          aria-expanded={open}
+          aria-controls={panelId}
+          aria-label={`${CELL_TITLES[field]} ступени «${step.title}»: ${
+            value.length === 0 ? '— нет меток' : value.join(', ')
+          }`}
+          onClick={onToggle}
+        >
+          {value.length === 0 ? (
+            <span className="proc-cell__none">—</span>
+          ) : (
+            value.map((key, index) => (
+              /* Запятая — текст внутри токена, а не `::after`: имя кнопки выше обязано
+                 содержать видимый текст целиком (WCAG 2.5.3). */
+              <span className="lbl" key={key}>
+                {key}
+                {index < value.length - 1 ? <span className="lbl__sep">, </span> : null}
+              </span>
+            ))
+          )}
+        </button>
+      </div>
     </td>
   );
 }
@@ -385,7 +406,7 @@ export default function DepartmentProcess({ departmentId }: { departmentId: numb
                     data-testid="process-step-row"
                     data-step-id={step.id}
                   >
-                    <td>
+                    <td className="proc-col proc-col--priority" data-label="Порядок">
                       <input
                         className="field__input proc-cell__input"
                         type="number"
@@ -399,7 +420,7 @@ export default function DepartmentProcess({ departmentId }: { departmentId: numb
                         }
                       />
                     </td>
-                    <td>
+                    <td className="proc-col proc-col--title" data-label="Ступень">
                       <input
                         className="field__input"
                         aria-label={`Название ступени ${step.id}`}
@@ -409,7 +430,7 @@ export default function DepartmentProcess({ departmentId }: { departmentId: numb
                       />
                       <span className="proc-row__id">{step.id}</span>
                     </td>
-                    <td>
+                    <td className="proc-col proc-col--kind" data-label="Вид">
                       <select
                         className="field__select"
                         aria-label={`Вид ступени «${step.title}»`}
@@ -438,7 +459,7 @@ export default function DepartmentProcess({ departmentId }: { departmentId: numb
                         onToggle={() => togglePicker(step.id, field)}
                       />
                     ))}
-                    <td>
+                    <td className="proc-col proc-col--guard" data-label="Страж">
                       <select
                         className="field__select"
                         aria-label={`Страж ступени «${step.title}»`}
@@ -460,7 +481,7 @@ export default function DepartmentProcess({ departmentId }: { departmentId: numb
                         ))}
                       </select>
                     </td>
-                    <td>
+                    <td className="proc-col proc-col--role" data-label="Роль">
                       <select
                         className="field__select"
                         aria-label={`Роль ступени «${step.title}»`}
@@ -481,7 +502,7 @@ export default function DepartmentProcess({ departmentId }: { departmentId: numb
                         ))}
                       </select>
                     </td>
-                    <td>
+                    <td className="proc-col proc-col--enabled" data-label="Включена">
                       <input
                         type="checkbox"
                         aria-label={`Ступень «${step.title}» включена`}
