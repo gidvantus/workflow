@@ -574,10 +574,17 @@ export function areaRoleOfLabels(names, labels) {
   return areaRoleOfKeys(keys)
 }
 
-/** Ступень входа: тикет ждёт сессии, но работа по нему ещё не начата. */
+/**
+ * Ступень входа: тикет ждёт сессии, но работа по нему ещё не начата.
+ *
+ * Это признак «ступень поднимает сессию по свежему тикету», и по нему диспетчер
+ * гасит ступень закрытым окном смены (`dispatch()` в `dev-department.mjs`). Ступень
+ * макета — тоже вход: дизайнер берёт `needs-mockup`-тикет без `ready-for-dev`, то
+ * есть свежий тикет, и вне окна его брать не должен так же, как выдачу разработчику.
+ * Очередь разработки — отдельное понятие (`queueOfPlan`), и признак `dev` живёт там.
+ */
 export function isEntryStep(step) {
-  if (step.kind !== 'session' || isActiveStep(step)) return false
-  return step.when.includes('dev') || step.when.includes('frontend')
+  return step.kind === 'session' && !isActiveStep(step)
 }
 
 /**
@@ -637,9 +644,21 @@ export function activeOfPlan(plan) {
   return plan.find((entry) => isActiveStep(entry.step)) || null
 }
 
-/** Тикеты, ждущие сессии, но ещё не взятые: очередь для карточки статуса. */
+/** Входные метки очереди разработки: ступень с ними отвечает на `ready-for-dev`. */
+const QUEUE_LABEL_KEYS = ['dev', 'frontend']
+
+/**
+ * Тикеты, ждущие сессии, но ещё не взятые: очередь разработки для карточки статуса.
+ *
+ * Очередь — это вход в разработку по `ready-for-dev`, а не всякая ступень входа:
+ * ступень макета берёт тикет без этой метки, и в очереди разработки ей делать нечего.
+ * Признак `dev` живёт здесь, а не в `isEntryStep()`: иначе окно смены пропускало бы
+ * макет мимо расписания.
+ */
 export function queueOfPlan(plan) {
-  return plan.filter((entry) => isEntryStep(entry.step))
+  return plan.filter(
+    (entry) => isEntryStep(entry.step) && entry.step.when.some((key) => QUEUE_LABEL_KEYS.includes(key)),
+  )
 }
 
 /** Шаг приоритета: экспортируется для теста, чтобы таблица не разъехалась с числами. */

@@ -204,6 +204,30 @@ check('страж берёт начатую работу', proc.guardBlocks(step
 check('страж не берёт чистую постановку', proc.guardBlocks(stepOf('mockup'), ['mockup']), false)
 check('страж чужой ступени молчит', proc.guardBlocks(stepOf('review'), ['review', 'test']), false)
 
+console.log('\n=== окно смены гасит каждую ступень входа, а не только выдачу ===')
+// Признак входа — «ступень поднимает сессию по свежему тикету», и по нему диспетчер
+// проверяет окно смены. Ступень макета — такая же ступень входа: пока признак был
+// собран из меток очереди разработки, `needs-mockup` вне окна поднимал дизайнера,
+// и расписание переставало ограничивать расход.
+check('ступень макета — ступень входа', proc.isEntryStep(stepOf('mockup')), true)
+check('выдача разработчику — ступень входа', proc.isEntryStep(stepOf('dev-backend')), true)
+check(
+  'начатая работа — не ступень входа',
+  [proc.isEntryStep(stepOf('review')), proc.isEntryStep(stepOf('continue'))],
+  [false, false],
+)
+check('маршрутная ступень — не ступень входа', proc.isEntryStep(stepOf('route')), false)
+check('передача половины — не ступень входа', proc.isEntryStep(stepOf('handoff-frontend')), false)
+const windowPlan = proc.planOfProcess(proc.defaultProcess(), [
+  { item: 'mockup-1', labels: ['mockup'] },
+  { item: 'dev-1', labels: ['dev', 'areaBackend'] },
+])
+check(
+  'очередь разработки по-прежнему не берёт макет',
+  proc.queueOfPlan(windowPlan).map((entry) => entry.item),
+  ['dev-1'],
+)
+
 console.log('\n=== половина работы в доработке (by-area) ===')
 // Порядок ветвлений прежнего `implementer()`: метка передачи фронтенду решает раньше
 // `area:fullstack`, иначе доработка второй половины уезжала бы бэкендеру.
