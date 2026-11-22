@@ -681,8 +681,8 @@ SQLAlchemy не увидел бы изменения, а `updated_at` не сд�
 
 | Метод и путь | Тело запроса | Успех |
 |---|---|---|
-| `GET /api/projects/{project_id}/expenses` | нет | `200 {total, items}` — `items`: `[{id, project_id, spent_on, tokens_input, tokens_output, tokens_cache_read, tokens_cache_write, amount, created_at}]`, только записи этого проекта, порядок `spent_on DESC, id DESC`; `total` — стоимость проекта строкой ровно с двумя знаками; пустой журнал — `{"total": "0.00", "items": []}` |
-| `POST /api/projects/{project_id}/expenses` | `{spent_on, tokens_input, tokens_output, tokens_cache_read, tokens_cache_write}` — все пять полей обязательны, лишнее (в том числе `amount`) отбрасывается | `201` созданная запись |
+| `GET /api/projects/{project_id}/expenses` | нет | `200 {total, items}` — `items`: `[{kind, id, spent_on, tokens {in, out, cacheRead, cacheWrite}, amount}]`, у смены дополнительно `started_at`, `ended_at`, `reason`, `sessions_count`; только записи этого проекта, порядок `spent_on DESC, sort_at DESC, id DESC`; `total` — стоимость проекта строкой ровно с шестью знаками; пустой журнал — `{"total": "0.000000", "items": []}` |
+| `POST /api/projects/{project_id}/expenses` | `{spent_on, tokens {in, out, cacheRead, cacheWrite}}` — дата и все четыре количества обязательны, лишнее (в том числе `amount`) отбрасывается | `201` созданная запись |
 
 **Тело принимается свободными типами** (`spent_on` — `str | int | float | null`,
 количества — `int | float | str | null`), а не `int`/`str`: с жёстким типом `422` схемы
@@ -695,14 +695,15 @@ pydantic отдаётся **до** ручки, и `12.5` получило бы �
 поле `amount` отбрасывается. Формула:
 
 ```
-amount = (tokens_input*price_input + tokens_output*price_output
-          + tokens_cache_read*price_cache_read + tokens_cache_write*price_cache_write) / 1_000_000
+amount = (tokens.in*price_input + tokens.out*price_output
+          + tokens.cacheRead*price_cache_read + tokens.cacheWrite*price_cache_write) / 1_000_000
 ```
 
-Всё в `Decimal`, округление `ROUND_HALF_UP` до копейки — **один раз на запись**, а не по
-слагаемым. Итог проекта — сумма уже округлённых сумм записей, поэтому сумма строк на
-экране сходится с итогом копейка в копейку. Смена цен применяется только к новым
-записям: суммы, уже лежащие в журнале, не пересчитываются, у записи `amount` — снимок.
+Всё в `Decimal`, округление `ROUND_HALF_UP` до шестого знака — **один раз на запись**, а не
+по слагаемым (`app/money.py:amount_for`). Итог проекта — сумма уже округлённых сумм
+записей, поэтому сумма строк на экране сходится с итогом знак в знак. Смена цен
+применяется только к новым записям: суммы, уже лежащие в журнале, не пересчитываются, у
+записи `amount` — снимок.
 
 **Итог проекта хранится в `projects.total_cost`** и прибавляется в той же транзакции,
 что вставка записи, SQL-инкрементом (`UPDATE projects SET total_cost = total_cost +
@@ -714,10 +715,11 @@ amount = (tokens_input*price_input + tokens_output*price_output
 удалённого проекта остаётся в таблице, но наружу не показывается — обе ручки отвечают
 `404`.
 
-**Деньги в ответе — строки:** `amount` и `total` приходят ровно с двумя знаками
-(`"0.41"`, `"10.53"`). Фронт переставляет строку в вид `0,41 ₽` и не округляет сам.
-Формат у обеих сумм один — `app/money.py:format_money`: копий в ручке и схеме нет,
-иначе правка вида денег разошлась бы между строкой журнала и итогом.
+**Деньги в ответе — строки:** `amount` и `total` приходят ровно с шестью знаками
+(`"0.305000"`, `"1.495000"`). Фронт переставляет строку в вид `0,31 $` и не округляет сам.
+Формат у обеих сумм один — `app/money.py:format_cost`: копий в ручке и схеме нет, иначе
+правка вида денег разошлась бы между строкой журнала и итогом. У `tasks.cost` остался свой
+`format_money` с двумя знаками — это рубли, а не доллары.
 
 Отказы — та же часть контракта, что и у задач: текст показывается пользователю дословно.
 
@@ -742,8 +744,8 @@ amount = (tokens_input*price_input + tokens_output*price_output
 
 **Экран вкладки «Расходы» — половина фронтенда** и описан отдельным разделом ниже
 («Вкладка «Расходы» на странице проекта»): он работает ровно с этим контрактом.
-Замороженный макет и состояния — `mockups/53/`, `data-testid` вкладки, строки цен, окна
-записи и окна цен перечислены в `mockups/53/notes.md`.
+Замороженный макет и состояния — `mockups/72/`, его решения и тексты —
+`mockups/72/notes.md`.
 
 ### Реестр проектов отдела
 
