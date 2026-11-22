@@ -231,6 +231,28 @@ const racedAgain = await usage.flushQueue({
 check('после 409 смена досылается повтором', [racedAgain.sent, racedAgain.left], [1, 0])
 usage.writeQueue([])
 
+// Запись в очередь может не удаться: файл занят, прав нет, кончилось место. Тогда
+// «останется в очереди» — неправда, и строка сводки с `error` должны называть потерю:
+// смена посчитана и больше нигде не хранится. Путь очереди занимаем каталогом — и
+// переименование, и запись на месте на нём падают одинаково на Windows и на Linux.
+const queuePath = usage.queueFile()
+fs.rmSync(queuePath, { force: true })
+fs.mkdirSync(queuePath)
+const broken = await usage.deliverShift(report, {
+  url: URL_OK,
+  request: async () => { throw new Error('ECONNREFUSED') },
+})
+// Ошибка записи видна и без отправки: `enqueue` отдаёт её вызывающему.
+const enqueueError = usage.enqueue(report, {}).error
+fs.rmSync(queuePath, { recursive: true, force: true })
+check('неудачная запись видна в ответе', [broken.ok, broken.queued, typeof broken.queueError], [false, 0, 'string'])
+check('строка не обещает очередь', broken.line.includes('в очередь не записана'), true)
+check('ошибка отправки в строке осталась', broken.line.includes('ECONNREFUSED'), true)
+check('ошибка отправки в error осталась', broken.error.startsWith('ECONNREFUSED'), true)
+check('enqueue называет причину', typeof enqueueError, 'string')
+usage.writeQueue([])
+check('очередь снова пишется', usage.readQueue().length, 0)
+
 console.log('\n=== что считается временным ===')
 check('2xx — не повторять', usage.isRetryable(200), false)
 check('401 — повторять', usage.isRetryable(401), true)

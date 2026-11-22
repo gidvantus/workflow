@@ -4237,12 +4237,15 @@ export default {
       const url = usageEndpoint()
       if (!url) {
         // Канал ещё не настроен, но смена посчитана: она ждёт в очереди, а не теряется.
-        const waiting = enqueue(report, { error: 'адрес веба не задан' }).queued
+        // Ошибку записи в очередь читаем: если файл недоступен, «останется в очереди» —
+        // неправда, и сказать об этом надо и в строке сводки, и в статусе отдела.
+        const enqueued = enqueue(report, { error: 'адрес веба не задан' })
+        const note = enqueued.error ? '; в очередь не записана — ' + enqueued.error : '; останется в очереди'
         state.usageSync.ok = false
-        state.usageSync.error = 'адрес веба не задан'
-        state.usageSync.queue = waiting
+        state.usageSync.error = 'адрес веба не задан' + (enqueued.error ? '; в очередь не записана — ' + enqueued.error : '')
+        state.usageSync.queue = enqueued.error ? queueLength() : enqueued.queued
         return {
-          line: REPORT_PREFIX + 'смена ' + key + ' не отправлена — адрес веба не задан; останется в очереди',
+          line: REPORT_PREFIX + 'смена ' + key + ' не отправлена — адрес веба не задан' + note,
           skipped: 'нет адреса',
         }
       }
@@ -4464,9 +4467,11 @@ export default {
             reason: reason === FINISH.manual ? 'manual' : 'window',
           })
         } catch (error) {
+          // Смену на этом пути не удалось ни отправить, ни положить в очередь: обещать
+          // «останется в очереди» нельзя — расход правда потерян, и это видно в статусе.
           state.usageSync.ok = false
           state.usageSync.error = 'журнал расхода: ' + messageOf(error)
-          pushed = { line: REPORT_PREFIX + 'не отправлен — ' + messageOf(error) + '; останется в очереди' }
+          pushed = { line: REPORT_PREFIX + 'не отправлен — ' + messageOf(error) }
         }
         if (pushed && pushed.line) usageLines.push(pushed.line)
         if (usageLines.length > 0) {

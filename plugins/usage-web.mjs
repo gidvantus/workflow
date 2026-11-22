@@ -31,6 +31,7 @@
 import fs from 'node:fs'
 import http from 'node:http'
 import https from 'node:https'
+import path from 'node:path'
 
 import { STATE_FILES, readStateFile, stateFile } from './state-paths.mjs'
 
@@ -176,14 +177,39 @@ export function readQueue() {
     }))
 }
 
-/** Записать очередь. Ошибку записи возвращаем вызывающему: о ней сказать в сводке. */
+/**
+ * Записать очередь. Ошибку записи возвращаем вызывающему: о ней сказать в сводке.
+ *
+ * Запись атомарна: соседний временный файл и переименование поверх, как у книги учёта
+ * (`usage-ledger.mjs`). Обрезанный на середине файл `readQueue` принимает за пустую
+ * очередь, и первый же новый enqueue затирает его вместе с ждавшими сменами — расход
+ * исчез бы молча, а человеку было бы сказано «останется в очереди».
+ */
 export function writeQueue(entries) {
+  const file = queueFile()
+  const text = JSON.stringify(entries, null, 2)
+  const tmp = file + '.' + process.pid + '.' + Date.now() + '.tmp'
   try {
-    fs.writeFileSync(queueFile(), JSON.stringify(entries, null, 2))
-    return null
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(tmp, text)
   } catch (error) {
     return messageOf(error)
   }
+  try {
+    fs.renameSync(tmp, file)
+  } catch (error) {
+    // На Windows переименование поверх занятого файла иногда отказывает: тогда пишем
+    // на месте. Очередь к этому моменту прочитана (иначе записи бы не было), поэтому
+    // затереть чужие смены нечем — а ошибку записи всё равно возвращаем вызывающему.
+    try {
+      fs.writeFileSync(file, text)
+    } catch (writeError) {
+      try { fs.rmSync(tmp, { force: true }) } catch (cleanup) { /* временный файл уберётся сам */ }
+      return messageOf(writeError)
+    }
+    try { fs.rmSync(tmp, { force: true }) } catch (cleanup) { /* временный файл уберётся сам */ }
+  }
+  return null
 }
 
 /**
@@ -317,10 +343,26 @@ export async function deliverShift(report, options) {
     }
   }
   const queued = enqueue(report, { error: result.error })
+  if (queued.error) {
+    // Смена не уехала и в очередь не легла: файл недоступен (нет прав, занят, кончилось
+    // место). Обещать человеку «останется в очереди» в этом случае — соврать: смена
+    // посчитана и больше нигде не хранится. Поэтому исход называем как есть, а строку
+    // и `error` отдаём вызывающему — он покажет её и в сводке, и в `usageSync.error`.
+    const lost = result.error + '; в очередь не записана — ' + queued.error
+    return {
+      ok: false,
+      queued: queueLength(),
+      error: lost,
+      queueError: queued.error,
+      line: REPORT_PREFIX + key + 'не отправлена — ' + lost,
+      result,
+    }
+  }
   return {
     ok: false,
     queued: queued.queued,
     error: result.error,
+    queueError: null,
     line: REPORT_PREFIX + key + 'не отправлена — ' + result.error + '; останется в очереди',
     result,
   }

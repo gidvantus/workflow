@@ -28,8 +28,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import main
+from app.api import usage as usage_api
 from app.api.registry import TOKEN_REJECTED
 from app.api.usage import (
+    COST_TOO_LARGE,
     FIELD_TOO_LONG,
     NEGATIVE_COST,
     PROJECT_REF_REQUIRED,
@@ -40,6 +42,7 @@ from app.api.usage import (
     SHIFT_KEY_REQUIRED,
     SHIFT_NOT_FOUND,
     SHIFT_TIME_INVALID,
+    SHIFT_WRITE_RACE,
     TOO_MANY_SESSIONS,
     TOTALS_MISMATCH,
 )
@@ -466,6 +469,37 @@ def test_too_many_sessions(api: TestClient) -> None:
 
     assert response.status_code == 422
     assert response.json()["detail"] == TOO_MANY_SESSIONS
+
+
+@pytest.mark.parametrize("cost", [100_000_000.0, 1e30])
+def test_cost_beyond_column_is_refused(api: TestClient, cost: float) -> None:
+    """Сумма сверх разрядности `Numeric(14,6)` — `422`, а не `500`.
+
+    `1e30` ломает уже `Decimal.quantize`, `100000000.0` — вставку на PostgreSQL. Это
+    третья защита от сломанного отправителя, как и длина значения сверх колонки.
+    """
+    response = post_shift(api, shift_body(sessions=[session_body(cost_usd=cost)]))
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == COST_TOO_LARGE
+
+
+def test_flush_conflict_is_not_a_500(api: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Конфликт уникального индекса на `flush` — штатный ответ, а не `500`.
+
+    Так выглядит настоящая гонка двух одновременных `POST`: предварительная проверка
+    пары `(project_ref, shift_key)` ещё ничего не нашла, а вставка уже наткнулась на
+    строку соперника. Проверку подменяем на «ничего не найдено»: в тестах с одним
+    клиентом соперника иначе не создать, а `flush` при этом срабатывает настоящий.
+    """
+    monkeypatch.setattr(usage_api, "_find_shift", lambda *args, **kwargs: None)
+
+    assert post_shift(api, shift_body()).status_code == 201
+
+    second = post_shift(api, shift_body())
+
+    assert second.status_code == 409
+    assert second.json()["detail"] == SHIFT_WRITE_RACE
 
 
 def test_broken_body_is_refused(api: TestClient) -> None:

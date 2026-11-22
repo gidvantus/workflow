@@ -22,10 +22,10 @@
 (#57): «Укажите проект смены», «Укажите ключ смены», «Смена должна иметь начало и
 конец», «Причина закрытия смены указывается как window или manual», «Не переданы
 тарифы расчёта», «Сессия без роли или id», «Расход по сессиям не сходится с итогом»,
-«Отрицательный расход», «Слишком много сессий в смене». Сверх таблицы стоят две защиты
-от сломанного отправителя — длина значения сверх колонки и строка вместо числа: они
-спасают от `500` на PostgreSQL, приходят только от машины и в интерфейсе не
-показываются.
+«Отрицательный расход», «Слишком много сессий в смене». Сверх таблицы стоят три защиты
+от сломанного отправителя — длина значения сверх колонки, строка вместо числа и сумма
+сверх разрядности колонки: они спасают от `500` на PostgreSQL, приходят только от
+машины и в интерфейсе не показываются.
 
 **Порядок проверок фиксирован** — проект, ключ, время, причина, тарифы, число сессий,
 сессии по одной, суммы — чтобы на теле с двумя ошибками ответ был предсказуемым.
@@ -92,6 +92,12 @@ SHIFT_WRITE_RACE = "Смену не удалось записать: однов�
 # сверх колонки ломает вставку на PostgreSQL, а строка вместо числа — сравнение.
 SESSION_NUMBERS_INVALID = "Расход по сессии указывается целым неотрицательным числом"
 FIELD_TOO_LONG = "Значение поля «{field}» длиннее {limit} символов"
+# Сумма сверх разрядности колонки: `Numeric(14,6)` держит восемь знаков до точки, а
+# `1e30` ломает уже `Decimal.quantize` — оба случая иначе стали бы `500`.
+COST_TOO_LARGE = "Расход по сессии больше допустимого"
+
+# Верхняя граница денег — ровно то, что влезает в `Numeric(14,6)`.
+MAX_COST = Decimal("99999999.999999")
 
 # Размеры колонок моделей: проверяются до вставки, иначе PostgreSQL ответил бы `500`.
 PROJECT_REF_MAX = 64
@@ -195,6 +201,8 @@ def _money(value: Any) -> Decimal:
         raise _reject(SESSION_NUMBERS_INVALID)
     if amount < 0:
         raise _reject(NEGATIVE_COST)
+    if amount > MAX_COST:
+        raise _reject(COST_TOO_LARGE)
     return amount.quantize(MONEY_QUANTUM)
 
 
@@ -476,30 +484,34 @@ def store_shift(
         rates=draft.rates,
     )
     db.add(shift)
-    db.flush()
-    for item in accepted:
-        db.add(
-            UsageSession(
-                shift_id=shift.id,
-                project_ref=draft.project_ref,
-                issue_number=item.issue_number,
-                issue_title=item.issue_title,
-                role=item.role,
-                session=item.session,
-                source=item.source,
-                turns=item.turns,
-                tokens_in=item.tokens_in,
-                tokens_out=item.tokens_out,
-                tokens_cache_read=item.tokens_cache_read,
-                tokens_cache_write=item.tokens_cache_write,
-                cost_usd=item.cost_usd,
-            )
-        )
     try:
+        # `flush` внутри `try`: уникальный индекс `(project_ref, shift_key)` срабатывает
+        # уже здесь, а не на `commit`, и вторая одновременная отправка получает штатный
+        # ответ вместо `500`. Сессиям нужен `shift.id`, поэтому вставка смены идёт первой.
+        db.flush()
+        for item in accepted:
+            db.add(
+                UsageSession(
+                    shift_id=shift.id,
+                    project_ref=draft.project_ref,
+                    issue_number=item.issue_number,
+                    issue_title=item.issue_title,
+                    role=item.role,
+                    session=item.session,
+                    source=item.source,
+                    turns=item.turns,
+                    tokens_in=item.tokens_in,
+                    tokens_out=item.tokens_out,
+                    tokens_cache_read=item.tokens_cache_read,
+                    tokens_cache_write=item.tokens_cache_write,
+                    cost_usd=item.cost_usd,
+                )
+            )
         db.commit()
     except IntegrityError as error:
-        # Параллельная отправка той же смены обогнала нас: индекс не пустил вторую
-        # строку, и это ровно тот же случай, что повторный `POST`, — отвечаем им же.
+        # Параллельная отправка обогнала нас: индекс не пустил вторую строку. Если это
+        # та же смена — отвечаем как на повторный `POST`; если конфликт по сессии —
+        # смене записаться некуда, и это `409` «одновременная отправка».
         db.rollback()
         existing = _find_shift(db, draft.project_ref, draft.shift_key)
         if existing is None:
@@ -611,12 +623,11 @@ def usage_projects(db: DbSession) -> Sequence[dict[str, Any]]:
             continue
         row["shifts"] += 1
         row["sessions"] += shift.sessions_count
+        tokens = _tokens(shift)
         for key in ("in", "out", "cacheRead", "cacheWrite"):
-            row["tokens"][key] += _tokens(shift)[key]
+            row["tokens"][key] += tokens[key]
         row["cost_usd"] += shift.cost_usd
-        # Последняя смена — самая поздняя по `ended_at`, а не первая встреченная:
-        # смены отсортированы от новых, и этого достаточно.
-        if shift.ended_at > row["last_shift_at"]:
-            row["last_shift_at"] = shift.ended_at
+        # `last_shift_at` первой строки проекта уже самый поздний: смены отсортированы
+        # по `ended_at desc`, и сравнивать его с каждой следующей незачем.
     # Ответ по деньгам убыванию: сверху то, что потратило больше всего.
     return sorted(projects.values(), key=lambda row: (-row["cost_usd"], row["project_ref"]))
