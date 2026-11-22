@@ -936,3 +936,81 @@ def test_history_is_pruned_to_keep_revisions(
     assert document.json()["projects"][0]["departments"][0]["repo"] == (
         f"gidvantus/repo-{edits - 1}"
     )
+
+
+def test_revision_race_publishes_fresh_document(
+    api_client: TestClient,
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Повтор после занятого номера пересобирает документ, а не пишет устаревший.
+
+    Гонка двух вкладок: пока эта правка собирает документ, соседняя фиксирует свою
+    (выключает отдел другого проекта) — и номер ревизии достаётся ей. Первая попытка
+    вставки откатывается в savepoint, повтор обязан увидеть уже зафиксированное изменение.
+    Если документ собран один раз до цикла попыток, ревизия `N+1` запишет состояние *до*
+    чужого коммита: выключенный в соседней вкладке отдел останется в реестре включённым —
+    ровно исходный инцидент, из которого выросла задача.
+    """
+    project = _create_project(api_client)
+    department = _create_department(api_client, project["id"])
+    neighbour = _create_project(api_client, name="Neighbour", repo_url="gidvantus/other")
+    neighbour_department = _create_department(api_client, neighbour["id"])
+    real_next_revision = api._next_revision
+    calls: list[int] = []
+
+    def racing_next_revision(session: Session) -> int:
+        calls.append(1)
+        if len(calls) == 1:
+            # Соседняя вкладка успела закоммитить свою правку до нашей вставки. В тесте её
+            # изображает та же сессия: UPDATE уходит во внешнюю транзакцию до savepoint,
+            # поэтому откат вставки его не отменяет — как и чужой `commit()` в жизни.
+            other = session.get(Department, neighbour_department["id"])
+            assert other is not None
+            other.enabled = False
+            session.flush()
+            return real_next_revision(session) - 1
+        return real_next_revision(session)
+
+    monkeypatch.setattr(api, "_next_revision", racing_next_revision)
+
+    response = api_client.patch(
+        f"/api/departments/{department['id']}", json={"repo_path": "gidvantus/workflow"}
+    )
+
+    assert response.status_code == 200, response.text
+    assert len(calls) == 2
+    assert [row.revision for row in _revisions(session_factory)] == [1, 2, 3]
+    with session_factory() as session:
+        fresh = api.build_document(session)
+    published = _published(session_factory)
+    assert published == fresh
+    assert published["projects"][1]["departments"][0]["enabled"] is False
+
+
+def test_rebuild_prunes_history_like_edits(
+    api_client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """Подрез истории общий для всех записей: `rebuild` и `PUT` тоже держат 20 ревизий.
+
+    Иначе «хранятся последние `KEEP_REVISIONS`» было бы верно только для правок из веба,
+    а `rebuild` как инструмент наполнения и восстановления рос бы без предела. Текущая
+    ревизия при подрезе не удаляется — `GET` продолжает работать на границе.
+    """
+    project = _create_project(api_client)
+    _create_department(api_client, project["id"])
+    rebuilds = api.KEEP_REVISIONS + 2
+    for _ in range(rebuilds):
+        response = api_client.post("/api/registry/rebuild", headers=HEADERS)
+        assert response.status_code == 200, response.text
+
+    rows = _revisions(session_factory)
+    assert len(rows) == api.KEEP_REVISIONS
+    assert rows[-1].revision == rebuilds + 1
+
+    assert _put(api_client, _document()).status_code == 200
+
+    rows = _revisions(session_factory)
+    assert len(rows) == api.KEEP_REVISIONS
+    assert rows[-1].revision == rebuilds + 2
+    assert api_client.get("/api/registry", headers=HEADERS).status_code == 200

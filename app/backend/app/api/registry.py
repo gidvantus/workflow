@@ -260,26 +260,41 @@ def _body(document: dict[str, Any]) -> str:
     return json.dumps(document, ensure_ascii=False, indent=2)
 
 
-def _store(db: Session, document: dict[str, Any], note: str) -> RegistryDocument:
-    """Добавить ревизию в **текущую** транзакцию; коммитит вызывающий.
+def _insert(db: Session, document: dict[str, Any], note: str) -> RegistryDocument:
+    """Одна попытка вставить ревизию в savepoint; `IntegrityError` по номеру — наружу.
 
     Номер выдаётся приложением, поэтому гонка двух одновременных записей возможна.
     Уникальный индекс `uq_registry_documents_revision` её ловит, а не превращает в два
     документа с одним номером: вставка идёт в savepoint (`begin_nested`), после
-    `IntegrityError` откатывается только она, номер пересчитывается и попытка
-    повторяется. Внешнюю транзакцию трогать нельзя: в ней лежит сама правка, ради
-    которой публикуется документ, и `rollback()` потерял бы её. Исчерпав попытки,
-    отдаём `409`: вызывающий ручку откатывает транзакцию целиком.
+    `IntegrityError` откатывается только она, и внешняя транзакция остаётся живой. В ней
+    лежит сама правка, ради которой публикуется документ, — `rollback()` потерял бы её.
+    """
+    row = RegistryDocument(revision=_next_revision(db), body=_body(document), note=note)
+    with db.begin_nested():
+        db.add(row)
+    return row
+
+
+def _store(db: Session, document: dict[str, Any], note: str) -> RegistryDocument:
+    """Записать известный документ ревизией, повторив занятый номер. Коммитит вызывающий.
+
+    Для `PUT` и `rebuild`: документ уже посчитан и на повторе не меняется — `PUT` пишет
+    ровно то, что прислали, а `rebuild` собирает документ заново до вызова. Публикация
+    правки сюда не ходит: у неё документ пересобирается на каждой попытке — см.
+    `publish_registry`, иначе повтор записал бы состояние до чужого коммита.
+
+    Подрез истории — здесь, а не в публикации: он общий для всех трёх записей, включая
+    `PUT` и `rebuild`, иначе «хранятся последние `KEEP_REVISIONS`» было бы верно только
+    для правок из веба.
     """
     for attempt in range(REVISION_ATTEMPTS):
-        row = RegistryDocument(revision=_next_revision(db), body=_body(document), note=note)
         try:
-            with db.begin_nested():
-                db.add(row)
+            row = _insert(db, document, note)
         except IntegrityError:
             if attempt == REVISION_ATTEMPTS - 1:
                 raise HTTPException(status.HTTP_409_CONFLICT, REVISION_CONFLICT) from None
             continue
+        _prune(db)
         return row
     raise HTTPException(status.HTTP_409_CONFLICT, REVISION_CONFLICT)
 
@@ -303,6 +318,13 @@ def _prune(db: Session) -> None:
     db.execute(delete(RegistryDocument).where(RegistryDocument.revision < oldest))
 
 
+def _last(db: Session) -> RegistryDocument | None:
+    """Последняя ревизия или `None`: пустая таблица для записи — не ошибка, а «не собрано»."""
+    return db.scalars(
+        select(RegistryDocument).order_by(RegistryDocument.revision.desc()).limit(1)
+    ).first()
+
+
 def publish_registry(db: Session, note: str = NOTE_EDIT) -> RegistryDocument | None:
     """Опубликовать текущее состояние базы ревизией — в чужой транзакции, без коммита.
 
@@ -310,11 +332,18 @@ def publish_registry(db: Session, note: str = NOTE_EDIT) -> RegistryDocument | N
     `None` — «публиковать нечего»: документ совпадает с последней ревизией, либо в базе
     ещё нет ни одного проекта с отделами и реестр ни разу не собирался.
 
-    Порядок: собрать → проверить форму → сравнить с последней ревизией → записать →
-    подрезать историю. Проверка идёт до записи, поэтому «кривая» правка не оставляет ни
-    строки, ни ревизии. Сравнение по тексту документа отсекает пустые правки: номер
-    ревизии растёт только вместе с содержимым, иначе каждая перезапись того же значения
-    раздувала бы историю и заставляла диспетчера перечитывать тот же документ.
+    Порядок попытки: собрать → проверить форму → сравнить с последней ревизией →
+    записать → подрезать историю. Проверка идёт до записи, поэтому «кривая» правка не
+    оставляет ни строки, ни ревизии. Сравнение по тексту документа отсекает пустые
+    правки: номер ревизии растёт только вместе с содержимым, иначе каждая перезапись того
+    же значения раздувала бы историю и заставляла диспетчера перечитывать тот же документ.
+
+    **Документ собирается заново на каждой попытке.** Это не оптимизация, а исправление
+    гонки: пока мы вставляли ревизию `N`, соседняя вкладка могла закоммитить свою правку и
+    занять этот номер. Её изменение уже в базе, поэтому повтор обязан увидеть его в
+    документе — иначе ревизия `N+1` записала бы состояние *до* чужого коммита и вернула бы
+    диспетчеру только что выключенный отдел. Сборка, проверка и сравнение входят в попытку
+    по той же причине: после чужого коммита могло измениться и «публиковать нечего».
 
     Пустой документ — единственное исключение из проверки формы: `validate_document`
     отвечает на него `NO_PROJECTS`, потому что человек не должен стирать реестр пустым
@@ -324,28 +353,31 @@ def publish_registry(db: Session, note: str = NOTE_EDIT) -> RegistryDocument | N
     ревизий нет, публиковать нечего: реестр ещё не собран, и первая же правка, давшая
     проект с отделом, создаст ревизию 1.
     """
-    document = build_document(db)
-    latest = db.scalars(
-        select(RegistryDocument).order_by(RegistryDocument.revision.desc()).limit(1)
-    ).first()
-    body = _body(document)
-    if not document["projects"]:
-        if latest is None or latest.body == body:
-            return None
-    else:
-        validate_document(document)
-        if latest is not None and latest.body == body:
-            return None
-    row = _store(db, document, note)
-    _prune(db)
-    return row
+    for attempt in range(REVISION_ATTEMPTS):
+        document = build_document(db)
+        body = _body(document)
+        latest = _last(db)
+        if not document["projects"]:
+            if latest is None or latest.body == body:
+                return None
+        else:
+            validate_document(document)
+            if latest is not None and latest.body == body:
+                return None
+        try:
+            row = _insert(db, document, note)
+        except IntegrityError:
+            if attempt == REVISION_ATTEMPTS - 1:
+                raise HTTPException(status.HTTP_409_CONFLICT, REVISION_CONFLICT) from None
+            continue
+        _prune(db)
+        return row
+    raise HTTPException(status.HTTP_409_CONFLICT, REVISION_CONFLICT)
 
 
 def _latest(db: Session) -> RegistryDocument:
     """Последняя ревизия; пустая таблица — `404` «Реестр ещё не собран»."""
-    row = db.scalars(
-        select(RegistryDocument).order_by(RegistryDocument.revision.desc()).limit(1)
-    ).first()
+    row = _last(db)
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, REGISTRY_NOT_BUILT)
     return row
