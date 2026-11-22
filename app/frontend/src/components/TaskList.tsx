@@ -14,6 +14,7 @@
 import { useId } from 'react';
 
 import type { Task } from '../api/tasks';
+import { formatMoney } from '../format';
 
 /** Количество задач с правильным окончанием: «1 задача», «2 задачи», «5 задач». */
 function tasksCount(count: number): string {
@@ -31,23 +32,12 @@ function tasksCount(count: number): string {
 /**
  * Стоимость для экрана: `"1250.00"` → `1 250,00 ₽`, `null` → «не указана».
  *
- * Разделитель тысяч — обычный пробел, копейки — через запятую, ровно два знака.
- * Если сервер прислал строку не по контракту (без копеек, с другим разделителем),
- * она показывается как есть: выдумывать сумму за сервер фронт не должен.
+ * Сам разбор строки живёт в `format.ts`: тот же вид суммы нужен журналу расходов и итогу
+ * проекта, и две копии одной регулярки разошлись бы. Здесь только «не указана» — состояние
+ * задачи, которого у денег журнала не бывает.
  */
 function formatCost(cost: string | null): string {
-  if (cost === null) {
-    return 'не указана';
-  }
-  const text = cost.trim();
-  const match = /^(\d+)(?:[.,](\d{1,2}))?$/.exec(text);
-  if (match === null) {
-    return text;
-  }
-  const [, whole = '', fraction] = match;
-  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
-  const cents = (fraction ?? '').padEnd(2, '0');
-  return `${grouped},${cents} ₽`;
+  return cost === null ? 'не указана' : formatMoney(cost);
 }
 
 type TaskRowProps = {

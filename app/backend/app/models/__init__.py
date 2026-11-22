@@ -6,6 +6,7 @@ from app.models.department_kind import (
     FIELD_KEYS_BY_CODE,
     DepartmentKind,
 )
+from app.models.expense import ProjectExpense
 from app.models.project import Project
 from app.models.registry import RegistryDocument
 from app.models.role import DEFAULT_ROLES, Role
@@ -21,6 +22,7 @@ __all__ = [
     "Department",
     "DepartmentKind",
     "Project",
+    "ProjectExpense",
     "RegistryDocument",
     "Role",
     "RoleSkill",

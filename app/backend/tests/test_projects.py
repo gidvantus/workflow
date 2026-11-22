@@ -53,6 +53,10 @@ def test_create_returns_created_project(client: TestClient) -> None:
         "description",
         "repo_url",
         "code",
+        "price_input",
+        "price_output",
+        "price_cache_read",
+        "price_cache_write",
         "created_at",
         "updated_at",
     }
@@ -62,6 +66,13 @@ def test_create_returns_created_project(client: TestClient) -> None:
     assert body["repo_url"] == "gidvantus/workflow"
     # Кода нет — `null`, а не пустая строка: «не задан» и «пусто» значат одно и то же.
     assert body["code"] is None
+    # Цен нет — четыре нуля строкой с шестью знаками: «не тарифицируется», а не «неизвестно».
+    assert body["price_input"] == "0.000000"
+    assert body["price_output"] == "0.000000"
+    assert body["price_cache_read"] == "0.000000"
+    assert body["price_cache_write"] == "0.000000"
+    # Итог проекта в ответе проекта не приходит: его единственный источник — журнал.
+    assert "total_cost" not in body
     assert isinstance(datetime.fromisoformat(body["created_at"]), datetime)
     assert isinstance(datetime.fromisoformat(body["updated_at"]), datetime)
 
@@ -569,3 +580,124 @@ def test_validate_repo_url_rejects(value: str, detail: str) -> None:
         api.validate_repo_url(value)
     assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     assert excinfo.value.detail == detail
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("0.27", "0.270000"),
+        ("0,27", "0.270000"),
+        ("1", "1.000000"),
+        ("0", "0.000000"),
+        (" 12.5 ", "12.500000"),
+        ("0.123456", "0.123456"),
+    ],
+)
+def test_validate_price_accepts(value: str, expected: str) -> None:
+    """Цена — `Decimal` ровно с шестью знаками; запятая и целое число проходят."""
+    assert str(api.validate_price(value)) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "detail"),
+    [
+        ("", api.PRICE_INVALID),
+        ("   ", api.PRICE_INVALID),
+        ("дорого", api.PRICE_INVALID),
+        ("0.1234567", api.PRICE_INVALID),
+        ("1 250", api.PRICE_INVALID),
+        ("-0.27", api.PRICE_NEGATIVE),
+        ("-0,5", api.PRICE_NEGATIVE),
+    ],
+)
+def test_validate_price_rejects(value: str, detail: str) -> None:
+    """Мусор и лишние знаки — текст про формат, минус — отдельный текст про знак."""
+    with pytest.raises(HTTPException) as excinfo:
+        api.validate_price(value)
+    assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert excinfo.value.detail == detail
+
+
+def test_create_with_prices_returns_them_as_strings(client: TestClient) -> None:
+    """Цены можно задать сразу при создании: в ответе они строкой с шестью знаками."""
+    body = _create(
+        client,
+        price_input="0,27",
+        price_output="1.1",
+        price_cache_read="0",
+        price_cache_write="0.07",
+    )
+
+    assert body["price_input"] == "0.270000"
+    assert body["price_output"] == "1.100000"
+    assert body["price_cache_read"] == "0.000000"
+    assert body["price_cache_write"] == "0.070000"
+
+
+def test_patch_sets_each_price(client: TestClient) -> None:
+    """`PATCH` правит цены по одной: непереданные поля остаются прежними."""
+    project = _create(client)
+
+    response = client.patch(
+        f"/api/projects/{project['id']}",
+        json={"price_input": "0.27", "price_cache_read": "0,03"},
+    )
+
+    assert response.status_code == status.HTTP_200_OK, response.text
+    body = response.json()
+    assert body["price_input"] == "0.270000"
+    assert body["price_output"] == "0.000000"
+    assert body["price_cache_read"] == "0.030000"
+    assert body["price_cache_write"] == "0.000000"
+
+
+def test_patch_price_zero_is_allowed(client: TestClient) -> None:
+    """Ноль — допустимая цена: «не тарифицируется», а не ошибка. Четыре нуля тоже."""
+    project = _create(client, price_input="0.27")
+
+    response = client.patch(f"/api/projects/{project['id']}", json={"price_input": "0"})
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()["price_input"] == "0.000000"
+
+
+@pytest.mark.parametrize(
+    ("payload", "detail"),
+    [
+        ({"price_input": "-0.27"}, api.PRICE_NEGATIVE),
+        ({"price_output": "дорого"}, api.PRICE_INVALID),
+        ({"price_cache_read": "0.1234567"}, api.PRICE_INVALID),
+        ({"price_cache_write": ""}, api.PRICE_INVALID),
+    ],
+)
+def test_patch_returns_price_refusal_texts(
+    client: TestClient, payload: dict[str, str], detail: str
+) -> None:
+    """Отказы по цене — `422` с дословным текстом контракта, строка не меняется."""
+    project = _create(client, price_input="0.27")
+
+    response = client.patch(f"/api/projects/{project['id']}", json=payload)
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert response.json()["detail"] == detail
+
+
+def test_patch_does_not_change_total_cost(client: TestClient) -> None:
+    """`total_cost` правкой проекта не меняется: поле необъявлено и отбрасывается.
+
+    Один только `total_cost` в теле — пустая правка, остальные поля применяются без него.
+    """
+    project = _create(client)
+
+    empty = client.patch(f"/api/projects/{project['id']}", json={"total_cost": "999.00"})
+    assert empty.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert empty.json()["detail"] == api.NO_FIELDS_TO_UPDATE
+
+    response = client.patch(
+        f"/api/projects/{project['id']}",
+        json={"name": "Другое имя", "total_cost": "999.00"},
+    )
+    assert response.status_code == status.HTTP_200_OK
+    body = response.json()
+    assert body["name"] == "Другое имя"
+    assert "total_cost" not in body

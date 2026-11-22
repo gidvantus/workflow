@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from app.api import (
     department_kinds,
     departments,
+    expenses,
     presets,
     projects,
     registry,
@@ -54,6 +55,10 @@ def create_app() -> FastAPI:
             "имя отдела — название вида; правка полей страницы отдела и мягкое удаление — "
             "по пути `/api/departments/{department_id}`) и задачи проекта: список задач "
             "проекта и создание задачи. Правки и удаления задач в приложении нет. "
+            "Журнал расходов проекта — `/api/projects/{project_id}/expenses`: список записей "
+            "с хранимым итогом проекта и запись за день; сумму и округление считает сервер "
+            "по четырём ценам проекта за 1 млн токенов, суммы в теле запроса нет. "
+            "Цены проекта правятся `PATCH /api/projects/{project_id}`. "
             "Раздел «Роли» ведёт справочник ролей и их скиллы: роли читаются и создаются "
             "по пути `/api/roles`, правятся и удаляются по `/api/roles/{role_id}`; скиллы "
             "роли читаются и создаются по `/api/roles/{role_id}/skills`, а правятся и "
@@ -83,6 +88,7 @@ def create_app() -> FastAPI:
     application.include_router(roles.skills_router)
     application.include_router(department_kinds.router)
     application.include_router(tasks.router)
+    application.include_router(expenses.router)
     application.include_router(registry.router)
     application.include_router(presets.router)
     application.include_router(usage.router)
