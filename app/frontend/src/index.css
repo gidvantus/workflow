@@ -1250,6 +1250,20 @@ body {
   resize: vertical;
 }
 
+/* Выпадающий список того же вида, что и поле ввода: в строке таблицы процесса рядом
+   стоят input, select и мультивыбор, и разная высота у них читается как небрежность. */
+.field__select {
+  width: 100%;
+  padding: 0.5rem 0.625rem;
+  font: inherit;
+  font-size: 0.875rem;
+  line-height: 1.4;
+  color: var(--ink);
+  background-color: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+}
+
 .field__input[aria-invalid='true'],
 .field__textarea[aria-invalid='true'] {
   border-color: var(--danger);
@@ -1575,6 +1589,125 @@ body {
   .topbar .btn {
     width: 100%;
   }
+}
+
+/* ---------- вкладки страницы отдела: настройки и процесс ---------- */
+
+.dept-tabs {
+  display: flex;
+  gap: 0.25rem;
+  margin-bottom: 1rem;
+  padding: 0.25rem;
+  background-color: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+}
+
+.dept-tabs__tab {
+  padding: 0.5rem 0.875rem;
+  font: inherit;
+  font-size: 0.875rem;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  border-radius: 0.5rem;
+  cursor: pointer;
+}
+
+.dept-tabs__tab--active {
+  color: var(--ink);
+  background-color: var(--panel-strong, var(--panel));
+  box-shadow: 0 1px 2px rgb(0 0 0 / 8%);
+}
+
+/* ---------- процесс отдела: имена меток и таблица ступеней ---------- */
+
+.proc {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.proc-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.proc-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.proc-saved {
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+
+.proc-labels__title {
+  margin: 0 0 0.25rem;
+  font-size: 0.9375rem;
+}
+
+.proc-labels__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+/* Таблица шире экрана: четырнадцать ключей меток в строке ступени не сжимаются до
+   читаемого вида, поэтому прокручивается сама таблица, а не страница. */
+.proc-table-wrap {
+  overflow-x: auto;
+}
+
+.proc-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+}
+
+.proc-table th,
+.proc-table td {
+  padding: 0.5rem;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+}
+
+.proc-table th {
+  font-weight: 500;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.proc-row .field__input,
+.proc-row .field__select {
+  min-width: 7rem;
+}
+
+.proc-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.proc-cell__title {
+  font-size: 0.6875rem;
+  color: var(--muted);
+}
+
+.proc-cell__input {
+  max-width: 5rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.proc-cell__select {
+  min-width: 8rem;
+  max-height: 7rem;
 }
 
 @media (prefers-reduced-motion: reduce) {
