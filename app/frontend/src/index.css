@@ -922,6 +922,15 @@ body {
   color: var(--danger);
 }
 
+/* Тихая пояснительная строка: текст на месте, где цвет не несёт смысла — подписи,
+   вторая строка шапки, состояние загрузки. */
+.muted {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
 /* ---------- раздел «Отделы» ---------- */
 
 /* Пять колонок вместо четырёх: название, время, роли, дата, действия.
@@ -1199,6 +1208,16 @@ body {
   display: flex;
   justify-content: flex-end;
   gap: 0.5rem;
+}
+
+/* Пояснение в полосе формы: что произойдёт, если нажать «Сохранить». Одна строка на всю
+   ширину, чтобы полоса не превращалась в столбик подписей. */
+.form-foot__note {
+  margin: 0;
+  max-width: 76ch;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--muted);
 }
 
 /* ---------- выбор вида в окне создания отдела ---------- */
@@ -2083,29 +2102,47 @@ body {
   box-shadow: 0 1px 2px rgb(0 0 0 / 8%);
 }
 
-/* ---------- процесс отдела: имена меток и таблица ступеней ---------- */
+/* ---------- процесс отдела: ступени, справочник лейблов и полоса формы ---------- */
 
+/* Порядок блоков как на странице отдела: шапка карточки, таблица, справочник,
+   полоса формы. Своего отступа у карточки нет — его дают сами блоки, а полоса
+   формы прилипает к нижнему краю и повторяет `.form-foot` остальных форм. */
 .proc {
   display: flex;
   flex-direction: column;
-  gap: 1.25rem;
 }
 
-.proc-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-}
-
-.proc-actions {
-  display: flex;
-  gap: 0.5rem;
+/* Отказ стоит над таблицей и держится до следующего сохранения: введённое не сбрасывается. */
+.proc-error {
+  padding: 0.875rem 1.125rem 0;
 }
 
 .proc-saved {
+  margin-right: auto;
   font-size: 0.8125rem;
+  color: var(--muted);
+}
+
+/* Пустой процесс: место, где были ступени, говорит, что конвейер стоит. */
+.proc-empty {
+  padding: 1.75rem 1.125rem 1.5rem;
+  text-align: center;
+  background-color: var(--chrome);
+  border-top: 1px solid var(--line);
+}
+
+.proc-empty__title {
+  margin: 0 0 0.375rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.proc-empty__hint {
+  max-width: 34rem;
+  margin: 0 auto;
+  font-size: 0.8125rem;
+  line-height: 1.5;
   color: var(--muted);
 }
 

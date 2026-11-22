@@ -327,78 +327,34 @@ export default function DepartmentProcess({ departmentId }: { departmentId: numb
 
   return (
     <section className="card proc" data-testid="department-process" aria-label="Процесс отдела">
-      <div className="proc-head">
+      <div className="card__head">
         <div>
-          <h2 className="form-section__title">Процесс отдела</h2>
-          <p className="muted">
-            Таблица переходов, которую исполняет диспетчер: ступень берёт тикет по входящим
-            меткам, зовёт роль и ставит следующие метки. Порядок — колонка «порядок».
+          <h2 className="card__title">Ступени конвейера</h2>
+          <p className="card__meta">
+            Диспетчер проверяет таблицу раз в 5 минут и берёт первый подходящий тикет.
+            Процесс сохранён в отделе — здесь, а не в коде.
           </p>
-        </div>
-        <div className="proc-actions">
-          <button
-            className="btn"
-            type="button"
-            data-testid="process-reset"
-            onClick={handleReset}
-            disabled={saving}
-          >
-            Сбросить к умолчанию
-          </button>
-          <button
-            className="btn btn--primary"
-            type="button"
-            data-testid="process-save"
-            onClick={() => void handleSave()}
-            disabled={saving}
-          >
-            {saving ? 'Сохраняю…' : 'Сохранить'}
-          </button>
         </div>
       </div>
 
       {error !== null && (
-        <p className="error" data-testid="process-error" role="alert">
+        <p className="error proc-error" data-testid="process-error" role="alert">
           {error}
         </p>
       )}
-      {saved.kind === 'defaults' && (
-        <p className="muted">У отдела нет своего процесса — показаны умолчания.</p>
-      )}
-      <p className="proc-saved" data-testid="process-saved" aria-live="polite">
-        {savedText(saved)}
-      </p>
 
-      <div className="proc-labels">
-        <h3 className="proc-labels__title">Имена меток</h3>
-        <p className="muted">
-          Ступени ссылаются на ключи меток, а не на имена: переименование метки здесь не
-          трогает ни одну ступень.
-        </p>
-        <div className="proc-labels__grid">
-          {PROCESS_LABEL_KEYS.map((key) => {
-            const id = `${key}-name`;
-            return (
-              <label className="proc-cell" key={key} htmlFor={id}>
-                <span className="proc-cell__title">
-                  {LABEL_TITLES[key]} · <code>{key}</code>
-                </span>
-                <input
-                  className="field__input"
-                  id={id}
-                  data-testid={`process-label-${key}`}
-                  value={document.labels[key]}
-                  onChange={(event) =>
-                    edit({ ...document, labels: { ...document.labels, [key]: event.target.value } })
-                  }
-                />
-              </label>
-            );
-          })}
+      {document.steps.length === 0 && (
+        <div className="proc-empty" data-testid="process-empty">
+          <p className="proc-empty__title">Ступеней нет</p>
+          <p className="proc-empty__hint">
+            Диспетчер не возьмёт ни одного тикета, пока в таблице пусто. «Сбросить к
+            умолчанию» вернёт 13 ступеней.
+          </p>
         </div>
-      </div>
+      )}
 
-      <div className="proc-table-wrap">
+      {document.steps.length > 0 && (
+        <div className="proc-table-wrap">
         <table className="proc-table">
           <thead>
             <tr>
@@ -556,6 +512,66 @@ export default function DepartmentProcess({ departmentId }: { departmentId: numb
             })}
           </tbody>
         </table>
+        </div>
+      )}
+
+      <div className="proc-labels form-section">
+        <h3 className="proc-labels__title">Справочник лейблов</h3>
+        <p className="muted">
+          Слева ключ — то, что стоит в ступенях, справа имя лейбла на GitHub: переименовали
+          лейбл — ступени не трогали.
+        </p>
+        <div className="proc-labels__grid">
+          {PROCESS_LABEL_KEYS.map((key) => {
+            const id = `${key}-name`;
+            return (
+              <label className="proc-cell" key={key} htmlFor={id}>
+                <span className="proc-cell__title">
+                  {LABEL_TITLES[key]} · <code>{key}</code>
+                </span>
+                <input
+                  className="field__input"
+                  id={id}
+                  data-testid={`process-label-${key}`}
+                  value={document.labels[key]}
+                  onChange={(event) =>
+                    edit({ ...document, labels: { ...document.labels, [key]: event.target.value } })
+                  }
+                />
+              </label>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="form-foot">
+        <p className="form-foot__note">
+          Сохранение сразу пересобирает документ реестра: диспетчер увидит новую таблицу при
+          следующей синхронизации, в пределах 5 минут.
+        </p>
+        <div className="form-actions">
+          <p className="proc-saved" data-testid="process-saved" aria-live="polite">
+            {savedText(saved)}
+          </p>
+          <button
+            className="btn"
+            type="button"
+            data-testid="process-reset"
+            onClick={handleReset}
+            disabled={saving}
+          >
+            Сбросить к умолчанию
+          </button>
+          <button
+            className="btn btn--dark"
+            type="button"
+            data-testid="process-save"
+            onClick={() => void handleSave()}
+            disabled={saving}
+          >
+            {saving ? 'Сохраняю…' : 'Сохранить'}
+          </button>
+        </div>
       </div>
     </section>
   );
