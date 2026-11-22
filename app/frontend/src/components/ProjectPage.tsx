@@ -21,10 +21,11 @@
  *
  * Вкладка «Расходы» — журнал расхода смен (`ProjectExpenses`). Его данные живут не в
  * справочнике проектов, а в отдельном журнале, который ключуется `project_ref` — id
- * проекта из реестра отдела. Реестр, собранный ручкой `rebuild`, берёт этот id из
- * `projects.id` (#54), поэтому ссылка журнала — `String(project.id)`. Свой запрос
- * вкладка делает сама, как только страница открылась: списки задач и отделов читаются
- * так же, и переключение вкладки запросов не повторяет.
+ * проекта из реестра отдела. Ручка `rebuild` собирает документ реестра как
+ * `project.code or str(project.id)` (`app/api/registry.py`), поэтому ссылка журнала
+ * считается так же: `project.code ?? String(project.id)`. Свой запрос вкладка делает
+ * сама, как только страница открылась: списки задач и отделов читаются так же, и
+ * переключение вкладки запросов не повторяет.
  */
 
 import { useCallback, useEffect, useId, useState } from 'react';
@@ -172,9 +173,12 @@ export default function ProjectPage({ project, onBack }: ProjectPageProps): JSX.
   const expensesPanelId = `${tabsId}-panel-expenses`;
 
   // Журнал расхода ключуется id проекта из реестра отдела, а не `projects.id` базы.
-  // Реестр, собранный `rebuild`, берёт этот id из `projects.id` (#54), поэтому строка
-  // от числового id — это и есть ссылка журнала.
-  const projectRef = String(project.id);
+  // `rebuild` собирает документ реестра как `project.code or str(project.id)`
+  // (`app/api/registry.py`), поэтому ссылка повторяет именно эту пару: код проекта, а
+  // если он не задан (или пуст) — числовой id. Пустой код — это «код не задан», а не
+  // ссылка `""`: с ней запрос ушёл бы в `/api/projects//usage`.
+  const projectCode = project.code?.trim() ?? '';
+  const projectRef = projectCode === '' ? String(project.id) : projectCode;
 
   // Правка отдела — отдельная страница вместо содержимого проекта: так же, как
   // `ProjectsPage` показывает `ProjectPage`. Возврат из неё состояние вкладки не трогает —

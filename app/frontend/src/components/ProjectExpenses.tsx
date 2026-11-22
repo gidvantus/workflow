@@ -14,8 +14,9 @@
  * отказ с дословным текстом сервера (`404 Смена не найдена`) и возврат «← К проекту».
  *
  * `projectRef` — id проекта из реестра отдела: журнал живёт отдельно от справочника
- * `projects`. Реестр, собранный `rebuild`, берёт `id` из `projects.id` (#54), поэтому
- * страница проекта передаёт сюда `String(project.id)`.
+ * `projects`. `rebuild` берёт для реестра `project.code or str(project.id)`
+ * (`app/api/registry.py`), поэтому страница проекта передаёт сюда
+ * `project.code ?? String(project.id)` — ту же пару, что попадает в документ реестра.
  */
 
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
@@ -161,11 +162,15 @@ function ShiftRow({ shift, onOpen }: ShiftRowProps): JSX.Element {
         {formatMoney(shift.cost_usd)}
       </p>
       <div className="expense-row__open">
+        {/* Доступное имя начинается с видимой подписи «Сессии» (WCAG 2.5.3, «Label in
+            Name»): человек, управляющий голосом, произносит то, что видит, а скринридер
+            читает то же действие. Период отличает строки между собой, но видимую подпись
+            не подменяет. */}
         <button
           className="btn"
           type="button"
           data-testid="expense-open"
-          aria-label={`Открыть смену ${period}`}
+          aria-label={`Сессии смены ${period}`}
           onClick={() => onOpen(shift)}
         >
           Сессии

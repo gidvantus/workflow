@@ -770,6 +770,11 @@ cacheRead, cacheWrite}, cost_usd}`. Деньги в ответах — стро�
 смен проекта не отличается от «журнал пуст», и при расхождении id проекта веба и id
 реестра отдела это единственный признак, что смотрим не на тот проект.
 
+Кнопка строки смены подписана видимым «Сессии», и доступное имя начинается с этого же
+слова (`Сессии смены 01.11 13:00 → 02.11 04:00`): видимая подпись входит в доступное имя
+(WCAG 2.5.3 «Label in Name»), поэтому кнопку находят и голосом по написанному слову, и
+скринридером — по тому же действию, а период отличает строки между собой.
+
 | Что | `data-testid` |
 |---|---|
 | вкладка и итог | `project-tab-expenses`, `expense-total`, `expense-total-shifts`, `expense-total-sessions`, `expense-total-cost` |
@@ -777,14 +782,14 @@ cacheRead, cacheWrite}, cost_usd}`. Деньги в ответах — стро�
 | список смен | `expenses-list`, `expense-item`, `expense-item-period`, `expense-item-reason`, `expense-item-sessions`, `expense-item-tokens`, `expense-item-cost`, `expense-open` |
 | детализация | `expense-detail`, `expense-detail-period`, `expense-detail-back`, `expense-detail-state`, `expense-detail-error`, `expense-detail-empty`, `expense-session`, `expense-session-role`, `expense-session-issue`, `expense-session-tokens`, `expense-session-cost` |
 
-Ссылка журнала — `project_ref`, id проекта из реестра отдела. В браузере его нет в
-`ProjectResponse`, поэтому страница подставляет `String(project.id)`: реестр, собранный
-ручкой `rebuild`, берёт `id` проекта из `projects.id` (#54). Если реестр написан руками
-с буквенными id (как `workflow` в реестре отдела этого репозитория), пары
-«проект веба → проект реестра» в API нет, и вкладка покажет пустой журнал (с названной
-ссылкой в `expenses-ref`); чтобы такая связка работала, `ProjectResponse` (или отдельная
-ручка реестра без токена) должен отдавать `project_ref` — это вопрос к бэкенду, а не
-решение фронта.
+Ссылка журнала — `project_ref`, id проекта из реестра отдела. Ручка `rebuild` собирает
+документ реестра как `project.code or str(project.id)` (`app/api/registry.py`), поэтому
+страница проекта считает ссылку той же парой: `project.code ?? String(project.id)` — код
+проекта, а если он не задан или пуст, числовой `id`. Проект с заданным кодом (как
+`workflow` в реестре отдела этого репозитория) попадает в журнал под своим кодом, и
+вкладка спрашивает именно его; у проекта без кода пара — числовой `id`, и смена,
+засеянная под другим `project_ref`, даёт пустой журнал с названной ссылкой в
+`expenses-ref`.
 
 Детализация помнит, какую смену ждёт: открыть смену A, вернуться и открыть B можно
 быстрее таймаута запроса, и опоздавший ответ A иначе подменил бы экран B. Чужие ответы
