@@ -21,6 +21,17 @@ from app.schemas.project import ProjectCreate, ProjectResponse, ProjectUpdate
 from app.schemas.role import RoleCreate, RoleItem, RoleUpdate
 from app.schemas.skill import SkillCreate, SkillResponse, SkillSection, SkillUpdate
 from app.schemas.task import TaskCreate, TaskResponse
+from app.schemas.usage import (
+    UsageProjectTotal,
+    UsageProjectTotals,
+    UsageProjectUsage,
+    UsageRates,
+    UsageSessionRow,
+    UsageShiftDetail,
+    UsageShiftRow,
+    UsageShiftStored,
+    UsageTokens,
+)
 
 __all__ = [
     "DepartmentCreate",
@@ -50,4 +61,13 @@ __all__ = [
     "SkillUpdate",
     "TaskCreate",
     "TaskResponse",
+    "UsageProjectTotal",
+    "UsageProjectTotals",
+    "UsageProjectUsage",
+    "UsageRates",
+    "UsageSessionRow",
+    "UsageShiftDetail",
+    "UsageShiftRow",
+    "UsageShiftStored",
+    "UsageTokens",
 ]

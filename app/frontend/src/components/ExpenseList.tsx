@@ -1,6 +1,13 @@
 /**
- * Карточка «Расходы проекта»: шапка с итогом и кнопкой «Добавить запись», строка цен за
+ * Карточка «Стоимость проекта»: шапка с итогом и кнопкой «Добавить запись», строка цен за
  * токены, состояния загрузки, пустого журнала и ошибки загрузки, строки записей.
+ *
+ * Экран отделён от журнала смен (#57, вкладка «Расходы»): там смены в долларах от harness,
+ * здесь ручные записи в рублях по ценам проекта. Поэтому у карточки своё имя, у строк и
+ * идёт своё семейство классов (`cost-row`, `cost-sum`), а у `data-testid`, которые
+ * совпали бы с `expenses-*` соседнего экрана, — префикс `costs-`/`cost-`: в разметке
+ * страницы обе панели присутствуют всегда (невыбранная скрыта `hidden`), и два одинаковых
+ * `data-testid` сделали бы выбор тестировщика неоднозначным.
  *
  * Цены приходят с проектом, а не с журналом, поэтому строка цен на месте и пока журнал
  * читается. Ввод цен — отдельное окно (`ProjectPricesDialog`): здесь только чтение
@@ -55,11 +62,11 @@ type ExpenseTokens = Pick<
 
 function ExpenseRow({ expense }: { expense: Expense }): JSX.Element {
   return (
-    <li className="expense-row" data-testid="expense-item">
-      <p className="expense-row__date" data-testid="expense-item-date">
+    <li className="cost-row" data-testid="cost-item">
+      <p className="cost-row__date" data-testid="expense-item-date">
         {formatSpentOn(expense.spent_on)}
       </p>
-      <p className="expense-row__tokens" data-testid="expense-item-tokens">
+      <p className="cost-row__tokens" data-testid="cost-item-tokens">
         {TOKEN_FIELDS.map(({ key, label }) =>
           expense[key] === 0 ? null : (
             <span className="tok" key={key}>
@@ -69,7 +76,7 @@ function ExpenseRow({ expense }: { expense: Expense }): JSX.Element {
           ),
         )}
       </p>
-      <p className="expense-row__amount" data-testid="expense-item-amount">
+      <p className="cost-row__amount" data-testid="expense-item-amount">
         {formatMoney(expense.amount)}
       </p>
     </li>
@@ -112,9 +119,9 @@ export default function ExpenseList({
   const pricesVisible = errorText !== PROJECT_NOT_FOUND_TEXT;
 
   return (
-    <section className="card" aria-label="Журнал расходов проекта" data-testid="expenses-card">
+    <section className="card" aria-label="Стоимость проекта" data-testid="expenses-card">
       <div className="card__head">
-        <h2 className="card__title">Расходы проекта</h2>
+        <h2 className="card__title">Стоимость проекта</h2>
         <div className="card__tools">
           {ready && (
             <span className="card__meta" data-testid="expenses-count">
@@ -122,9 +129,9 @@ export default function ExpenseList({
             </span>
           )}
           {ready && total !== null && (
-            <div className="expenses-total">
-              <span className="expenses-total__label">Итого</span>
-              <span className="expenses-total__value" data-testid="expenses-total">
+            <div className="cost-sum">
+              <span className="cost-sum__label">Итого</span>
+              <span className="cost-sum__value" data-testid="expenses-total">
                 {formatMoney(total)}
               </span>
             </div>
@@ -190,7 +197,7 @@ export default function ExpenseList({
 
       {loading && (
         <div className="card__body">
-          <p className="state__line" aria-live="polite" data-testid="expenses-state">
+          <p className="state__line" aria-live="polite" data-testid="costs-state">
             Загрузка…
           </p>
         </div>
@@ -199,10 +206,10 @@ export default function ExpenseList({
       {errorText !== null && (
         <div className="card__body">
           <div className="state__error">
-            <p className="error" role="alert" data-testid="expenses-error">
+            <p className="error" role="alert" data-testid="costs-error">
               {errorText}
             </p>
-            <button className="btn" type="button" data-testid="expenses-retry" onClick={onRetry}>
+            <button className="btn" type="button" data-testid="costs-retry" onClick={onRetry}>
               Повторить
             </button>
           </div>
@@ -210,7 +217,7 @@ export default function ExpenseList({
       )}
 
       {ready && expenses.length === 0 && (
-        <div className="card__body" data-testid="expenses-empty">
+        <div className="card__body" data-testid="costs-empty">
           <p className="state__line">Пока нет записей</p>
           <p className="state__hint">
             Нажмите «Добавить запись» — она появится здесь, а сумма уйдёт в итог.
@@ -219,7 +226,7 @@ export default function ExpenseList({
       )}
 
       {ready && expenses.length > 0 && (
-        <ul className="table__body" data-testid="expenses-list">
+        <ul className="table__body" data-testid="costs-list">
           {expenses.map((expense) => (
             <ExpenseRow key={expense.id} expense={expense} />
           ))}

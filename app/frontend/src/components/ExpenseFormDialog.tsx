@@ -223,7 +223,7 @@ export default function ExpenseFormDialog({
 
       {pricesMissing && (
         <p className="field__hint">
-          Задайте цены кнопкой «Изменить» на вкладке «Расходы».
+          Задайте цены кнопкой «Изменить» на вкладке «Стоимость».
         </p>
       )}
     </Dialog>

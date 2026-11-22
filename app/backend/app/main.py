@@ -13,6 +13,7 @@ from app.api import (
     registry,
     roles,
     tasks,
+    usage,
 )
 from app.config import get_settings
 from app.db import check_db
@@ -68,7 +69,15 @@ def create_app() -> FastAPI:
             "Реестр проектов отдела — отдельно: `GET /api/registry` отдаёт документ "
             "последней ревизии, `PUT /api/registry` сохраняет присланный документ новой "
             "ревизией, `POST /api/registry/rebuild` собирает его из проектов и отделов. "
-            "Все три ручки требуют заголовок `X-Registry-Token`."
+            "Все три ручки требуют заголовок `X-Registry-Token`. "
+            "Журнал расхода смен — отдельный раздел: harness присылает закрытую смену "
+            "одним `POST /api/usage/shifts` с тем же заголовком `X-Registry-Token`, а "
+            "браузер читает суммы без токена — по проекту "
+            "(`GET /api/projects/{project_ref}/usage`), по одной смене "
+            "(`GET /api/usage/shifts/{shift_id}`) и по всем проектам "
+            "(`GET /api/usage/projects`). Цена считается в harness, веб её только "
+            "складывает и хранит вместе с тарифами: смена тарифа не переписывает "
+            "прошлые смены."
         ),
     )
 
@@ -82,6 +91,8 @@ def create_app() -> FastAPI:
     application.include_router(expenses.router)
     application.include_router(registry.router)
     application.include_router(presets.router)
+    application.include_router(usage.router)
+    application.include_router(usage.machine_router)
 
     @application.get(
         f"{API_PREFIX}/health",

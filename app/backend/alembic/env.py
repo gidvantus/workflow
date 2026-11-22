@@ -9,7 +9,9 @@ from app.config import get_settings
 from app.db import Base
 
 # Импорт моделей нужен ради метаданных: без него таблицы `projects`, `roles`,
-# `departments`, `registry_documents` и `project_expenses` в них не попадут.
+# `departments`, `registry_documents` и `project_expenses` в них не попадут. Импорт
+# пакета тянет и журнал расхода (`usage_shifts`, `usage_sessions`): ревизия `0012_usage`
+# пишется по тем же метаданным.
 from app.models import (  # noqa: F401
     Department,
     Project,

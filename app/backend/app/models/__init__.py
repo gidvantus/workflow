@@ -12,6 +12,8 @@ from app.models.registry import RegistryDocument
 from app.models.role import DEFAULT_ROLES, Role
 from app.models.role_skill import RoleSkill
 from app.models.task import Task
+from app.models.usage_session import UsageSession
+from app.models.usage_shift import UsageShift
 
 __all__ = [
     "DEFAULT_DEPARTMENT_KINDS",
@@ -25,5 +27,7 @@ __all__ = [
     "Role",
     "RoleSkill",
     "Task",
+    "UsageSession",
+    "UsageShift",
     "department_roles",
 ]
