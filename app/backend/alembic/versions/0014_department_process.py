@@ -18,8 +18,13 @@
 отделы, у которых процесс правили, после отката работают на умолчаниях, а их документы
 приходят из истории ревизий реестра — отдельной таблицы истории у процесса нет.
 
-Revision ID: 0012_department_process
-Revises: 0011_department_enabled
+Номер ревизии сдвинут на `0014`, а `down_revision` стоит на `0013_expenses`: ревизии
+`0012_usage` и `0013_expenses` пришли в `main` раньше этой ветки, и прежний номер
+`0012_department_process` дал бы вторую голову — `alembic upgrade head` на стенде упал бы
+на неоднозначной истории.
+
+Revision ID: 0014_department_process
+Revises: 0013_expenses
 Create Date: 2026-11-22
 
 """
@@ -31,8 +36,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision: str = "0012_department_process"
-down_revision: str | None = "0011_department_enabled"
+revision: str = "0014_department_process"
+down_revision: str | None = "0013_expenses"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

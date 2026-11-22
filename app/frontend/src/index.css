@@ -605,13 +605,220 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* ---------- вкладка «Стоимость»: цены за токены и журнал записей ---------- */
+
+/* Стоимость в паспорте проекта: подпись тихая, значение основным цветом и табличными
+   цифрами. Рядом с «Обновлён» это такая же служебная строка паспорта, а не метрика. */
+.project-spend {
+  color: var(--muted);
+}
+
+.project-spend__value {
+  color: var(--ink);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Итог журнала — единственное громкое число вкладки: 20 px, 600, табличные цифры.
+   Стоит в шапке карточки рядом со счётчиком записей, а не отдельным блоком метрик:
+   у страницы проекта нет дашборда, у неё есть паспорт и карточка раздела. */
+.cost-sum {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  /* Меньше воздуха до тёмной кнопки — и сумма читается как часть кнопки. */
+  margin-right: 0.375rem;
+  gap: 0;
+  line-height: 1.15;
+}
+
+.cost-sum__label {
+  font-size: 0.6875rem;
+  color: var(--muted);
+}
+
+.cost-sum__value {
+  font-size: 1.25rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Строка записи — три поля: дата, расшифровка токенов, сумма. Шапки колонок нет, как у
+   списка задач: подписи «Дата» и «Сумма» к шести строкам ничего не добавляют, сумму
+   называет знак ₽. Дата — единственная подпись записи, поэтому она основного цвета;
+   расшифровка токенов тише: это пояснение к сумме, а не вторая колонка данных. */
+.cost-row {
+  display: grid;
+  grid-template-columns: 6.75rem minmax(0, 1fr) 8.5rem;
+  grid-template-areas: 'date tokens amount';
+  align-items: baseline;
+  gap: 0.25rem 1.25rem;
+  padding: 0.6875rem 1.125rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.cost-row:last-child {
+  border-bottom: 0;
+}
+
+.cost-row:hover {
+  background-color: #fbfaf7;
+}
+
+.cost-row__date {
+  grid-area: date;
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Пары «подпись — число» в строку с переносом: на широком экране расшифровка занимает
+   одну строку, на узком уходит под дату и не режет числа. */
+.cost-row__tokens {
+  grid-area: tokens;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.125rem 1rem;
+  margin: 0;
+  min-width: 0;
+}
+
+.tok {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3125rem;
+  white-space: nowrap;
+}
+
+.tok__label {
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.tok__value {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Строка цен в карточке журнала. Цены — это деньги, а на вкладке «Стоимость» живёт всё,
+   что про деньги; ввод вынесен в отдельное окно, поэтому здесь только чтение и одна
+   кнопка. Фон --band — та же тихая полоса, что у шапки таблицы. */
+.card__prices {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas: 'label list button';
+  align-items: center;
+  gap: 0.375rem 1.25rem;
+  padding: 0.4375rem 1.125rem;
+  background-color: var(--band);
+  border-bottom: 1px solid var(--line);
+}
+
+.prices__label {
+  grid-area: label;
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--muted-rail);
+  white-space: nowrap;
+}
+
+.prices__unit {
+  /* Цвет подписи единицы — как у `.prices__label`: на фоне `--band` он даёт 4,77:1
+     и проходит WCAG AA для 12 px. `--muted-2` тут давал 2,47:1 — axe `color-contrast`
+     (impact serious), замечание тестировщика Ф1 возврата №2. */
+  color: var(--muted-rail);
+}
+
+.prices__list {
+  grid-area: list;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.125rem 1.125rem;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+  list-style: none;
+}
+
+.prices__list .tok__label {
+  font-size: 0.75rem;
+  color: var(--muted-rail);
+}
+
+.prices__list .tok__value {
+  font-size: 0.75rem;
+}
+
+/* Кнопка строки цен мельче обычной: она стоит рядом с данными, а не с формой. */
+.card__prices .btn {
+  grid-area: button;
+  padding: 0.25rem 0.625rem;
+  font-size: 0.75rem;
+}
+
+/* Цены не заданы. Четыре нуля — допустимое состояние проекта, но запись с такими ценами
+   сервер отклонит, поэтому строка говорит об этом на вкладке, а не только в отказе после
+   нажатия «Сохранить». Красный — только у подписи: это не ошибка, а незаполненное место. */
+.card__prices--unset .prices__label {
+  color: var(--danger);
+  font-weight: 500;
+}
+
+.card__prices--unset .prices__note {
+  grid-area: list;
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.cost-row__amount {
+  grid-area: amount;
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.4;
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- поля окна цен и окна записи ---------- */
+
+/* Группа полей окна: `fieldset` без своей рамки — она нужна как подпись группы для
+   скринридера, а не как визуальный блок в форме из пяти полей. */
+.dialog__group {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.dialog__group > legend {
+  padding: 0;
+  margin-bottom: 0.4375rem;
+}
+
+/* Количества и цены — числа, которые человек сравнивает глазами: табличные цифры держат
+   разряды друг под другом. */
+.field--tokens .field__input,
+.field--price .field__input {
+  font-variant-numeric: tabular-nums;
+}
+
 .row__actions {
   position: relative;
   display: flex;
   justify-content: flex-end;
   gap: 0.25rem;
 }
-
 .kebab {
   display: grid;
   place-items: center;
@@ -1250,20 +1457,6 @@ body {
   resize: vertical;
 }
 
-/* Выпадающий список того же вида, что и поле ввода: в строке таблицы процесса рядом
-   стоят input, select и мультивыбор, и разная высота у них читается как небрежность. */
-.field__select {
-  width: 100%;
-  padding: 0.5rem 0.625rem;
-  font: inherit;
-  font-size: 0.875rem;
-  line-height: 1.4;
-  color: var(--ink);
-  background-color: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 0.5rem;
-}
-
 .field__input[aria-invalid='true'],
 .field__textarea[aria-invalid='true'] {
   border-color: var(--danger);
@@ -1459,6 +1652,28 @@ body {
   .page-head__title {
     font-size: 1.375rem;
   }
+
+  /* Строка записи в две линии: дата и сумма на первой, расшифровка токенов под ними во
+     всю ширину. Сумма остаётся у правого края — она ищется глазом по столбцу. */
+  .cost-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      'date amount'
+      'tokens tokens';
+    gap: 0.1875rem 1rem;
+    padding: 0.75rem 1rem;
+  }
+
+  /* Строка цен на узком экране: подпись и кнопка делят первую линию, четыре пары уходят
+     под них во всю ширину и переносятся сами. */
+  .card__prices {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      'label button'
+      'list list';
+    gap: 0.375rem 0.75rem;
+    padding: 0.5rem 1rem;
+  }
 }
 
 /* ---------- ≤ 600 px: всё в одну колонку ---------- */
@@ -1516,6 +1731,24 @@ body {
   .card__tools {
     width: 100%;
     justify-content: space-between;
+  }
+
+  /* Карточка «Стоимость» — исключение: у неё в шапке три элемента (счётчик, «Итого» и
+     «Добавить запись»), и в 375 px подпись кнопки переносилась на две строки, а счётчик
+     ломался на два. Как в макете: счётчик и итог стоят на первой строке по краям, кнопка
+     занимает отдельную строку во всю ширину карточки. Правило привязано к своему классу,
+     поэтому шапки остальных карточек не меняются. */
+  .card--costs .card__tools {
+    flex-wrap: wrap;
+    gap: 0.5rem 0.75rem;
+  }
+
+  .card--costs .card__meta {
+    white-space: nowrap;
+  }
+
+  .card--costs .card__tools .btn {
+    flex-basis: 100%;
   }
 
   /* Строка задачи и на телефоне остаётся одной линией: номер и название слева,
@@ -1589,6 +1822,236 @@ body {
   .topbar .btn {
     width: 100%;
   }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .overlay,
+  .dialog {
+    animation: none;
+  }
+}
+
+/* ---------- вкладка «Расходы»: журнал расхода смен ---------- */
+
+/* Итог журнала стоит в шапке карточки справа — там же, где счётчики «Проектов» и
+   «Задач», и растёт вниз от подписи к числу только на узком экране. Число итога —
+   данные, а не подпись: основной цвет и вес 600, табличные цифры, чтобы суммы разных
+   проектов стояли друг под другом разрядами. */
+.expenses-total {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  color: var(--muted);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Итог смены внутри детализации стоит не в шапке, а под ней, слева: шапку занимает
+   кнопка возврата. */
+.expenses-total--left {
+  text-align: left;
+}
+
+.expenses-total__value {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+/* Строка журнала: интервал смены, причина, число сессий, токены, сумма и вход в
+   детализацию. Шапки колонок нет — как у списка задач: подписи «Интервал» и «Сумма»
+   к трём строкам ничего не добавляют, а знак `$` сам называет последнюю колонку. */
+.expense-row {
+  display: grid;
+  grid-template-columns: 9.5rem minmax(0, 1fr) 4.5rem 7rem 6.5rem 5.5rem;
+  grid-template-areas: 'period reason sessions tokens cost open';
+  gap: 1.25rem;
+  align-items: baseline;
+  padding: 0.5625rem 1.125rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.expense-row:last-child {
+  border-bottom: 0;
+}
+
+.expense-row:hover {
+  background-color: #fbfaf7;
+}
+
+.expense-row__date {
+  grid-area: period;
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.expense-row__reason {
+  grid-area: reason;
+  margin: 0;
+  min-width: 0;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+/* Число сессий и токены — количества: основной цвет, табличные цифры, правое
+   выравнивание, чтобы столбик чисел читался сверху вниз. */
+.expense-row__count,
+.expense-row__tokens,
+.expense-row__amount,
+.expense-session__tokens,
+.expense-session__amount {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  text-align: right;
+  white-space: nowrap;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.expense-row__count,
+.expense-row__tokens {
+  color: var(--muted);
+}
+
+.expense-row__count {
+  grid-area: sessions;
+}
+
+.expense-row__tokens {
+  grid-area: tokens;
+}
+
+.expense-row__amount,
+.expense-session__amount {
+  font-weight: 500;
+}
+
+.expense-row__amount {
+  grid-area: cost;
+}
+
+.expense-row__open {
+  grid-area: open;
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* Строка сессии в детализации: роль, тикет, ходы, токены и цена. */
+.expense-session {
+  display: grid;
+  grid-template-columns: 8.5rem minmax(0, 1fr) 5rem 7rem 6.5rem;
+  grid-template-areas: 'role issue turns tokens cost';
+  gap: 1.25rem;
+  align-items: baseline;
+  padding: 0.5625rem 1.125rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.expense-session:last-child {
+  border-bottom: 0;
+}
+
+.expense-session:hover {
+  background-color: #fbfaf7;
+}
+
+.expense-session__role {
+  grid-area: role;
+  margin: 0;
+  min-width: 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.expense-session__issue {
+  grid-area: issue;
+  margin: 0;
+  min-width: 0;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.expense-session__turns {
+  grid-area: turns;
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.expense-session__tokens {
+  grid-area: tokens;
+}
+
+.expense-session__amount {
+  grid-area: cost;
+}
+
+/* Тесная панель под итогом: у детализации в шапке кнопка возврата, а отступ `card__body`
+   рассчитан на пустые состояния, а не на строку данных. */
+.card__body--tight {
+  padding-top: 0.75rem;
+  padding-bottom: 0.75rem;
+}
+
+@media (max-width: 900px) {
+  /* На узком экране строка журнала перестраивается: интервал и вход в детализацию на
+     первой линии, причина под ними во всю ширину, затем количества и сумма. */
+  .expense-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      'period open'
+      'reason reason'
+      'sessions cost'
+      'tokens tokens';
+    gap: 0.25rem 0.75rem;
+  }
+
+  .expense-row__open {
+    align-self: center;
+  }
+
+  .expense-session {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      'role cost'
+      'issue issue'
+      'turns tokens';
+    gap: 0.25rem 0.75rem;
+  }
+}
+
+@media (max-width: 600px) {
+  /* Итог в шапке карточки на узком экране занимает всю строку под заголовком: в одну
+     строку с «Расходы проекта» он не влезает. Перенос самой шапки уже задан в общем
+     блоке `@media (max-width: 600px)` выше (`flex-wrap: wrap` у `.card__head`), поэтому
+     здесь только эта строка — шапки остальных карточек не трогаем. */
+  .expenses-total {
+    width: 100%;
+    text-align: left;
+  }
+}
+
+/* Выпадающий список того же вида, что и поле ввода: в строке таблицы процесса рядом
+   стоят input, select и мультивыбор, и разная высота у них читается как небрежность. */
+.field__select {
+  width: 100%;
+  padding: 0.5rem 0.625rem;
+  font: inherit;
+  font-size: 0.875rem;
+  line-height: 1.4;
+  color: var(--ink);
+  background-color: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
 }
 
 /* ---------- вкладки страницы отдела: настройки и процесс ---------- */
@@ -1710,9 +2173,3 @@ body {
   max-height: 7rem;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .overlay,
-  .dialog {
-    animation: none;
-  }
-}

@@ -1,8 +1,9 @@
 """Модель проекта: строка таблицы `projects` с признаком мягкого удаления."""
 
 from datetime import datetime
+from decimal import Decimal
 
-from sqlalchemy import DateTime, Index, Integer, String, Text, func, text
+from sqlalchemy import DateTime, Index, Integer, Numeric, String, Text, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -24,6 +25,11 @@ class Project(Base):
     документе реестра. Задаётся один раз и дальше не меняется: смена кода сменила бы
     идентификатор проекта в реестре. `NULL` — код ещё не задан, и в реестре проект
     остаётся под числовым `str(id)`.
+
+    Деньги проекта живут здесь же: четыре цены за 1 000 000 токенов и хранимая стоимость
+    `total_cost`. Итог не вычисляется на чтении из журнала: ручка записи прибавляет сумму
+    к колонке SQL-инкрементом в той же транзакции, поэтому два одновременных `POST` не
+    теряют копейки.
     """
 
     __tablename__ = "projects"
@@ -48,6 +54,43 @@ class Project(Base):
         nullable=False,
         server_default=func.now(),
         onupdate=func.now(),
+    )
+    # Цены за 1 000 000 токенов — рубли с шестью знаками. Ноль значит «не тарифицируется»,
+    # а не «неизвестно»: незаполненных цен у проекта нет, есть нулевые, и все четыре нуля
+    # ручка журнала отвергает отдельным текстом.
+    price_input: Mapped[Decimal] = mapped_column(
+        Numeric(18, 6),
+        nullable=False,
+        default=Decimal("0"),
+        server_default=text("0"),
+    )
+    price_output: Mapped[Decimal] = mapped_column(
+        Numeric(18, 6),
+        nullable=False,
+        default=Decimal("0"),
+        server_default=text("0"),
+    )
+    price_cache_read: Mapped[Decimal] = mapped_column(
+        Numeric(18, 6),
+        nullable=False,
+        default=Decimal("0"),
+        server_default=text("0"),
+    )
+    price_cache_write: Mapped[Decimal] = mapped_column(
+        Numeric(18, 6),
+        nullable=False,
+        default=Decimal("0"),
+        server_default=text("0"),
+    )
+    # Хранимая стоимость проекта: сумма уже округлённых сумм записей журнала. Журнал
+    # не правится и не удаляется, поэтому денормализация не может разойтись с ним.
+    # `Numeric(20, 2)` с запасом под максимум контракта: цена до 10 знаков и количество
+    # до 10^12 дают сумму до 4·10^16, а `Numeric(14, 2)` её не вмещает.
+    total_cost: Mapped[Decimal] = mapped_column(
+        Numeric(20, 2),
+        nullable=False,
+        default=Decimal("0"),
+        server_default=text("0"),
     )
     # Признак soft delete: `NULL` — проект живой.
     deleted_at: Mapped[datetime | None] = mapped_column(
