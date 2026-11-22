@@ -9,8 +9,14 @@ from app.config import get_settings
 from app.db import Base
 
 # Импорт моделей нужен ради метаданных: без него таблицы `projects`, `roles`,
-# `departments` и `registry_documents` в них не попадут.
-from app.models import Department, Project, RegistryDocument, Role  # noqa: F401
+# `departments`, `registry_documents` и `project_expenses` в них не попадут.
+from app.models import (  # noqa: F401
+    Department,
+    Project,
+    ProjectExpense,
+    RegistryDocument,
+    Role,
+)
 
 config = context.config
 

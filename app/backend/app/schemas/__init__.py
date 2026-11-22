@@ -8,6 +8,7 @@ from app.schemas.department import (
     DepartmentUpdate,
     RoleResponse,
 )
+from app.schemas.expense import ExpenseCreate, ExpenseListResponse, ExpenseResponse
 from app.schemas.presets import (
     PresetManifest,
     PresetPutRequest,
@@ -27,6 +28,9 @@ __all__ = [
     "DepartmentKindResponse",
     "DepartmentResponse",
     "DepartmentUpdate",
+    "ExpenseCreate",
+    "ExpenseListResponse",
+    "ExpenseResponse",
     "PresetManifest",
     "PresetPutRequest",
     "PresetRoleDocument",

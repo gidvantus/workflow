@@ -7,6 +7,7 @@
 import re
 from collections.abc import Sequence
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -33,6 +34,16 @@ REPO_URL_PATTERN = re.compile(r"^(https?://\S+|[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)$
 # Код проекта: латиница, цифры и дефис; первый символ — не дефис. Верхний регистр
 # разрешён: в живом реестре отдела есть слаг `CRMDormitory`.
 CODE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*$")
+# Цена за 1 000 000 токенов: до десяти знаков до разделителя и не больше шести после.
+# Шаблон проверяется после нормализации запятой в точку: `0.27`, `0,27` и `1` проходят,
+# `0.1234567` — нет.
+PRICE_PATTERN = re.compile(r"^\d{1,10}(\.\d{1,6})?$")
+
+# В базе цена лежит ровно с шестью знаками: `0,27` превращается в `0.270000`.
+PRICE_QUANTUM = Decimal("0.000001")
+
+# Четыре цены проекта. Общий список нужен и ручке правки, и ответу схемы.
+PRICE_FIELDS = ("price_input", "price_output", "price_cache_read", "price_cache_write")
 
 NAME_REQUIRED = "Укажите название проекта"
 NAME_TOO_LONG = "Название длиннее 200 символов"
@@ -46,6 +57,8 @@ CODE_INVALID = "Код проекта указывается латиницей,
 CODE_ALL_DIGITS = "Код проекта не может состоять только из цифр"
 CODE_TOO_LONG = "Код проекта длиннее 32 символов"
 CODE_IMMUTABLE = "Код проекта не меняется"
+PRICE_INVALID = "Цена указывается числом, например 0.27"
+PRICE_NEGATIVE = "Цена не может быть отрицательной"
 PROJECT_NOT_FOUND = "Проект не найден"
 
 # Имя частичного уникального индекса кода: по нему отказ гонки получает правильный текст.
@@ -106,6 +119,25 @@ def validate_code(value: str | None) -> str | None:
     if code.isdigit():
         raise _reject(CODE_ALL_DIGITS)
     return code
+
+
+def validate_price(value: str) -> Decimal:
+    """Цена за 1 000 000 токенов: вернуть `Decimal` ровно с шестью знаками.
+
+    Запятая — привычный в России разделитель: `0,27` тот же `0.27`. Ноль разрешён: он
+    значит «эта часть не тарифицируется», а не «цена не заполнена». Указывать минус
+    бессмысленно — отказ получает отдельный текст, а мусор, пустая строка и лишние знаки
+    после разделителя — текст про формат.
+    """
+    # Запятая нормализуется до проверки знака: `-0,5` тоже отрицательная цена.
+    text = value.strip().replace(",", ".")
+    negative = text.startswith("-")
+    magnitude = text[1:] if negative else text
+    if not PRICE_PATTERN.match(magnitude):
+        raise _reject(PRICE_INVALID)
+    if negative:
+        raise _reject(PRICE_NEGATIVE)
+    return Decimal(magnitude).quantize(PRICE_QUANTUM)
 
 
 def _name_is_taken(db: Session, name: str, exclude_id: int | None = None) -> bool:
@@ -206,12 +238,19 @@ def create_project(payload: ProjectCreate, db: DbSession) -> Project:
     repo_url = validate_repo_url(payload.repo_url)
     description = validate_description(payload.description)
     code = validate_code(payload.code)
+    prices = {
+        field: validate_price(getattr(payload, field))
+        for field in PRICE_FIELDS
+        if getattr(payload, field) is not None
+    }
     if _name_is_taken(db, name):
         raise HTTPException(status.HTTP_409_CONFLICT, NAME_TAKEN)
     if code is not None and _code_is_taken(db, code):
         raise HTTPException(status.HTTP_409_CONFLICT, CODE_TAKEN)
 
     project = Project(name=name, description=description, repo_url=repo_url, code=code)
+    for field, price in prices.items():
+        setattr(project, field, price)
     db.add(project)
     _commit_or_conflict(db)
     db.refresh(project)
@@ -257,6 +296,7 @@ def update_project(
     repo_url: str | None = None
     description: str | None = None
     code: str | None = None
+    prices: dict[str, Decimal] = {}
     if "name" in changes:
         name = validate_name(changes["name"] or "")
         if _name_is_taken(db, name, exclude_id=project.id):
@@ -275,6 +315,9 @@ def update_project(
             if _code_is_taken(db, requested, exclude_id=project.id):
                 raise HTTPException(status.HTTP_409_CONFLICT, CODE_TAKEN)
             code = requested
+    for field in PRICE_FIELDS:
+        if field in changes:
+            prices[field] = validate_price(changes[field] or "")
 
     if name is not None:
         project.name = name
@@ -284,6 +327,8 @@ def update_project(
         project.description = description
     if code is not None:
         project.code = code
+    for field, price in prices.items():
+        setattr(project, field, price)
 
     _commit_or_conflict(db)
     db.refresh(project)
