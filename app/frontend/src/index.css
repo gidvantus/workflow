@@ -2168,8 +2168,133 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-.proc-cell__select {
-  min-width: 8rem;
-  max-height: 7rem;
+/* id ступени — служебное значение: им же сервер называет ступень в тексте отказа
+   («У ступени «dev-backend»…»), поэтому человек должен видеть его в строке. */
+.proc-row__id {
+  display: block;
+  margin-top: 0.25rem;
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 0.6875rem;
+  color: var(--muted);
+}
+
+/* Ключ метки — служебное значение, поэтому моноширинный; запятая висит на предыдущем
+   токене, чтобы перенос не начинал строку с «,». Каждый ключ — атомарный inline-block:
+   переносится на свою строку целиком, а не рвётся посередине. */
+.lbl {
+  display: inline-block;
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 0.6875rem;
+  line-height: 1.5;
+  color: var(--ink);
+  overflow-wrap: normal;
+}
+
+.lbl:not(:last-child)::after {
+  content: ', ';
+  color: var(--muted-2);
+}
+
+/* Исключения и снятие — то, что ступень отсекает, а не то, что она делает: тише. */
+.proc-cell--unless .lbl,
+.proc-cell--drop .lbl {
+  color: var(--muted);
+}
+
+.proc-cell--put .lbl {
+  font-weight: 500;
+}
+
+/* Клетка правки: метки в строке — кнопка, открывающая список галочек. В покое она
+   неотличима от текста, наведение и фокус рисуют рамку. */
+.proc-cell__pick {
+  display: block;
+  width: 100%;
+  margin: -0.1875rem -0.3125rem;
+  padding: 0.1875rem 0.3125rem;
+  font: inherit;
+  text-align: left;
+  background-color: transparent;
+  border: 1px solid transparent;
+  border-radius: 0.375rem;
+  cursor: pointer;
+}
+
+.proc-cell__pick:hover {
+  border-color: var(--border);
+}
+
+.proc-cell__pick[aria-expanded='true'] {
+  background-color: var(--panel);
+  border-color: var(--border);
+}
+
+.proc-cell__pick:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 1px;
+}
+
+.proc-cell__none {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+/* Ступень, снятая с конвейера: заголовок читается, остальное тише — строка не ошибка,
+   она просто не берёт тикетов. */
+.proc-row--off {
+  background-color: var(--band);
+}
+
+.proc-row--off .lbl {
+  color: var(--muted);
+}
+
+/* Список галочек под строкой: раскрывается в отдельной строке таблицы на всю её ширину,
+   чтобы четырнадцать ключей не сжимали ячейку ступени. */
+.proc-picker-row td {
+  padding: 0 0.5rem 0.75rem;
+}
+
+.proc-picker {
+  width: min(24rem, 100%);
+  padding: 0.75rem;
+  background-color: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0.625rem;
+}
+
+.proc-picker__title {
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.proc-picker__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.375rem 0.875rem;
+}
+
+.proc-picker__grid .checkbox span {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 0.75rem;
+}
+
+.proc-picker__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 0.625rem;
+}
+
+.proc-picker__hint {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: var(--muted);
 }
 

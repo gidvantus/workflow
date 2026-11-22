@@ -11,18 +11,18 @@
  * переписывания. Порядок ступеней — колонка `priority`: экран сортирует строки по ней,
  * чтобы таблица совпадала с порядком исполнения.
  *
+ * **Метки в ячейке — ключи, а не имена.** В строке ступени видно ровно то, что уходит в
+ * документ (`dev`, `areaBackend`), поэтому расхождение со ступенью видно глазами, а
+ * человеческие имена живут в блоке имён ниже. Правятся метки списком галочек под строкой:
+ * выбор одной метки не сбрасывает остальные, а `select multiple` делал именно это.
+ *
  * **Сброс к умолчанию не ходит на сервер.** Документ по умолчанию приезжает в `defaults`
  * первого `GET`, кнопка заполняет им форму и оставляет документ «не сохранённым»: пока
  * человек не нажал «Сохранить», отдел работает по прежнему процессу, а `GET` покажет
  * именно сохранённое. Так «Сбросить» — это правка формы, а не тихая запись в реестр.
- *
- * **Ступень — не форма, а строка таблицы.** Полей много и они короткие, поэтому строка
- * таблицы и есть редактор: порядок, название, вид, входящие метки, «кроме», что ставит и
- * снимает, страж, роль, включена. Ключи меток в мультивыборах подписаны именами из блока
- * имён: переименование метки сразу видно в ступенях.
  */
 
-import { useCallback, useEffect, useId, useState } from 'react';
+import { Fragment, useCallback, useEffect, useState } from 'react';
 
 import { ApiError, UNREACHABLE_TEXT } from '../api/http';
 import {
@@ -73,13 +73,60 @@ const LABEL_TITLES: Record<ProcessLabelKey, string> = {
   merged: 'Слито',
 };
 
-/** Сохранённость формы: что показать в строке состояния над таблицей. */
+/** Четыре ячейки строки, которые правятся списком галочек. */
+type PickerField = 'when' | 'unless' | 'put' | 'drop';
+
+const CELL_TITLES: Record<PickerField, string> = {
+  when: 'Входящие метки',
+  unless: 'Кроме',
+  put: 'Ставит',
+  drop: 'Снимает',
+};
+
+const PICKER_TITLES: Record<PickerField, string> = {
+  when: 'Входящие метки — тикет должен нести все',
+  unless: 'Кроме — ни одной из этих',
+  put: 'Ставит — эти метки появятся у тикета',
+  drop: 'Снимает — эти метки уйдут у тикета',
+};
+
+/**
+ * Сохранённость формы: что показать в строке состояния над таблицей.
+ *
+ * `saved` с `revision: null` — отдельное состояние, а не «не сохранено»: `GET` ревизию не
+ * отдаёт по контракту, поэтому после перезагрузки страницы про сохранённый документ
+ * известно только то, что он сохранён.
+ */
 type SavedState =
   | { kind: 'defaults' }
-  | { kind: 'clean'; revision: number }
+  | { kind: 'reset' }
   | { kind: 'dirty' }
-  | { kind: 'saving' }
-  | { kind: 'failed'; text: string };
+  | { kind: 'saved'; revision: number | null };
+
+function savedText(saved: SavedState): string {
+  switch (saved.kind) {
+    case 'defaults':
+      return 'Умолчания, не сохранено';
+    case 'reset':
+      return 'Заполнено умолчаниями — не сохранено';
+    case 'dirty':
+      return 'Не сохранено';
+    case 'saved':
+      return saved.revision === null ? 'Сохранено' : `Сохранено: ревизия ${saved.revision}`;
+  }
+}
+
+function pickerHint(field: PickerField, count: number): string {
+  if (count === 0) {
+    return field === 'when'
+      ? 'Пусто — ступень не возьмёт ни одного тикета.'
+      : 'Пусто — ступень ничего не меняет.';
+  }
+  if (field === 'when') {
+    return `Выбрано ${count}: ступень возьмёт тикет со всеми этими метками.`;
+  }
+  return `Выбрано ${count}.`;
+}
 
 function sortSteps(document: ProcessDocument): ProcessDocument {
   return { ...document, steps: [...document.steps].sort((left, right) => left.priority - right.priority) };
@@ -92,42 +139,94 @@ function withStep(document: ProcessDocument, index: number, patch: Partial<Proce
   };
 }
 
-/** Мультивыбор ключей меток: `select multiple` — самый короткий способ выбрать набор. */
+/** Метки в наборе: порядок канонический, чтобы ячейка не переставляла ключи местами. */
+function toggleKey(keys: ProcessLabelKey[], key: ProcessLabelKey, on: boolean): ProcessLabelKey[] {
+  const next = on ? [...keys, key] : keys.filter((current) => current !== key);
+  return PROCESS_LABEL_KEYS.filter((current) => next.includes(current));
+}
+
+/** Список галочек под строкой: подписи — ключи документа, как и в самой ячейке. */
 function LabelPicker({
+  id,
   testId,
-  label,
+  field,
   value,
   onChange,
-  names,
+  onClose,
 }: {
+  id: string;
   testId: string;
-  label: string;
+  field: PickerField;
   value: ProcessLabelKey[];
   onChange: (keys: ProcessLabelKey[]) => void;
-  names: Record<ProcessLabelKey, string>;
+  onClose: () => void;
 }): JSX.Element {
-  const id = useId();
   return (
-    <label className="proc-cell" htmlFor={id}>
-      <span className="proc-cell__title">{label}</span>
-      <select
-        className="field__select proc-cell__select"
-        id={id}
-        multiple
-        data-testid={testId}
-        value={value}
-        onChange={(event) => {
-          const chosen = Array.from(event.target.selectedOptions, (option) => option.value);
-          onChange(PROCESS_LABEL_KEYS.filter((key) => chosen.includes(key)));
-        }}
-      >
+    <div className="proc-picker" id={id} role="group" aria-label={PICKER_TITLES[field]}>
+      <p className="proc-picker__title">{PICKER_TITLES[field]}</p>
+      <div className="proc-picker__grid">
         {PROCESS_LABEL_KEYS.map((key) => (
-          <option key={key} value={key}>
-            {names[key]}
-          </option>
+          <label className="checkbox" key={key}>
+            <input
+              type="checkbox"
+              data-testid={`${testId}-${key}`}
+              checked={value.includes(key)}
+              onChange={(event) => onChange(toggleKey(value, key, event.target.checked))}
+            />
+            <span>{key}</span>
+          </label>
         ))}
-      </select>
-    </label>
+      </div>
+      <div className="proc-picker__foot">
+        <p className="proc-picker__hint">{pickerHint(field, value.length)}</p>
+        <button className="btn" type="button" onClick={onClose}>
+          Готово
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Ячейка с метками: в покое это текст из ключей, нажатие раскрывает список галочек. */
+function LabelCell({
+  testId,
+  field,
+  step,
+  value,
+  open,
+  panelId,
+  onToggle,
+}: {
+  testId: string;
+  field: PickerField;
+  step: ProcessStep;
+  value: ProcessLabelKey[];
+  open: boolean;
+  panelId: string;
+  onToggle: () => void;
+}): JSX.Element {
+  return (
+    <td className={`proc-cell proc-cell--${field}`}>
+      <button
+        className="proc-cell__pick"
+        type="button"
+        data-testid={testId}
+        aria-expanded={open}
+        aria-controls={panelId}
+        aria-label={`${CELL_TITLES[field]} ступени «${step.title}»`}
+        onClick={onToggle}
+      >
+        {value.length === 0 ? (
+          <span className="proc-cell__none">—</span>
+        ) : (
+          value.map((key) => (
+            <span className="lbl" key={key}>
+              {key}
+            </span>
+          ))
+        )}
+      </button>
+    </td>
   );
 }
 
@@ -135,9 +234,13 @@ export default function DepartmentProcess({ departmentId }: { departmentId: numb
   const [state, setState] = useState<ProcessState>({ status: 'loading' });
   const [document, setDocument] = useState<ProcessDocument | null>(null);
   const [saved, setSaved] = useState<SavedState>({ kind: 'defaults' });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [openPicker, setOpenPicker] = useState<{ stepId: string; field: PickerField } | null>(null);
 
   const load = useCallback(async () => {
     setState({ status: 'loading' });
+    setError(null);
     try {
       const body = await getProcess(departmentId);
       // Своего процесса нет — форма заполняется умолчаниями: пустая таблица не даёт
@@ -151,9 +254,11 @@ export default function DepartmentProcess({ departmentId }: { departmentId: numb
         roles: body.roles,
         guards: body.guards,
       });
-      setSaved(body.document === null ? { kind: 'defaults' } : { kind: 'clean', revision: 0 });
-    } catch (error) {
-      const text = error instanceof ApiError ? error.message : UNREACHABLE_TEXT;
+      // Сохранённый документ — «Сохранено», а не «не сохранено»: ревизию `GET` не отдаёт,
+      // поэтому номер остаётся неизвестным до первого сохранения.
+      setSaved(body.document === null ? { kind: 'defaults' } : { kind: 'saved', revision: null });
+    } catch (failure) {
+      const text = failure instanceof ApiError ? failure.message : UNREACHABLE_TEXT;
       setState({ status: 'error', text });
     }
   }, [departmentId]);
@@ -168,17 +273,20 @@ export default function DepartmentProcess({ departmentId }: { departmentId: numb
   };
 
   const handleSave = async () => {
-    if (document === null) {
+    if (document === null || saving) {
       return;
     }
-    setSaved({ kind: 'saving' });
+    setSaving(true);
+    setError(null);
     try {
       const body = await saveProcess(departmentId, document);
       setDocument(sortSteps(body.document));
-      setSaved({ kind: 'clean', revision: body.revision });
-    } catch (error) {
-      const text = error instanceof ApiError ? error.message : UNREACHABLE_TEXT;
-      setSaved({ kind: 'failed', text });
+      setSaved({ kind: 'saved', revision: body.revision > 0 ? body.revision : null });
+    } catch (failure) {
+      // Отказ висит до следующего сохранения, введённое не сбрасывается.
+      setError(failure instanceof ApiError ? failure.message : UNREACHABLE_TEXT);
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -187,13 +295,19 @@ export default function DepartmentProcess({ departmentId }: { departmentId: numb
       return;
     }
     setDocument(sortSteps(state.defaults));
-    setSaved({ kind: 'dirty' });
+    setSaved({ kind: 'reset' });
+  };
+
+  const togglePicker = (stepId: string, field: PickerField) => {
+    setOpenPicker((current) =>
+      current !== null && current.stepId === stepId && current.field === field ? null : { stepId, field },
+    );
   };
 
   if (state.status === 'loading') {
     return (
       <p className="muted" data-testid="department-process">
-        Загружаю процесс…
+        Загрузка…
       </p>
     );
   }
@@ -222,7 +336,13 @@ export default function DepartmentProcess({ departmentId }: { departmentId: numb
           </p>
         </div>
         <div className="proc-actions">
-          <button className="btn" type="button" data-testid="process-reset" onClick={handleReset}>
+          <button
+            className="btn"
+            type="button"
+            data-testid="process-reset"
+            onClick={handleReset}
+            disabled={saving}
+          >
             Сбросить к умолчанию
           </button>
           <button
@@ -230,38 +350,24 @@ export default function DepartmentProcess({ departmentId }: { departmentId: numb
             type="button"
             data-testid="process-save"
             onClick={() => void handleSave()}
-            disabled={saved.kind === 'saving'}
+            disabled={saving}
           >
-            {saved.kind === 'saving' ? 'Сохраняю…' : 'Сохранить'}
+            {saving ? 'Сохраняю…' : 'Сохранить'}
           </button>
         </div>
       </div>
 
-      {saved.kind === 'defaults' && (
-        <p className="proc-saved" data-testid="process-saved">
-          У отдела нет своего процесса — показаны умолчания
-        </p>
-      )}
-      {saved.kind === 'clean' && (
-        <p className="proc-saved" data-testid="process-saved">
-          {saved.revision > 0 ? `Сохранено: ревизия ${saved.revision}` : 'Заполнено умолчаниями — не сохранено'}
-        </p>
-      )}
-      {saved.kind === 'dirty' && (
-        <p className="proc-saved" data-testid="process-saved">
-          Не сохранено
-        </p>
-      )}
-      {saved.kind === 'saving' && (
-        <p className="proc-saved" data-testid="process-saved">
-          Сохраняю…
-        </p>
-      )}
-      {saved.kind === 'failed' && (
+      {error !== null && (
         <p className="error" data-testid="process-error" role="alert">
-          {saved.text}
+          {error}
         </p>
       )}
+      {saved.kind === 'defaults' && (
+        <p className="muted">У отдела нет своего процесса — показаны умолчания.</p>
+      )}
+      <p className="proc-saved" data-testid="process-saved" aria-live="polite">
+        {savedText(saved)}
+      </p>
 
       <div className="proc-labels">
         <h3 className="proc-labels__title">Имена меток</h3>
@@ -274,7 +380,9 @@ export default function DepartmentProcess({ departmentId }: { departmentId: numb
             const id = `${key}-name`;
             return (
               <label className="proc-cell" key={key} htmlFor={id}>
-                <span className="proc-cell__title">{LABEL_TITLES[key]}</span>
+                <span className="proc-cell__title">
+                  {LABEL_TITLES[key]} · <code>{key}</code>
+                </span>
                 <input
                   className="field__input"
                   id={id}
@@ -307,130 +415,145 @@ export default function DepartmentProcess({ departmentId }: { departmentId: numb
             </tr>
           </thead>
           <tbody>
-            {document.steps.map((step, index) => (
-              <tr className="proc-row" key={step.id} data-testid="process-step-row" data-step-id={step.id}>
-                <td>
-                  <input
-                    className="field__input proc-cell__input"
-                    type="number"
-                    min={1}
-                    max={999}
-                    aria-label={`Порядок ступени «${step.title}»`}
-                    data-testid="process-step-priority"
-                    value={step.priority}
-                    onChange={(event) =>
-                      edit(withStep(document, index, { priority: Number(event.target.value) || 0 }))
-                    }
-                  />
-                </td>
-                <td>
-                  <input
-                    className="field__input"
-                    aria-label={`Название ступени ${step.id}`}
-                    data-testid="process-step-title"
-                    value={step.title}
-                    onChange={(event) => edit(withStep(document, index, { title: event.target.value }))}
-                  />
-                </td>
-                <td>
-                  <select
-                    className="field__select"
-                    aria-label={`Вид ступени «${step.title}»`}
-                    data-testid="process-step-kind"
-                    value={step.kind}
-                    onChange={(event) =>
-                      edit(withStep(document, index, { kind: event.target.value as ProcessStepKind }))
-                    }
+            {document.steps.map((step, index) => {
+              const open = openPicker !== null && openPicker.stepId === step.id ? openPicker.field : null;
+              const changeLabels = (field: PickerField, keys: ProcessLabelKey[]) => {
+                const patch: Partial<ProcessStep> = {};
+                patch[field] = keys;
+                edit(withStep(document, index, patch));
+              };
+              return (
+                <Fragment key={step.id}>
+                  <tr
+                    className={step.enabled ? 'proc-row' : 'proc-row proc-row--off'}
+                    data-testid="process-step-row"
+                    data-step-id={step.id}
                   >
-                    {(Object.keys(KIND_TITLES) as ProcessStepKind[]).map((kind) => (
-                      <option key={kind} value={kind}>
-                        {KIND_TITLES[kind]}
-                      </option>
+                    <td>
+                      <input
+                        className="field__input proc-cell__input"
+                        type="number"
+                        min={1}
+                        max={999}
+                        aria-label={`Порядок ступени «${step.title}»`}
+                        data-testid="process-step-priority"
+                        value={step.priority}
+                        onChange={(event) =>
+                          edit(withStep(document, index, { priority: Number(event.target.value) || 0 }))
+                        }
+                      />
+                    </td>
+                    <td>
+                      <input
+                        className="field__input"
+                        aria-label={`Название ступени ${step.id}`}
+                        data-testid="process-step-title"
+                        value={step.title}
+                        onChange={(event) => edit(withStep(document, index, { title: event.target.value }))}
+                      />
+                      <span className="proc-row__id">{step.id}</span>
+                    </td>
+                    <td>
+                      <select
+                        className="field__select"
+                        aria-label={`Вид ступени «${step.title}»`}
+                        data-testid="process-step-kind"
+                        value={step.kind}
+                        onChange={(event) =>
+                          edit(withStep(document, index, { kind: event.target.value as ProcessStepKind }))
+                        }
+                      >
+                        {(Object.keys(KIND_TITLES) as ProcessStepKind[]).map((kind) => (
+                          <option key={kind} value={kind}>
+                            {KIND_TITLES[kind]}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    {(['when', 'unless', 'put', 'drop'] as PickerField[]).map((field) => (
+                      <LabelCell
+                        key={field}
+                        testId={`process-step-${field}`}
+                        field={field}
+                        step={step}
+                        value={step[field]}
+                        open={open === field}
+                        panelId={`process-picker-${step.id}-${field}`}
+                        onToggle={() => togglePicker(step.id, field)}
+                      />
                     ))}
-                  </select>
-                </td>
-                <td>
-                  <LabelPicker
-                    testId="process-step-when"
-                    label={`Входящие метки ступени «${step.title}»`}
-                    value={step.when}
-                    names={document.labels}
-                    onChange={(keys) => edit(withStep(document, index, { when: keys }))}
-                  />
-                </td>
-                <td>
-                  <LabelPicker
-                    testId="process-step-unless"
-                    label={`Исключающие метки ступени «${step.title}»`}
-                    value={step.unless}
-                    names={document.labels}
-                    onChange={(keys) => edit(withStep(document, index, { unless: keys }))}
-                  />
-                </td>
-                <td>
-                  <LabelPicker
-                    testId="process-step-put"
-                    label={`Ставит ступень «${step.title}»`}
-                    value={step.put}
-                    names={document.labels}
-                    onChange={(keys) => edit(withStep(document, index, { put: keys }))}
-                  />
-                </td>
-                <td>
-                  <LabelPicker
-                    testId="process-step-drop"
-                    label={`Снимает ступень «${step.title}»`}
-                    value={step.drop}
-                    names={document.labels}
-                    onChange={(keys) => edit(withStep(document, index, { drop: keys }))}
-                  />
-                </td>
-                <td>
-                  <select
-                    className="field__select"
-                    aria-label={`Страж ступени «${step.title}»`}
-                    data-testid="process-step-guard"
-                    value={step.guard ?? ''}
-                    onChange={(event) =>
-                      edit(withStep(document, index, { guard: event.target.value === '' ? null : event.target.value }))
-                    }
-                  >
-                    <option value="">— нет —</option>
-                    {guards.map((guard) => (
-                      <option key={guard.id} value={guard.id}>
-                        {guard.title}
-                      </option>
-                    ))}
-                  </select>
-                </td>
-                <td>
-                  <select
-                    className="field__select"
-                    aria-label={`Роль ступени «${step.title}»`}
-                    data-testid="process-step-role"
-                    value={step.role ?? ''}
-                    onChange={(event) =>
-                      edit(withStep(document, index, { role: event.target.value === '' ? null : event.target.value }))
-                    }
-                  >
-                    {roleOptions.map((role) => (
-                      <option key={role ?? 'none'} value={role ?? ''}>
-                        {role === null ? '— нет —' : (RESOLVER_TITLES[role] ?? role)}
-                      </option>
-                    ))}
-                  </select>
-                </td>
-                <td>
-                  <input
-                    type="checkbox"
-                    aria-label={`Ступень «${step.title}» включена`}
-                    data-testid="process-step-enabled"
-                    checked={step.enabled}
-                    onChange={(event) => edit(withStep(document, index, { enabled: event.target.checked }))}
-                  />
-                </td>
-              </tr>
-            ))}
+                    <td>
+                      <select
+                        className="field__select"
+                        aria-label={`Страж ступени «${step.title}»`}
+                        data-testid="process-step-guard"
+                        value={step.guard ?? ''}
+                        onChange={(event) =>
+                          edit(
+                            withStep(document, index, {
+                              guard: event.target.value === '' ? null : event.target.value,
+                            }),
+                          )
+                        }
+                      >
+                        <option value="">— нет —</option>
+                        {guards.map((guard) => (
+                          <option key={guard.id} value={guard.id}>
+                            {guard.title}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td>
+                      <select
+                        className="field__select"
+                        aria-label={`Роль ступени «${step.title}»`}
+                        data-testid="process-step-role"
+                        value={step.role ?? ''}
+                        onChange={(event) =>
+                          edit(
+                            withStep(document, index, {
+                              role: event.target.value === '' ? null : event.target.value,
+                            }),
+                          )
+                        }
+                      >
+                        {roleOptions.map((role) => (
+                          <option key={role ?? 'none'} value={role ?? ''}>
+                            {role === null ? '— нет —' : (RESOLVER_TITLES[role] ?? role)}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td>
+                      <input
+                        type="checkbox"
+                        aria-label={`Ступень «${step.title}» включена`}
+                        data-testid="process-step-enabled"
+                        checked={step.enabled}
+                        onChange={(event) =>
+                          edit(withStep(document, index, { enabled: event.target.checked }))
+                        }
+                      />
+                    </td>
+                  </tr>
+                  {open !== null && (
+                    <tr className="proc-picker-row">
+                      <td colSpan={10}>
+                        <LabelPicker
+                          id={`process-picker-${step.id}-${open}`}
+                          testId={`process-step-${open}`}
+                          field={open}
+                          value={step[open]}
+                          onChange={(keys) => changeLabels(open, keys)}
+                          onClose={() => setOpenPicker(null)}
+                        />
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              );
+            })}
           </tbody>
         </table>
       </div>
