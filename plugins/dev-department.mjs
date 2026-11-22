@@ -131,6 +131,20 @@ import {
   telegramOf,
   writeRegistryFile,
 } from './registry.mjs'
+// Процесс отдела как данные: таблица ступеней, проверка сохранённого в вебе
+// документа, имена меток и матчер. Диспетчер её только исполняет — порядок
+// ступеней и переходы меток задаёт документ, а не ветвления `dispatch()`.
+import {
+  PROCESS_LABEL_KEYS,
+  activeOfPlan,
+  isActiveStep,
+  isEntryStep,
+  labelsOfProcess,
+  nextOfPlan,
+  planOfProcess,
+  processOf,
+  queueOfPlan,
+} from './process.mjs'
 
 // ОБЩИЕ значения по умолчанию для проектов, которые своё не задали. Данных
 // конкретного проекта здесь нет и быть не должно: они в реестре проектов
@@ -346,35 +360,10 @@ const START_GRACE_MS = 2 * 60 * 1000
 const INFRA_BACKOFF_MS = 10 * 60 * 1000
 const INFRA_BACKOFF_MAX_MS = 40 * 60 * 1000
 
-// Метки конвейера по умолчанию. Реестр проектов может их переопределить полем
-// labels у проекта — тогда работает оно.
-const PIPELINE_LABELS = {
-  dev: 'ready-for-dev',
-  // Ступень последовательного маршрута «бэкенд → фронтенд». Ставит её диспетчер,
-  // а не агент: на тикете полного стека код-ревью после бэкенд-части — это ещё не
-  // весь тикет, и фронтенд должен получить ту же ветку и тот же PR.
-  frontend: 'ready-for-frontend',
-  // Маршрут реализации. Метка живёт на тикете всю жизнь, поэтому возврат в
-  // доработку попадает той же роли, что делала изменение.
-  areaBackend: 'area:backend',
-  areaFrontend: 'area:frontend',
-  areaFullstack: 'area:fullstack',
-  // Фаза тикета полного стека: фронтенд-часть уже начата. Переживает in-progress,
-  // поэтому «продолжи» после зависшего хода не возвращается бэкендеру.
-  phaseFrontend: 'phase:frontend',
-  // Ступень постановки: дизайнер делает макет раньше, чем задача уходит в
-  // разработку. needs-mockup ставит автор постановки, mockups-ready — дизайнер.
-  // Пока второй метки нет, тикет в очередь разработки не попадает.
-  mockup: 'needs-mockup',
-  mockupsReady: 'mockups-ready',
-  progress: 'in-progress',
-  review: 'for-code-review',
-  test: 'ready-for-test',
-  ok: 'tested',
-  failed: 'test-failed',
-  // Финальная ступень: тестировщик принял, DevOps-инженер слил PR.
-  merged: 'merged',
-}
+// Метки конвейера по умолчанию — данные процесса отдела (`plugins/process.mjs`):
+// конвейер исполняет документ из веба, и второй копии набора меток в диспетчере
+// быть не должно. Проект переопределяет имена полем `labels` реестра или
+// документом процесса — см. `labelsOfProcess`.
 
 // Причина закрытия смены. Различать важно: окно закрывается само по часам,
 // а вручную смену закрывает человек инструментом dev_department_summary.
@@ -449,6 +438,28 @@ const PRESETS_SOURCE = ['./agent-presets/', '../../../agent-presets/']
 const PRESETS_TEMPLATE = fileURLToPath(
   new URL('./agent-presets-template/agent.cordis.yml', import.meta.url)
 )
+
+// Каталог ролей хоста: подкаталоги пресетов в пакете и в пользовательском корне
+// (роль, заведённая в вебе, лежит только там). По нему проверяется `role` ступени
+// процесса: роль, которой хост не знает, не поднимет сессию, и молча пропустить
+// такую ступень нельзя — это `problem` проекта и умолчания вместо документа.
+// Пустой список означает «каталог не прочитан»: тогда проверка роли не делается,
+// иначе нечитаемый каталог отменял бы любой сохранённый процесс.
+function hostRoleCodes() {
+  const codes = new Set()
+  for (const dir of [PRESETS_SOURCE, path.join(dshHome(), '.agent-presets')]) {
+    let entries = []
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true })
+    } catch (error) {
+      continue
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory()) codes.add(entry.name)
+    }
+  }
+  return codes.size > 0 ? Array.from(codes) : undefined
+}
 
 // База API из адреса ручки реестра: `registry.apiUrl` — это
 // `http://localhost:8096/api/registry`, а пресетам нужен `http://localhost:8096`.
@@ -714,10 +725,18 @@ function projectRow(registry, id, shared) {
     problems.push(id + ': отдел включён, но расписание не задано ни у проекта, ни в общих настройках')
   }
 
+  // Процесс отдела: сохранённый в вебе документ, иначе умолчания. Негодный документ
+  // процессом не становится — отдел работает на умолчаниях, а причина остаётся в
+  // `problems` и в статусе. Останавливать смену из-за опечатки в вебе нельзя.
+  const process = processOf(dept.process, { roles: hostRoleCodes() })
+  for (const problem of process.problems) problems.push(id + ': процесс: ' + problem)
+
   return Object.assign({}, fields, {
     id,
     title: typeof project.title === 'string' && project.title ? project.title : id,
-    labels: Object.assign({}, PIPELINE_LABELS, fields.labels || {}),
+    // Имена меток: сохранённый процесс → локальные `labels` файла → умолчания.
+    labels: labelsOfProcess(process, fields.labels),
+    process,
     problems,
     department: {
       enabled,
@@ -2070,60 +2089,114 @@ export default {
       return false
     }
 
-    // Единственный «активный» тикет проекта: сначала тот, что ждёт код-ревью,
-    // затем ждущий тестировщика, затем отклонённый, затем взятый, но не доведённый.
-    // Ревью стоит выше теста: оно раньше в конвейере, и тикет, помеченный обоими
-    // (ревьюер принял, но метку не снял), должен доехать до ревью, а не проскочить.
+    // ── матчер: какая ступень и какому тикету ───────────────────────────────
+    //
+    // Порядок ступеней и переходы меток задаёт документ процесса отдела
+    // (`plugins/process.mjs`), а не ветвления этого файла. Здесь остаётся только
+    // перевод «метки GitHub → ключи контракта» и выбор роли ступени.
+
+    // Ключ контракта по стоящей метке: имена меток проекта — тоже данные (`labels`
+    // файла или документа), поэтому обратное отображение строится каждый раз от
+    // текущих имён, а не от констант.
+    function keysOfIssue(project, issue) {
+      const L = project.labels
+      const keys = []
+      for (const key of PROCESS_LABEL_KEYS) {
+        if (L[key] && has(issue, L[key])) keys.push(key)
+      }
+      return keys
+    }
+
+    // Тикеты в форме, которую ждёт матчер: снятый с конвейера тикет ждёт человека,
+    // и диспетчер его не берёт, пока человек не вернёт ready-for-dev (блок
+    // возврата в step()); иначе живая сессия, дописавшая метку после снятия,
+    // завезла бы тикет обратно.
+    function processItems(project, issues) {
+      const st = projectState(project.id)
+      return issues.map((issue) => ({
+        item: issue,
+        labels: keysOfIssue(project, issue),
+        dropped: Boolean(st.dropped[issue.number]),
+      }))
+    }
+
+    // План на тик: ступени по приоритету и тикеты по порядку GitHub. Вне смены
+    // исполняется только маршрутная ступень (`kinds`) — работа сессий требует
+    // открытого окна.
+    function planFor(project, issues, options = {}) {
+      return planOfProcess(project.process.document, processItems(project, issues), options)
+    }
+
+    // Тикет и ступень, которые тик должен обслужить: первая ступень плана.
+    // Тикет и ступень, которые тик должен обслужить: первая ступень плана. Маршрутную
+    // ступень берём, только если маршрут по постановке вообще выводится: без признаков
+    // разметки она бы крутилась вхолостую и держала тикет впереди выдачи, а старая
+    // ступень в этом случае выдавала задачу исполнителю по умолчанию.
+    function decisionOf(project, issues, options = {}) {
+      const plan = planFor(project, issues, Object.assign({}, options, {
+        skip: (step, item) => step.kind === 'route' && !classifyArea(project, item).area,
+      }))
+      const next = nextOfPlan(plan)
+      return next ? { step: next.step, issue: next.item, plan } : null
+    }
+
+    // Роль ступени. Резолверы (`by-area`, `by-findings`) сохранены как данные
+    // процесса: маршрут доработки по замечаниям и доработка идущей работы — это
+    // правила выбора роли, а не отдельные ступени.
+    async function stepRole(project, step, issue, L, kind) {
+      if (step.role === 'by-findings') return roleForRework(project, issue, L)
+      if (step.role === 'by-area') return (await roleForRework(project, issue, L)) || implementer(issue, L)
+      // Возврат в работу: маршрут доработки по замечаниям сильнее роли ступени.
+      // Null от резолвера — «пункты есть, путей не назвал ни один»: такую
+      // доработку снимает dropUnroutableRework в dispatch(), а не подстановка
+      // роли ступени, иначе тикет крутился бы в доработке без адреса.
+      if (step.guard === 'dispatch' && kind === 'rework') return roleForRework(project, issue, L)
+      return step.role
+    }
+
+    // Вид работы для задания исполнителя. Промпты различают начало, возврат из
+    // ревью или теста, половину фронтенда и продолжение — это читается по
+    // входящим меткам ступени, а не по её id.
+    function stepKind(project, step, issue) {
+      if (isActiveStep(step)) {
+        if (step.when.includes('failed')) return 'rework'
+        if (step.when.includes('frontend')) return 'stage'
+        if (step.when.includes('progress')) return 'continue'
+        return 'new'
+      }
+      // Вход, но диалог исполнителя по тикету уже был: это доработка, а не новая
+      // задача — иначе пара исполнитель↔код-ревью качалась бы без ограничения.
+      return anyImplementerDialog(project, issue) ? 'rework' : 'new'
+    }
+
+    // Переходы меток ступени: что поставить и что снять. Один запрос на метку,
+    // потому что набор меток тикета правится целиком.
+    async function applyStepLabels(project, issue, step) {
+      const L = project.labels
+      const put = (step.put || []).map((key) => L[key]).filter(Boolean)
+      const drop = (step.drop || []).map((key) => L[key]).filter(Boolean)
+      for (const name of put) {
+        await addLabel(project, issue.number, name)
+      }
+      if (drop.length > 0) await dropLabels(project, issue.number, drop)
+      return { put, drop }
+    }
+
+    // «Активный» тикет проекта для карточки статуса: тикет самой ранней начатой
+    // ступени плана. Роль выводится из ступени, поэтому карточка показывает то же
+    // решение, которое примет тик, — второй логики выбора здесь нет.
     async function findActive(project, issues) {
-      const L = project.labels
-      // Снятый с конвейера тикет ждёт человека: диспетчер его не берёт, пока
-      // человек не вернёт ready-for-dev (блок возврата в step()). Иначе живая
-      // сессия, дописавшая метку после снятия, завезла бы тикет обратно.
-      const st = projectState(project.id)
-      const live = issues.filter((i) => !st.dropped[i.number])
-      // Ступень фронтенда стоит первой: бэкенд-часть полного стека уже сделана,
-      // и тикет нельзя снова отдать ревьюеру или тестировщику — они увидят
-      // половину изменения.
-      const waitingFrontend = live.filter((i) => has(i, L.frontend))
-      if (waitingFrontend.length > 0) return { role: 'dev-frontend', issue: waitingFrontend[0], kind: 'stage' }
-      const waitingReview = live.filter((i) => has(i, L.review))
-      if (waitingReview.length > 0) return { role: 'code-review', issue: waitingReview[0], kind: 'review' }
-      const waitingTest = live.filter((i) => has(i, L.test))
-      if (waitingTest.length > 0) return { role: 'tester', issue: waitingTest[0] }
-      // Принятый тестировщиком тикет — уже не финал: его сливает DevOps-инженер.
-      // Метка тестировщика означает его зелёный вердикт, а не закрытую задачу.
-      const waitingMerge = live.filter((i) => has(i, L.ok))
-      if (waitingMerge.length > 0) return { role: 'devops-delivery', issue: waitingMerge[0], kind: 'merge' }
-      const failedTest = live.filter((i) => has(i, L.failed))
-      if (failedTest.length > 0) {
-        return { role: await roleForRework(project, failedTest[0], L), issue: failedTest[0], kind: 'rework' }
-      }
-      const taken = live.filter((i) => has(i, L.progress))
-      if (taken.length > 0) {
-        // Идущая работа не снимается из-за разбора замечаний: это не возврат
-        // из ревью, а тикет, по которому прямо сейчас шла работа (перезапуск
-        // DSH, снятый зависший ход). Нет путей — решает метка, как раньше.
-        const role = (await roleForRework(project, taken[0], L)) || implementer(taken[0], L)
-        return { role: role, issue: taken[0], kind: 'continue' }
-      }
-      return null
+      const active = activeOfPlan(planFor(project, issues))
+      if (!active) return null
+      const kind = stepKind(project, active.step, active.item)
+      const role = await stepRole(project, active.step, active.item, project.labels, kind)
+      return { role, issue: active.item, step: active.step, kind }
     }
 
+    // Очередь на выдачу: тикеты, ждущие ступени сессии. Макет и маршрут в очередь
+    // разработки не попадают — у них свои ступени.
     function queuedOf(project, issues) {
-      const L = project.labels
-      // Снятый тикет не возвращается в очередь сам: его возвращает только человек.
-      const st = projectState(project.id)
-      return issues.filter((i) => !st.dropped[i.number]
-        && has(i, L.dev)
-        && !has(i, L.progress) && !has(i, L.review) && !has(i, L.test) && !has(i, L.ok) && !has(i, L.failed)
-        // Макет — часть постановки: пока его нет, тикет в разработку не уходит.
-        // ready-for-dev при этом может стоять заранее, и это нормально.
-        && !(has(i, L.mockup) && !has(i, L.mockupsReady)))
-    }
-
-    function pickQueued(project, issues) {
-      const queued = queuedOf(project, issues)
-      return queued.length > 0 ? queued[0] : null
+      return queueOfPlan(planFor(project, issues)).map((entry) => entry.item)
     }
 
     // ── входная ступень: маршрут по постановке ─────────────────────────────
@@ -2216,13 +2289,10 @@ export default {
       return has(issue, L.areaBackend) || has(issue, L.areaFrontend) || has(issue, L.areaFullstack)
     }
 
-    // Ставит маршрут тикету, которому его не поставили. Возвращает действие, чтобы
-    // следующий тик уже раздал задачу по метке, а не гадал повторно.
-    async function assignArea(project, issues) {
+    // Маршрут одному тикету: разметка постановки и след в тикете. Возвращает
+    // действие, чтобы следующий тик уже раздал задачу по метке, а не гадал повторно.
+    async function routeIssue(project, issue) {
       const L = project.labels
-      const open = queuedOf(project, issues).filter((i) => !hasAnyArea(i, L))
-      if (open.length === 0) return null
-      const issue = open[0]
       const verdict = classifyArea(project, issue)
       if (!verdict.area) return null
       const label = areaLabelOf(verdict.area, L)
@@ -2249,6 +2319,16 @@ export default {
         })
       }
       return { action: 'routed', project: project.id, issue: issue.number, area: verdict.area, label }
+    }
+
+    // Маршрут тикетам, которых ждёт маршрутная ступень процесса: вне смены это
+    // единственная работа, которая идёт без сессии.
+    async function assignArea(project, issues) {
+      const L = project.labels
+      const routed = planFor(project, issues, { kinds: ['route'] }).map((entry) => entry.item)
+      const open = routed.filter((i) => !hasAnyArea(i, L))
+      if (open.length === 0) return null
+      return routeIssue(project, open[0])
     }
 
     // ── запуск сессий ролей ────────────────────────────────────────────────
@@ -3002,78 +3082,44 @@ export default {
       return null
     }
 
-    // Передача тикета полного стека фронтенду. Три состояния, и каждое требует
-    // своего решения:
-    //   1. бэкендер поставил for-code-review и открыл PR — ревьюер смотрит первую
-    //      половину; передача ждёт его вердикта;
-    //   2. ревьюер принял (ready-for-test), фазы фронтенда ещё нет — передаём
-    //      тикет фронтенду, тестировщику он уйдёт только после второй половины;
-    //   3. for-code-review без PR — бэкенд-части в постановке не было, смотреть
-    //      ревьюеру нечего: сразу передаём фронтенду.
-    async function handOffToFrontend(project, issues) {
+    // Передача тикета полного стека фронтенду — вторая половина работы. Два пути
+    // ведут сюда, и оба — ступени процесса:
+    //   1. ревьюер принял (ready-for-test) — тикет ждёт ступень `handoff-frontend`
+    //      (вид `auto`): она ставит ready-for-frontend и снимает ready-for-test;
+    //   2. for-code-review без PR — бэкенд-части в постановке не было, смотреть
+    //      ревьюеру нечего: страж `no-code` передаёт тикет фронтенду сразу, не
+    //      тратя круг ревью.
+    // Комментарий, сброс счётчика и пустой ход половины одинаковы для обоих путей.
+    async function handOffFullstack(project, issue, reason) {
       const L = project.labels
-      const candidates = issues.filter((i) => has(i, L.areaFullstack)
-        && !has(i, L.phaseFrontend)
-        && (has(i, L.review) || has(i, L.test)))
-      if (candidates.length === 0) return null
-      for (const issue of candidates) {
-        let pr = null
-        try {
-          pr = await findPr(project, issue.number)
-        } catch (error) {
-          // GitHub не ответил: не решаем за ревьюера и не передаём вслепую.
-          return null
-        }
-        if (has(issue, L.review) && pr) return null
-        const fromLabel = has(issue, L.test) ? L.test : L.review
-        const reason = pr ? 'бэкенд-часть прошла код-ревью' : 'бэкенд-части в постановке не было'
-        // PR нет — первая половина вернулась без ревизии: записываем её пустой ход
-        // тем же ключом, что и dispatch(). Если и вторая половина вернётся ни с
-        // чем, тикет снимется со всеми метками, а комментарий назовёт обе.
-        if (!pr) markNoWork(project, issue)
-        await dropLabels(project, issue.number, [fromLabel, L.review])
-        await addLabel(project, issue.number, L.frontend)
-        // Передача — это прогресс диспетчера, а не неудачная попытка агента:
-        // счётчик обнуляем, иначе вторая половина сгорала бы на первом же шаге.
-        projectState(project.id).attempts[issue.number] = 0
-        await postComment(project, issue.number, 'тикет передан фронтенд-разработчику',
-          reason + ' — тикет передан фронтенд-разработчику (' + L.frontend +
-            '). Он продолжит в той же ветке и том же PR. Код-ревью и тест будут после второй половины.')
-        const st = projectState(project.id)
-        if (st.run) {
-          st.run.entries.push({
-            number: issue.number,
-            title: issue.title,
-            role: 'dev-backend',
-            outcome: reason + ' — передано фронтенду (' + L.frontend + ')',
-          })
-        }
-        return { action: 'handoff', project: project.id, issue: issue.number, issueTitle: issue.title, reason }
+      await dropLabels(project, issue.number, [L.review, L.test])
+      await addLabel(project, issue.number, L.frontend)
+      // Передача — это прогресс диспетчера, а не неудачная попытка агента:
+      // счётчик обнуляем, иначе вторая половина сгорала бы на первом же шаге.
+      projectState(project.id).attempts[issue.number] = 0
+      await postComment(project, issue.number, 'тикет передан фронтенд-разработчику',
+        reason + ' — тикет передан фронтенд-разработчику (' + L.frontend +
+          '). Он продолжит в той же ветке и том же PR. Код-ревью и тест будут после второй половины.')
+      const st = projectState(project.id)
+      if (st.run) {
+        st.run.entries.push({
+          number: issue.number,
+          title: issue.title,
+          role: 'dev-backend',
+          outcome: reason + ' — передано фронтенду (' + L.frontend + ')',
+        })
       }
-      return null
+      return { action: 'handoff', project: project.id, issue: issue.number, issueTitle: issue.title, reason }
     }
 
     // ── ступень постановки: макет ──────────────────────────────────────────
-
+    //
     // Тикет, которому автор постановки поставил needs-mockup, проходит через
     // дизайнера раньше разработки. Ступень работает без ready-for-dev: макет —
     // часть постановки, и человек ставит свою метку уже по готовому визуальному
-    // ответу. Как только дизайнер поставил mockups-ready, тикет становится
-    // обычной очередью разработки (см. queuedOf).
-    function mockupStage(project, issues) {
-      const L = project.labels
-      const st = projectState(project.id)
-      const waiting = issues.filter((i) => has(i, L.mockup)
-        && !has(i, L.mockupsReady)
-        && !has(i, L.progress)
-        && !has(i, L.review)
-        && !has(i, L.test)
-        && !has(i, L.ok)
-        && !has(i, L.merged)
-        && !st.dropped[i.number])
-      if (waiting.length === 0) return null
-      return { role: 'design', issue: waiting[0], kind: 'mockup' }
-    }
+    // ответу. Выбор тикета — дело матчера (`steps`: ступень `mockup` с входящими
+    // метками needs-mockup и «кроме» mockups-ready), а страж `mockup-stage`
+    // в dispatch() решает, что делать с уже начатым тикетом.
 
     // ── один шаг диспетчера по проекту ─────────────────────────────────────
 
@@ -3339,11 +3385,11 @@ export default {
       // иначе повторный круг по `plugins/*` сам же снимает тикет. `null` остаётся
       // только для «путь не назвал ни один пункт».
       const owner = halfOwner(refused)
-      return dispatch(project, {
-        role: owner || (refused.some((item) => item.path) ? implementer(issue, L) : null),
-        issue: issue,
-        kind: 'rework',
-      })
+      const target = owner || (refused.some((item) => item.path) ? implementer(issue, L) : null)
+      // Маршрута нет ни по половинам, ни по метке — повторный круг снимет тикет
+      // штатным путём: это тот же случай, что у пустых замечаний в dispatch().
+      if (!target) return dropUnroutableRework(project, issue)
+      return startImplementer(project, issue, target, 'rework')
     }
 
     // «Смотреть нечего» — ревьюеру нет ревизии. Причин три, ветка одна: PR по
@@ -3425,16 +3471,130 @@ export default {
       delete st.noWork[issue.number]
     }
 
+    // Выдача задачи разработчику — одна на все ступени сессий исполнителей: ступень
+    // задаёт только роль, маршрут доработки и переходы меток, а лимиты, счётчики,
+    // следы и запуск сессии общие.
+
+    async function startImplementer(project, issue, role, kind) {
+      const st = projectState(project.id)
+      const L = project.labels
+      // Ревьюер написал BLOCKED — проверять ему было нечего. Такой возврат
+      // доработкой не считается: сессия половины не создаётся, бюджет не растёт
+      // (выход идёт ДО увеличения счётчика, поэтому откатывать нечего), а тикету
+      // находится другой путь — та же ветка «работы нет», что у пустого PR.
+      // После test-failed вердикт ревьюера ни при чём: там решает метка.
+      if (kind === 'rework' && !has(issue, L.failed)) {
+        const verdict = await reviewerVerdict(project, issue)
+        if (verdict === 'BLOCKED') {
+          delete st.findings[issue.number]
+          return noCodeBranch(project, issue, {
+            text: 'ревью не состоялось: код-ревьюер написал BLOCKED — проверять нечего',
+            reason: 'review blocked without code',
+          })
+        }
+      }
+      const rounds = st.rework[issue.number] || 0
+      if (kind === 'rework' && rounds >= project.department.maxRework) {
+        await postComment(project, issue.number, 'лимит доработок исчерпан',
+          'Этот возврат был бы №' + (rounds + 1) + ' при лимите ' + project.department.maxRework +
+            '. Тикет снят с конвейера, нужен человек: поставь ' + L.dev +
+            ', и счётчики вместе с диалогами обнулятся.')
+        await dropFromPipeline(project, issue)
+        st.run.entries.push({ number: issue.number, title: issue.title, outcome: 'снят с конвейера после ' + rounds + ' доработок' })
+        return { action: 'dropped', project: project.id, issue: issue.number, reason: 'too many rework rounds' }
+      }
+      if (kind === 'rework') st.rework[issue.number] = rounds + 1
+      // Пути из замечаний, по которым выбран маршрут: половина и до пяти путей
+      // уходят в задание, до трёх — в комментарий тикета. След маршрута в тикете
+      // один, и он же объясняет, почему доработка ушла этой роли.
+      const findings = kind === 'rework' ? takeFindings(st, issue.number, role) : { paths: [], source: '' }
+      const findingPaths = findings.paths
+      if (kind !== 'rework') delete st.findings[issue.number]
+      // Счётчик доработок живёт в памяти диспетчера и в тикете нигде не
+      // виден. Пишем номер круга в issue: по комментариям должно быть
+      // понятно, который это возврат из ревью или теста.
+      if (kind === 'rework') {
+        try {
+          await postComment(project, issue.number,
+            'доработка №' + (rounds + 1) + ' из ' + project.department.maxRework,
+            'Возврат ' + (has(issue, L.failed) ? 'из теста' : 'из код-ревью') +
+              findingsTrace(role, findingPaths) + '.')
+        } catch (error) {
+          state.lastError = 'комментарий о номере доработки: ' + (error && error.message ? error.message : String(error))
+        }
+      }
+      // Захват нормализуем здесь, а не в агенте: у конвейера должен оставаться
+      // ровно один активный маркер, иначе следующий шаг неоднозначен.
+      if (kind === 'new' || kind === 'rework' || kind === 'stage') {
+        await addLabel(project, issue.number, L.progress)
+        // Возврат из ревью приходит с ready-for-dev, из теста — с test-failed,
+        // ступень фронтенда — с ready-for-frontend; снимаем всё, чтобы на тикете
+        // не осталось чужого шага.
+        const stale = [L.dev, L.failed, L.review]
+        if (kind === 'stage') stale.push(L.frontend)
+        await dropLabels(project, issue.number, stale)
+      }
+      // Фаза фронтенда полного стека помечается меткой, которая переживает
+      // in-progress: по ней диспетчер понимает, кому продолжать и кому
+      // возвращать доработку, если ход завис или ревьюер вернул тикет.
+      if (role === 'dev-frontend' && has(issue, L.areaFullstack)) {
+        try {
+          await addLabel(project, issue.number, L.phaseFrontend)
+        } catch (error) {
+          state.lastError = 'метка фазы фронтенда: ' + (error && error.message ? error.message : String(error))
+        }
+      }
+      const prompt = implementerPrompt(project, issue, kind, !!existingDialog(project, role, issue.number), role, findingPaths, findings.source)
+      const sessionId = await startSession(project, role, prompt, issue)
+      st.session = { role: role, issue: issue.number, title: issue.title, sessionId, startedAt: new Date().toISOString() }
+      st.run.sessions = (st.run.sessions || 0) + 1
+      return { action: 'dispatched', project: project.id, role: role, issue: issue.number, sessionId }
+    }
+    // Исполнение одной ступени процесса: роль, стражи и переходы меток берутся из
+    // строки таблицы, а работа с GitHub, счётчиками и сессиями остаётся здесь.
     async function dispatch(project, decision) {
       const st = projectState(project.id)
       const L = project.labels
-      const { role, issue } = decision
+      const issue = decision.issue
+      const step = decision.step
+      // Вид работы для задания и журнала читается по входящим меткам ступени, а не
+      // по её id: у документа из веба id произвольные.
+      const kind = stepKind(project, step, issue)
+      let role = await stepRole(project, step, issue, L, kind)
       // Маршрут доработки не определён: пункты прочитаны, но пути не назвал ни
       // один. Снимать за это можно только возврат из ревью — у идущей работы и у
       // возврата тестировщика маршрут обязан остаться: там берётся метка.
       if (role === null) {
-        if ((decision.kind || 'new') === 'rework') return dropUnroutableRework(project, issue)
-        return dispatch(project, { role: implementer(issue, L), issue: issue, kind: decision.kind })
+        if (kind === 'rework') return dropUnroutableRework(project, issue)
+        role = implementer(issue, L)
+      }
+      // Ступень без сессии: диспетчер только переставляет метки и оставляет след.
+      // Передача фронтенду — та же ступень, но с передачей половины работы.
+      if (step.kind === 'auto') {
+        if (step.put.includes('frontend') && has(issue, L.areaFullstack) && !has(issue, L.phaseFrontend)) {
+          return handOffFullstack(project, issue, 'бэкенд-часть прошла код-ревью')
+        }
+        await applyStepLabels(project, issue, step)
+        if (st.run) {
+          st.run.entries.push({
+            number: issue.number,
+            title: issue.title,
+            role: role,
+            outcome: 'ступень «' + step.title + '»: метки переставлены без сессии',
+          })
+        }
+        return { action: 'transitioned', project: project.id, issue: issue.number, step: step.id }
+      }
+      // Маршрутная ступень: разметка постановки, тоже без сессии.
+      if (step.kind === 'route') {
+        const routed = await routeIssue(project, issue)
+        if (routed) return routed
+        return null
+      }
+      // Ступень уже слитого PR: состояние дописывается по факту, сессия не нужна.
+      if (step.guard === 'merged-already') {
+        const settled = await settleAlreadyMerged(project, [issue])
+        if (settled) return settled
       }
       // Ревизия, на которой сейчас выдаётся ревью. Записывается в reviewedHead
       // только после того, как сессия ревьюера создана: упавшее создание сессии
@@ -3446,7 +3606,12 @@ export default {
       //   2) 'sha' и та же ревизия — сторож пустого круга;
       //   3) 'sha' и новая ревизия — гейт чеклиста прошлого круга, затем ревью;
       //   4) 'none' — смотреть нечего (PR нет или дифф пустой), сессия не создаётся.
-      if (role === 'code-review') {
+      // Ветви — одна последовательность хода ревьюера, поэтому ступень входа в неё
+      // называет любой из трёх стражей (`same-head`, `checklist-gate`, `no-code`):
+      // страж строки говорит, ради какой проверки ступень заведена, а не отменяет
+      // остальные. У ступени `review` по умолчанию страж `no-code`.
+      const reviewStage = step.guard === 'same-head' || step.guard === 'checklist-gate' || step.guard === 'no-code'
+      if (reviewStage) {
         const head = await reviewHead(project, issue)
         if (head.kind === 'sha' && head.same) {
           // Сторож пустого круга. Если разработчик закончил ход, не запушив
@@ -3481,15 +3646,17 @@ export default {
           // Круг без коммита не считается доработкой: возвращаем счётчик назад,
           // чтобы пустые круги не съедали бюджет задачи.
           st.rework[issue.number] = Math.max(0, (st.rework[issue.number] || 0) - 1)
-          return dispatch(project, { role: owner, issue: issue, kind: 'rework' })
-        } else if (head.kind === 'sha') {
+          return startImplementer(project, issue, owner, 'rework')
+        }
+        if (head.kind === 'sha') {
           // Чеклист прошлого круга проверяется ДО создания сессии: незакрытый
           // пункт — не повод звать ревьюера, а отмеченный пункт без изменения
           // файла — не исправленный пункт.
           const gate = await reviewChecklistGate(project, issue, head, st)
           if (gate) return gate
           reviewSha = head.sha
-        } else if (head.kind === 'none') {
+        }
+        if (head.kind === 'none') {
           // Смотреть нечего: PR по ветке feature/<номер>-* не существует или в нём
           // пустой дифф. Ревьюеру нет ревизии — startSession('code-review') в этой
           // ветви недостижим, а вся уборка лежит в noCodeBranch().
@@ -3519,87 +3686,18 @@ export default {
       // mockups-ready. Бюджет доработок разработки эта ступень не тратит, а
       // ready-for-dev не снимается: человек мог поставить его заранее, и по
       // готовому макету задача уйдёт в разработку сама.
-      if (role === 'design' && (decision.kind === 'mockup' || decision.kind === 'mockup-rework')) {
+      if (role === 'design') {
         const repeat = existingDialog(project, 'design', issue.number)
-        await addLabel(project, issue.number, L.progress)
+        await applyStepLabels(project, issue, step)
         const sessionId = await startSession(project, 'design', mockupPrompt(project, issue, repeat), issue)
         st.session = { role: 'design', issue: issue.number, title: issue.title, sessionId, startedAt: new Date().toISOString() }
         st.run.sessions = (st.run.sessions || 0) + 1
         return { action: 'dispatched', project: project.id, role: 'design', stage: 'mockup', issue: issue.number, sessionId }
       }
+      // Выдача задачи разработчику — ступень сессии исполнителя: роль, маршрут
+      // доработки и переходы меток берутся из строки процесса.
       if (role === 'dev-fullstack' || role === 'dev-backend' || role === 'dev-frontend') {
-        const kind = decision.kind || 'new'
-        // Ревьюер написал BLOCKED — проверять ему было нечего. Такой возврат
-        // доработкой не считается: сессия половины не создаётся, бюджет не растёт
-        // (выход идёт ДО увеличения счётчика, поэтому откатывать нечего), а тикету
-        // находится другой путь — та же ветка «работы нет», что у пустого PR.
-        // После test-failed вердикт ревьюера ни при чём: там решает метка.
-        if (kind === 'rework' && !has(issue, L.failed)) {
-          const verdict = await reviewerVerdict(project, issue)
-          if (verdict === 'BLOCKED') {
-            delete st.findings[issue.number]
-            return noCodeBranch(project, issue, {
-              text: 'ревью не состоялось: код-ревьюер написал BLOCKED — проверять нечего',
-              reason: 'review blocked without code',
-            })
-          }
-        }
-        const rounds = st.rework[issue.number] || 0
-        if (kind === 'rework' && rounds >= project.department.maxRework) {
-          await postComment(project, issue.number, 'лимит доработок исчерпан',
-            'Этот возврат был бы №' + (rounds + 1) + ' при лимите ' + project.department.maxRework +
-              '. Тикет снят с конвейера, нужен человек: поставь ' + L.dev +
-              ', и счётчики вместе с диалогами обнулятся.')
-          await dropFromPipeline(project, issue)
-          st.run.entries.push({ number: issue.number, title: issue.title, outcome: 'снят с конвейера после ' + rounds + ' доработок' })
-          return { action: 'dropped', project: project.id, issue: issue.number, reason: 'too many rework rounds' }
-        }
-        if (kind === 'rework') st.rework[issue.number] = rounds + 1
-        // Пути из замечаний, по которым выбран маршрут: половина и до пяти путей
-        // уходят в задание, до трёх — в комментарий тикета. След маршрута в тикете
-        // один, и он же объясняет, почему доработка ушла этой роли.
-        const findings = kind === 'rework' ? takeFindings(st, issue.number, role) : { paths: [], source: '' }
-        const findingPaths = findings.paths
-        if (kind !== 'rework') delete st.findings[issue.number]
-        // Счётчик доработок живёт в памяти диспетчера и в тикете нигде не
-        // виден. Пишем номер круга в issue: по комментариям должно быть
-        // понятно, который это возврат из ревью или теста.
-        if (kind === 'rework') {
-          try {
-            await postComment(project, issue.number,
-              'доработка №' + (rounds + 1) + ' из ' + project.department.maxRework,
-              'Возврат ' + (has(issue, L.failed) ? 'из теста' : 'из код-ревью') +
-                findingsTrace(role, findingPaths) + '.')
-          } catch (error) {
-            state.lastError = 'комментарий о номере доработки: ' + (error && error.message ? error.message : String(error))
-          }
-        }
-        // Захват нормализуем здесь, а не в агенте: у конвейера должен оставаться
-        // ровно один активный маркер, иначе следующий шаг неоднозначен.
-        if (kind === 'new' || kind === 'rework' || kind === 'stage') {
-          await addLabel(project, issue.number, L.progress)
-          // Возврат из ревью приходит с ready-for-dev, из теста — с test-failed,
-          // ступень фронтенда — с ready-for-frontend; снимаем всё, чтобы на тикете
-          // не осталось чужого шага.
-          const stale = [L.dev, L.failed, L.review]
-          if (kind === 'stage') stale.push(L.frontend)
-          await dropLabels(project, issue.number, stale)
-        }
-        // Фаза фронтенда полного стека помечается меткой, которая переживает
-        // in-progress: по ней диспетчер понимает, кому продолжать и кому
-        // возвращать доработку, если ход завис или ревьюер вернул тикет.
-        if (role === 'dev-frontend' && has(issue, L.areaFullstack)) {
-          try {
-            await addLabel(project, issue.number, L.phaseFrontend)
-          } catch (error) {
-            state.lastError = 'метка фазы фронтенда: ' + (error && error.message ? error.message : String(error))
-          }
-        }
-        const prompt = implementerPrompt(project, issue, kind, !!existingDialog(project, role, issue.number), role, findingPaths, findings.source)
-        const sessionId = await startSession(project, role, prompt, issue)
-        st.session = { role: role, issue: issue.number, title: issue.title, sessionId, startedAt: new Date().toISOString() }
-        st.run.sessions = (st.run.sessions || 0) + 1
-        return { action: 'dispatched', project: project.id, role: role, issue: issue.number, sessionId }
+        return startImplementer(project, issue, role, kind)
       }
 
       if (role === 'devops-delivery') {
@@ -3823,43 +3921,22 @@ export default {
         st.run.entries.push({ number: issue.number, title: issue.title, role: 'человек', outcome: 'тикет возвращён в работу, попытки и доработки сброшены' })
       }
 
-      // Полный стек: код-ревью после бэкенд-части — ещё не весь тикет. Диспетчер
-      // сам снимает for-code-review и ставит ступень фронтенда, чтобы фронтенд
-      // лёг в ту же ветку и тот же PR, а не в отдельный.
-      const handoff = await handOffToFrontend(project, issues)
-      if (handoff) return handoff
-
-      const settled = await settleAlreadyMerged(project, issues)
-      if (settled) return settled
-
-      // Входная ступень: маршрут ставится по постановке, до раздачи исполнителю.
-      const routed = await assignArea(project, issues)
-      if (routed) return routed
-
-      const active = await findActive(project, issues)
-      if (active) return dispatch(project, active)
-
-      // Активного тикета нет — можно взять следующий, но только пока открыт
-      // хотя бы один диапазон работы.
-      if (inWin || opts.ignoreWindow) {
-        // Ступень постановки идёт раньше раздачи новых задач, но позже активных
-        // ступеней: ревью, тест и слияние доводят уже начатую работу, а макет
-        // только открывает следующую.
-        const mockupQueued = mockupStage(project, issues)
-        if (mockupQueued) return dispatch(project, mockupQueued)
-        const queued = pickQueued(project, issues)
-        // Тикет вернулся с код-ревью: метка ready-for-dev, но диалог исполнителя
-        // по нему уже был. Это доработка, а не новая задача — иначе пара
-        // исполнитель↔code-review качалась бы без ограничения.
-        if (queued) {
-          const rework = anyImplementerDialog(project, queued)
-          const role = rework
-            ? await roleForRework(project, queued, project.labels)
-            : implementer(queued, project.labels)
-          return dispatch(project, { role: role, issue: queued, kind: rework ? 'rework' : 'new' })
-        }
-        return null
+      // Решение принимает таблица процесса: первая ступень плана по приоритету.
+      // Стражи и переходы меток исполняет dispatch(), а порядок «что раньше»
+      // задан документом — его правят в вебе, а не в этом файле.
+      const decision = decisionOf(project, issues)
+      if (decision) {
+        // Открытый диапазон нужен только ступени входа: она берёт свежий тикет из
+        // очереди. Начатая работа доводится и вне окна — её нельзя бросать на
+        // середине, а ступени без сессии (маршрут, передача половины, слитый PR)
+        // вообще книга, а не ход агента.
+        if (!isEntryStep(decision.step)) return dispatch(project, decision)
+        if (inWin || opts.ignoreWindow) return dispatch(project, decision)
       }
+
+      // Внутри окна и делать нечего — пустой тик, а не конец смены: ждём
+      // следующего, смена закроется сама по расписанию.
+      if (inWin || opts.ignoreWindow) return null
 
       // Вне окна и делать нечего: смена проекта закрыта. Незаконченная работа к
       // этому моменту уже доведена — до этой точки доходит только пустой конвейер.
@@ -4423,6 +4500,15 @@ export default {
             },
             shift: st.run ? { startedAt: st.run.startedAt, sessions: st.run.sessions || 0, manual: !!st.run.manual } : null,
             lastShiftKey: st.lastShiftKey,
+            // Чем отдел исполняет конвейер: документ из веба или умолчания, его
+            // отпечаток и сколько в нём ступеней. Негодный документ виден здесь же
+            // `problems`: он процессом не стал, и это надо увидеть, не читая лог.
+            process: {
+              source: project.process.source,
+              digest: project.process.digest,
+              steps: project.process.document.steps.filter((step) => step.enabled !== false).length,
+              problems: project.process.problems,
+            },
             session: st.session,
             attempts: st.attempts,
             reworkCounters: st.rework,
@@ -4436,7 +4522,7 @@ export default {
                 number: active.issue.number,
                 title: active.issue.title,
                 role: active.role,
-                kind: active.kind || (active.role === 'tester' ? 'test' : active.role === 'code-review' ? 'review' : active.role === 'devops-delivery' ? 'merge' : 'new'),
+                kind: active.kind,
                 labels: labelsOf(active.issue),
               }
               : null
@@ -4450,7 +4536,7 @@ export default {
                 ? 'поднять code-review по issue #' + active.issue.number
                 : active.role === 'tester'
                   ? 'поднять tester по issue #' + active.issue.number
-                  : 'поднять ' + active.role + ' по issue #' + active.issue.number + ' (' + (active.kind || 'new') + ')')
+                  : 'поднять ' + active.role + ' по issue #' + active.issue.number + ' (' + active.kind + ')')
               : (queued.length > 0
                 ? (inWin ? 'в окне — взять issue #' + queued[0].number : 'вне окна — ждать расписания, тогда issue #' + queued[0].number)
                 : 'делать нечего: очередь пуста')

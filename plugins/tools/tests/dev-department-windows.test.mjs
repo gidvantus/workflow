@@ -19,7 +19,7 @@ fs.writeFileSync(moduleFile, source.slice(0, cut) + '\nexport { ' + present.join
 // (`./state-paths.mjs`, `./registry.mjs`, `./presets.mjs`), а вырезанная копия
 // лежит в каталоге набора: без копий рядом Node искал бы модули здесь же и не
 // нашёл. Кладём рядом и убираем за собой тем же признаком, каким положили.
-const patched = ['state-paths', 'registry', 'presets']
+const patched = ['state-paths', 'registry', 'presets', 'process']
 const copied = []
 for (const name of patched) {
   const source = path.join(path.dirname(plugin), name + '.mjs')

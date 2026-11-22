@@ -1,0 +1,580 @@
+// Процесс отдела как данные: умолчания, проверка документа, имена меток и матчер ступеней.
+//
+// Модуль вынесен из `dev-department.mjs` по двум причинам. Первая — тест: матчер и
+// проверку документа можно проверять чистыми функциями, без фейкового ctx, таймеров и
+// GitHub. Вторая — источник правды: таблица ступеней и имена меток живут в одном месте,
+// а диспетчер только исполняет то, что вернул матчер.
+//
+// Документ процесса: `{version, labels, steps}`. Ступень: `{id, title, kind, role, when,
+// unless, put, drop, guard, priority, enabled}`. Метка в ступени — **ключ** из
+// `PROCESS_LABEL_KEYS`, а имя метки на GitHub — значение в `labels`. Поэтому
+// переименование метки в вебе не меняет таблицу ступеней.
+//
+// Копия таблицы умолчаний есть и в Python (`app/backend/app/process_defaults.py`):
+// `api` собирается из `app/backend`, диспетчер — из `plugins`, и файл репозитория не
+// читает ни один из них. Расхождение видно в статусе отдела полем `process.source`, а
+// совпадение строк проверяет тест `dev-department-process.test.mjs`.
+
+import crypto from 'node:crypto'
+
+/** Версия формата. Единственная поддерживаемая: вторая — правка постановки. */
+export const PROCESS_VERSION = 1
+
+/** Ключи меток: порядок фиксирован и совпадает с порядком блока имён на экране. */
+export const PROCESS_LABEL_KEYS = [
+  'mockup',
+  'mockupsReady',
+  'progress',
+  'dev',
+  'frontend',
+  'phaseFrontend',
+  'review',
+  'test',
+  'ok',
+  'failed',
+  'merged',
+  'areaBackend',
+  'areaFrontend',
+  'areaFullstack',
+]
+
+/**
+ * Имена меток по умолчанию — те же, что у зашитого конвейера. Это последний источник:
+ * сохранённый в вебе документ отдела и локальный `labels` файла `projects.json` стоят выше.
+ */
+export const DEFAULT_PROCESS_LABELS = {
+  mockup: 'needs-mockup',
+  mockupsReady: 'mockups-ready',
+  progress: 'in-progress',
+  dev: 'ready-for-dev',
+  frontend: 'ready-for-frontend',
+  phaseFrontend: 'phase:frontend',
+  review: 'for-code-review',
+  test: 'ready-for-test',
+  ok: 'tested',
+  failed: 'test-failed',
+  merged: 'merged',
+  areaBackend: 'area:backend',
+  areaFrontend: 'area:frontend',
+  areaFullstack: 'area:fullstack',
+}
+
+/**
+ * Каталог стражей: id и заголовок. Страж — код, а не данные: документ выбирает страж по
+ * id, написать новый в редакторе нельзя. Порядок совпадает с таблицей «Стражи» в
+ * `plugins/docs/DEPARTMENT-PROCESS.md`.
+ */
+export const GUARD_CATALOG = [
+  { id: 'route', title: 'Маршрут' },
+  { id: 'mockup-stage', title: 'Макет' },
+  { id: 'dispatch', title: 'Выдача' },
+  { id: 'no-code', title: 'Есть что ревьюить' },
+  { id: 'same-head', title: 'Та же ревизия' },
+  { id: 'checklist-gate', title: 'Чеклист прошлого круга' },
+  { id: 'limits', title: 'Лимиты' },
+  { id: 'merged-already', title: 'PR уже слит' },
+]
+
+/** Id стражей: по ним проверяется `guard` ступени. */
+export const GUARD_IDS = GUARD_CATALOG.map((guard) => guard.id)
+
+/** Вид ступени: что она делает, когда её условия выполнены. */
+export const STEP_KINDS = ['session', 'route', 'auto']
+
+/** Резолверы роли: половину работы и владельца замечаний решает код, а не документ. */
+export const ROLE_BY_AREA = 'by-area'
+export const ROLE_BY_FINDINGS = 'by-findings'
+export const ROLE_RESOLVERS = [ROLE_BY_AREA, ROLE_BY_FINDINGS]
+
+/**
+ * Метки «работа уже начата». Ступень, у которой такая метка в `when`, — ступень
+ * продолжения: она берёт тикет, по которому работа идёт, а не свежий из очереди.
+ * По этому признаку статус отличает активный тикет от ожидающего.
+ */
+export const ACTIVE_LABEL_KEYS = ['progress', 'review', 'test', 'ok', 'failed', 'frontend']
+
+/** Приоритет ступени: целое от 1 до 999, как в проверке веба. */
+export const PRIORITY_MIN = 1
+export const PRIORITY_MAX = 999
+
+/** Порядок строк таблицы: первая ступень — самая ранняя. Шаг 60 оставляет место между. */
+const PRIORITY_STEP = 60
+
+/**
+ * Одна ступень умолчаний: все ключи контракта, пустые — пустыми массивами.
+ * @param {number} priority
+ * @param {string} id
+ * @param {string} title
+ * @param {string[]} when
+ * @param {object} [extra]
+ * @returns {object}
+ */
+function step(priority, id, title, when, extra = {}) {
+  return {
+    id,
+    title,
+    kind: extra.kind || 'session',
+    role: extra.role || null,
+    when: [...when],
+    unless: [...(extra.unless || [])],
+    put: [...(extra.put || [])],
+    drop: [...(extra.drop || [])],
+    guard: extra.guard || null,
+    priority,
+    enabled: true,
+  }
+}
+
+/**
+ * Таблица ступеней по умолчанию — сегодняшний конвейер строка в строку: порядок строк
+ * таблицы §4.5 `plugins/docs/DEPARTMENT-PROCESS.md` и есть порядок `priority`.
+ *
+ * Порядок ветвлений тот же, что был зашит в `dispatch()`: макет → маршрут → передача
+ * фронтенду → ревью → тест → слияние → доработка → выдача → продолжение. Единственное
+ * отличие от старого кода — ступень макета стоит первой: постановка первична, и тикет,
+ * ждущий макет, не должен ждать, пока освободится чужая ступень.
+ */
+export const DEFAULT_PROCESS_STEPS = [
+  step(1, 'mockup', 'Макет постановки', ['mockup'], {
+    role: 'design',
+    unless: ['mockupsReady'],
+    put: ['progress'],
+    guard: 'mockup-stage',
+  }),
+  step(61, 'route', 'Маршрут по постановке', ['dev'], {
+    kind: 'route',
+    unless: [
+      'progress',
+      'review',
+      'test',
+      'ok',
+      'failed',
+      'areaBackend',
+      'areaFrontend',
+      'areaFullstack',
+    ],
+    guard: 'route',
+  }),
+  step(121, 'handoff-frontend', 'Передача фронтенду', ['test', 'areaFullstack'], {
+    kind: 'auto',
+    unless: ['phaseFrontend'],
+    put: ['frontend'],
+    drop: ['test'],
+  }),
+  step(181, 'review', 'Код-ревью', ['review'], { role: 'code-review', guard: 'no-code' }),
+  step(241, 'test', 'Тестирование', ['test'], { role: 'tester' }),
+  step(301, 'merge', 'Слияние', ['ok'], { role: 'devops-delivery', guard: 'merged-already' }),
+  step(361, 'rework-test', 'Доработка после тестировщика', ['failed'], {
+    role: ROLE_BY_FINDINGS,
+    put: ['progress'],
+    drop: ['failed'],
+    guard: 'dispatch',
+  }),
+  step(421, 'dev-backend', 'Бэкенд', ['dev', 'areaBackend'], {
+    role: 'dev-backend',
+    unless: ['progress', 'review', 'test', 'ok', 'failed'],
+    put: ['progress'],
+    drop: ['dev'],
+    guard: 'dispatch',
+  }),
+  step(481, 'dev-frontend', 'Фронтенд', ['dev', 'areaFrontend'], {
+    role: 'dev-frontend',
+    unless: ['progress', 'review', 'test', 'ok', 'failed'],
+    put: ['progress'],
+    drop: ['dev'],
+    guard: 'dispatch',
+  }),
+  step(541, 'dev-fullstack-backend', 'Полный стек: бэкенд', ['dev', 'areaFullstack'], {
+    role: 'dev-backend',
+    unless: ['progress', 'review', 'test', 'ok', 'failed'],
+    put: ['progress'],
+    drop: ['dev'],
+    guard: 'dispatch',
+  }),
+  step(601, 'dev-fullstack-frontend', 'Полный стек: фронтенд', ['frontend'], {
+    role: 'dev-frontend',
+    unless: ['progress', 'review', 'test', 'ok', 'failed'],
+    put: ['progress', 'phaseFrontend'],
+    drop: ['frontend'],
+    guard: 'dispatch',
+  }),
+  step(661, 'dev-fullstack-default', 'Полный стек без маршрута', ['dev'], {
+    role: 'dev-fullstack',
+    unless: ['progress', 'review', 'test', 'ok', 'failed'],
+    put: ['progress'],
+    drop: ['dev'],
+    guard: 'dispatch',
+  }),
+  step(721, 'continue', 'Продолжение взятой работы', ['progress'], {
+    role: ROLE_BY_AREA,
+    guard: 'dispatch',
+  }),
+]
+
+/** Документ процесса по умолчанию: новый объект на каждый вызов. */
+export function defaultProcess() {
+  return {
+    version: PROCESS_VERSION,
+    labels: { ...DEFAULT_PROCESS_LABELS },
+    steps: DEFAULT_PROCESS_STEPS.map((row) => ({
+      ...row,
+      when: [...row.when],
+      unless: [...row.unless],
+      put: [...row.put],
+      drop: [...row.drop],
+    })),
+  }
+}
+
+/** Объект, а не массив и не `null`: так же читает отдел `plugins/registry.mjs`. */
+function isObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+/** Строка с непустым значением после обрезки пробелов. */
+function isText(value) {
+  return typeof value === 'string' && value.trim() !== ''
+}
+
+/** Уникальные значения в порядке появления: повторы одного ключа в списке не нужны. */
+function unique(list) {
+  const seen = new Set()
+  const result = []
+  for (const value of list) {
+    if (seen.has(value)) continue
+    seen.add(value)
+    result.push(value)
+  }
+  return result
+}
+
+/**
+ * Привести список ключей меток ступени к каноническому виду.
+ *
+ * Возвращает `{keys, problem}`: `problem` — текст отказа, если в списке есть ключ вне
+ * каталога. Вид поля (массив или нет) проверяется до вызова.
+ */
+function labelKeys(raw, stepId, field, problems) {
+  if (raw === undefined || raw === null) return []
+  if (!Array.isArray(raw)) {
+    problems.push(`Ступень «${stepId}»: поле ${field} — не массив ключей меток`)
+    return []
+  }
+  const keys = []
+  for (const value of raw) {
+    if (typeof value !== 'string' || !PROCESS_LABEL_KEYS.includes(value)) {
+      problems.push(`Неизвестный ключ метки в ступени «${stepId}»: «${value}»`)
+      continue
+    }
+    keys.push(value)
+  }
+  return unique(keys)
+}
+
+/** Приоритет: целое от 1 до 999. `true` числом не считается. */
+function priorityOf(raw, stepId, problems) {
+  if (typeof raw !== 'number' || !Number.isInteger(raw)) {
+    problems.push(`Ступень «${stepId}»: приоритет — целое от 1 до 999`)
+    return null
+  }
+  if (raw < PRIORITY_MIN || raw > PRIORITY_MAX) {
+    problems.push(`Ступень «${stepId}»: приоритет — целое от 1 до 999`)
+    return null
+  }
+  return raw
+}
+
+/**
+ * Проверить документ процесса и вернуть его каноническим.
+ *
+ * `options.roles` — коды ролей, которые хост умеет поднимать (`role-permissions.mjs`), плюс
+ * резолверы. Роль, которой нет ни среди пресетов, ни среди резолверов, — валидна на вебе
+ * (там справочник ролей свой) и невалидна здесь: ступень с ней не поднимет сессию, и
+ * молча пропустить такую ступень нельзя. Поэтому это `problems`, а не тихая замена.
+ * Каталог необязателен: без него связи «роль → пресет» проверить нечем, и проверка роли не
+ * выполняется — так вызывают чистые тесты документа.
+ *
+ * @param {unknown} value документ из веба
+ * @param {{roles?: string[]}} [options]
+ * @returns {{document: object|null, problems: string[]}}
+ */
+export function validateProcess(value, options = {}) {
+  const problems = []
+  if (!isObject(value)) {
+    return { document: null, problems: ['Нужен объект процесса с полями version, labels, steps'] }
+  }
+  if (value.version !== PROCESS_VERSION) {
+    return { document: null, problems: ['Поддерживается только версия процесса 1'] }
+  }
+  if (!isObject(value.labels) || !Array.isArray(value.steps)) {
+    return { document: null, problems: ['Нужен объект процесса с полями version, labels, steps'] }
+  }
+  const labels = {}
+  for (const key of Object.keys(value.labels)) {
+    if (!PROCESS_LABEL_KEYS.includes(key)) {
+      problems.push(`Неизвестный ключ метки: «${key}»`)
+    }
+  }
+  for (const key of PROCESS_LABEL_KEYS) {
+    const name = value.labels[key]
+    if (!isText(name)) {
+      problems.push(`Имя метки пустое: «${key}»`)
+      continue
+    }
+    labels[key] = name.trim()
+  }
+  if (problems.length > 0) {
+    // Неполный или чужой набор имён — документ целиком негоден: подставлять умолчания
+    // вместо опечатки значит молча работать по другим меткам, чем человек сохранил.
+    return { document: null, problems }
+  }
+  // Без каталога ролей проверять нечем: `null` здесь значит «каталог не передан».
+  const roles = options.roles ? new Set([...options.roles, ...ROLE_RESOLVERS]) : null
+  const seen = new Set()
+  const steps = []
+  for (const raw of value.steps) {
+    if (!isObject(raw) || !isText(raw.id)) {
+      problems.push('Нужен объект процесса с полями version, labels, steps')
+      continue
+    }
+    const id = raw.id.trim()
+    const when = labelKeys(raw.when, id, 'when', problems)
+    if (when.length === 0) {
+      problems.push(`У ступени «${id}» нет входящих меток`)
+      continue
+    }
+    if (seen.has(id)) {
+      problems.push(`Дублируется id ступени: «${id}»`)
+      continue
+    }
+    seen.add(id)
+    const unless = labelKeys(raw.unless, id, 'unless', problems)
+    const put = labelKeys(raw.put, id, 'put', problems)
+    const drop = labelKeys(raw.drop, id, 'drop', problems)
+    const kind = raw.kind === undefined || raw.kind === null ? 'session' : raw.kind
+    if (!STEP_KINDS.includes(kind)) {
+      problems.push(`Неизвестный вид ступени у «${id}»: «${kind}»`)
+      continue
+    }
+    const role = raw.role === undefined ? null : raw.role
+    if (role !== null) {
+      if (typeof role !== 'string' || (roles !== null && !roles.has(role))) {
+        problems.push(`Неизвестная роль у ступени «${id}»: «${role}»`)
+        continue
+      }
+    }
+    const guard = raw.guard === undefined ? null : raw.guard
+    if (guard !== null) {
+      if (typeof guard !== 'string' || !GUARD_IDS.includes(guard)) {
+        problems.push(`Неизвестный страж у ступени «${id}»: «${guard}»`)
+        continue
+      }
+    }
+    const priority = priorityOf(raw.priority, id, problems)
+    if (priority === null) continue
+    if (kind === 'route' && guard !== 'route') {
+      problems.push(`Ступень «${id}»: у маршрутной ступени должен быть страж route`)
+      continue
+    }
+    const title = isText(raw.title) ? raw.title.trim() : id
+    steps.push({
+      id,
+      title,
+      kind,
+      role,
+      when,
+      unless,
+      put,
+      drop,
+      guard,
+      priority,
+      enabled: raw.enabled !== false,
+    })
+  }
+  if (problems.length > 0) {
+    return { document: null, problems }
+  }
+  return { document: { version: PROCESS_VERSION, labels, steps }, problems: [] }
+}
+
+/**
+ * Короткий отпечаток документа: 12 шестнадцатеричных символов.
+ *
+ * Нужен статусу и человеку: по нему видно, что диспетчер привёз **другой** документ, не
+ * разбирая таблицу глазами. Считается по канону (ключи в порядке контракта, ступени в
+ * порядке документа), поэтому перестановка ключей в JSON отпечаток не меняет.
+ */
+export function digestOf(document) {
+  const canonical = {
+    version: document.version,
+    labels: PROCESS_LABEL_KEYS.map((key) => [key, document.labels[key]]),
+    steps: document.steps.map((row) => [
+      row.id,
+      row.title,
+      row.kind,
+      row.role,
+      row.when,
+      row.unless,
+      row.put,
+      row.drop,
+      row.guard,
+      row.priority,
+      row.enabled !== false,
+    ]),
+  }
+  return crypto.createHash('sha1').update(JSON.stringify(canonical)).digest('hex').slice(0, 12)
+}
+
+/**
+ * Разрешить процесс отдела: документ из реестра, иначе умолчания.
+ *
+ * `source: 'web'` — документ сохранён в вебе и проверку прошёл; `source: 'default'` —
+ * своего процесса у отдела нет, работает таблица по умолчанию. Невалидный документ
+ * процессом не становится: отдел работает на умолчаниях, а причина остаётся в `problems`
+ * и в статусе отдела — молча остановить смену из-за опечатки в вебе нельзя.
+ *
+ * @param {unknown} raw отдел `process` из документа реестра
+ * @param {{roles?: string[]}} [options]
+ * @returns {{document: object, source: 'web'|'default', problems: string[], digest: string}}
+ */
+export function processOf(raw, options = {}) {
+  if (raw === undefined || raw === null) {
+    const document = defaultProcess()
+    return { document, source: 'default', problems: [], digest: digestOf(document) }
+  }
+  const checked = validateProcess(raw, options)
+  if (checked.document) {
+    return {
+      document: checked.document,
+      source: 'web',
+      problems: [],
+      digest: digestOf(checked.document),
+    }
+  }
+  const document = defaultProcess()
+  return {
+    document,
+    source: 'default',
+    problems: checked.problems,
+    digest: digestOf(document),
+  }
+}
+
+/**
+ * Имена меток проекта: сохранённый в вебе документ → локальные `labels` файла → умолчания.
+ *
+ * Порядок из постановки. Тонкость одна: у отдела **без** сохранённого процесса
+ * `document.labels` — это и есть умолчания, и если поставить их выше файла, локальные
+ * переименования из `projects.json` перестали бы работать. Поэтому имена веба идут первыми
+ * только при `source === 'web'`; при `source === 'default'` первым идёт файл, как было до
+ * этой задачи.
+ *
+ * @param {{document: object, source: string}} process
+ * @param {object|null|undefined} localLabels `labels` отдела из `projects.json`
+ * @returns {Record<string, string>}
+ */
+export function labelsOfProcess(process, localLabels) {
+  const fromWeb = process.source === 'web' ? process.document.labels : {}
+  const fromFile = isObject(localLabels) ? localLabels : {}
+  const labels = { ...DEFAULT_PROCESS_LABELS }
+  for (const key of PROCESS_LABEL_KEYS) {
+    const name = fromFile[key]
+    if (isText(name)) labels[key] = name.trim()
+  }
+  for (const key of PROCESS_LABEL_KEYS) {
+    const name = fromWeb[key]
+    if (isText(name)) labels[key] = name.trim()
+  }
+  return labels
+}
+
+/** Ступени включённого процесса по возрастанию приоритета; выключенные — в конце. */
+export function sortedSteps(document) {
+  return document.steps
+    .map((row, index) => ({ row, index }))
+    .sort((left, right) => left.row.priority - right.row.priority || left.index - right.index)
+    .map((entry) => entry.row)
+}
+
+/** Все `when` стоят и ни одна `unless` не стоит. */
+export function stepMatches(step, labels) {
+  const present = labels instanceof Set ? labels : new Set(labels || [])
+  for (const key of step.when) {
+    if (!present.has(key)) return false
+  }
+  for (const key of step.unless) {
+    if (present.has(key)) return false
+  }
+  return true
+}
+
+/** Ступень продолжения: работа по тикету уже начата. */
+export function isActiveStep(step) {
+  return step.when.some((key) => ACTIVE_LABEL_KEYS.includes(key))
+}
+
+/** Ступень входа: тикет ждёт сессии, но работа по нему ещё не начата. */
+export function isEntryStep(step) {
+  if (step.kind !== 'session' || isActiveStep(step)) return false
+  return step.when.includes('dev') || step.when.includes('frontend')
+}
+
+/**
+ * План по ступеням: для каждого тикета — первая подходящая ступень по приоритету.
+ *
+ * `items` — `[{item, labels, dropped}]`: `item` возвращается как есть (вызывающему нужен
+ * его номер), `labels` — ключи стоящих меток, `dropped` — тикет снят с конвейера и в план
+ * не попадает. Возвращает массив `{step, item}` по возрастанию приоритета ступени; внутри
+ * одной ступени порядок — порядок `items`, потому что `Array.prototype.sort` устойчив.
+ *
+ * `options.kinds` — ограничить набор видов (например, вне окна смены исполняется только
+ * маршрутная ступень: сессию поднимать некуда).
+ *
+ * @param {object} document
+ * @param {Array<{item: any, labels: string[]|Set<string>, dropped?: boolean}>} items
+ * @param {{kinds?: string[]}} [options]
+ * @returns {Array<{step: object, item: any}>}
+ */
+export function planOfProcess(document, items, options = {}) {
+  const kinds = options.kinds ? new Set(options.kinds) : null
+  // `skip` — отказ вызывающего: ступень не берётся для этого тикета. Так диспетчер
+  // пропускает маршрутную ступень, когда маршрут по постановке не выводится: иначе
+  // она стояла бы первой и держала тикет впереди выдачи.
+  const skip = typeof options.skip === 'function' ? options.skip : null
+  const steps = sortedSteps(document).filter(
+    (row) => row.enabled !== false && (!kinds || kinds.has(row.kind)),
+  )
+  const plan = []
+  for (const entry of items) {
+    if (entry.dropped) continue
+    const labels = entry.labels instanceof Set ? entry.labels : new Set(entry.labels || [])
+    for (const row of steps) {
+      if (skip && skip(row, entry.item)) continue
+      if (!stepMatches(row, labels)) continue
+      plan.push({ step: row, item: entry.item })
+      break
+    }
+  }
+  return plan.sort((left, right) => left.step.priority - right.step.priority)
+}
+
+/**
+ * Единственное решение: ступень с наименьшим приоритетом и первый подходящий тикет.
+ * `null` — делать нечего.
+ */
+export function nextOfPlan(plan) {
+  return plan.length > 0 ? plan[0] : null
+}
+
+/** Первая ступень продолжения из плана: активный тикет для карточки статуса. */
+export function activeOfPlan(plan) {
+  return plan.find((entry) => isActiveStep(entry.step)) || null
+}
+
+/** Тикеты, ждущие сессии, но ещё не взятые: очередь для карточки статуса. */
+export function queueOfPlan(plan) {
+  return plan.filter((entry) => isEntryStep(entry.step))
+}
+
+/** Шаг приоритета: экспортируется для теста, чтобы таблица не разъехалась с числами. */
+export const PROCESS_PRIORITY_STEP = PRIORITY_STEP
