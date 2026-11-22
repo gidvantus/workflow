@@ -342,6 +342,13 @@ def _department_row(department: Department) -> dict[str, Any]:
     # «включён». Опущенный ключ означал бы «включён» у выключенного отдела — то есть
     # выключатель не доезжал бы до работы, а только выглядел выключенным в вебе.
     row["enabled"] = department.enabled
+    # Процесс отдела попадает в документ **только если он сохранён**: `NULL` значит «своего
+    # процесса нет», и ключа тогда нет вовсе, как у незаполненных полей. Пустой документ
+    # (`{}`) в колонку не попадает: ручка принимает только проверенную форму, а `{}` там
+    # отвергается — проверка здесь оставлена на случай правки колонки руками.
+    process = department.process
+    if isinstance(process, dict) and process:
+        row["process"] = process
     telegram = _telegram(department)
     if telegram is not None:
         row["telegram"] = telegram
