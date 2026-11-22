@@ -48,11 +48,15 @@ class ExpenseCreate(BaseModel):
     Суммы в теле нет: её считает сервер по ценам проекта. `spent_on` приходит строкой
     `ГГГГ-ММ-ДД` (поле `<input type="date">` на фронте), количества — целыми числами.
 
-    Типы намеренно свободные (`int | float | str | None`), а не `int` и `str`: проверку
-    делает ручка, после того как убедилась, что проект жив. Жёсткий тип отдал бы
+    Типы намеренно свободные (`bool | int | float | str | None`), а не `int` и `str`:
+    проверку делает ручка, после того как убедилась, что проект жив. Жёсткий тип отдал бы
     `12.5` и `"1 500"` стандартным `422` схемы с массивом в `detail`, а в мягко удалённый
-    проект — `422` вместо `404`. Поэтому же у полей есть умолчание `None`: пропущенное
-    поле доходит до ручки и получает её текст, а не отказ pydantic.
+    проект — `422` вместо `404`. По той же причине в объединении есть `bool` и он стоит
+    **первым**: без него pydantic приводит `true` к `1`, запись создаётся с ненулевым
+    количеством, и отказ контракта («целое неотрицательное число») не срабатывает;
+    с `bool` первым значением `True` доходит до `validate_tokens` как `bool` и получает
+    текст контракта, а `1` остаётся числом. Поэтому же у полей есть умолчание `None`:
+    пропущенное поле доходит до ручки и получает её текст, а не отказ pydantic.
     """
 
     model_config = ConfigDict(
@@ -71,10 +75,10 @@ class ExpenseCreate(BaseModel):
     )
 
     spent_on: str | int | float | None = None
-    tokens_input: int | float | str | None = None
-    tokens_output: int | float | str | None = None
-    tokens_cache_read: int | float | str | None = None
-    tokens_cache_write: int | float | str | None = None
+    tokens_input: bool | int | float | str | None = None
+    tokens_output: bool | int | float | str | None = None
+    tokens_cache_read: bool | int | float | str | None = None
+    tokens_cache_write: bool | int | float | str | None = None
 
 
 class ExpenseListResponse(BaseModel):

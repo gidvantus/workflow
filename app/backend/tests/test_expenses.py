@@ -365,6 +365,7 @@ def test_post_bad_tokens_refuses(client: TestClient, field: str, value: int) -> 
         ("tokens_input", "1 500", api.TOKENS_INVALID),
         ("tokens_input", "abc", api.TOKENS_INVALID),
         ("tokens_input", None, api.TOKENS_INVALID),
+        ("tokens_input", True, api.TOKENS_INVALID),
         ("tokens_input", "1" * 4400, api.TOKENS_INVALID),
         ("spent_on", None, api.SPENT_ON_INVALID),
         ("spent_on", 20261105, api.SPENT_ON_INVALID),
@@ -414,6 +415,32 @@ def test_post_checks_project_before_body_types(client: TestClient) -> None:
 
     assert response.status_code == status.HTTP_404_NOT_FOUND
     assert response.json()["detail"] == "Проект не найден"
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["tokens_input", "tokens_output", "tokens_cache_read", "tokens_cache_write"],
+)
+def test_post_bool_tokens_refuse_in_every_field(client: TestClient, field: str) -> None:
+    """`true` в любом количестве — отказ контракта, а не запись с `1` и суммой.
+
+    Булево в объединении типов схемы стоит первым: `bool` — подкласс `int`, и без этого
+    pydantic привёл бы `true` к `1`, создал запись и посчитал по ней деньги. Тест
+    HTTP-уровня, потому что валидатор ручки этот случай не видит: до него доезжает
+    уже приведённое значение.
+    """
+    project = _create_project(client, **ACCEPTANCE_PRICES)
+
+    response = client.post(
+        f"/api/projects/{project['id']}/expenses",
+        json=_expense_body(**{field: True}),
+    )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert response.json()["detail"] == api.TOKENS_INVALID
+    journal = client.get(f"/api/projects/{project['id']}/expenses").json()
+    assert journal["items"] == []
+    assert journal["total"] == "0.00"
 
 
 def test_post_without_required_field_is_refused(client: TestClient) -> None:

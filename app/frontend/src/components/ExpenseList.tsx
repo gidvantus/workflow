@@ -119,7 +119,11 @@ export default function ExpenseList({
   const pricesVisible = errorText !== PROJECT_NOT_FOUND_TEXT;
 
   return (
-    <section className="card" aria-label="Стоимость проекта" data-testid="expenses-card">
+    <section
+      className="card card--costs"
+      aria-label="Стоимость проекта"
+      data-testid="expenses-card"
+    >
       <div className="card__head">
         <h2 className="card__title">Стоимость проекта</h2>
         <div className="card__tools">
