@@ -126,11 +126,18 @@ type ProjectPageProps = {
   project: Project;
   /** Возврат к списку: страница закрывается, загруженный список не перечитывается. */
   onBack: () => void;
+  /**
+   * Проект изменился на странице (сейчас это цены за токены). Раздел держит проект
+   * снимком списка, поэтому обновлённый проект надо вернуть наверх: иначе вход в тот же
+   * проект заново показал бы старые цены, а «Сохранить» в окне цен записал бы их обратно.
+   */
+  onProjectChanged: (updated: Project) => void;
 };
 
 export default function ProjectPage({
   project: initialProject,
   onBack,
+  onProjectChanged,
 }: ProjectPageProps): JSX.Element {
   const tabsId = useId();
   /**
@@ -222,9 +229,13 @@ export default function ProjectPage({
     void loadExpenses();
   }
 
-  /** Цены сохранены — окно закрыто, страница взяла проект из ответа `PATCH`. */
+  /**
+   * Цены сохранены — окно закрыто, страница взяла проект из ответа `PATCH`, и тот же
+   * проект уходит в раздел: список держит свой снимок и на возврате не перечитывается.
+   */
   function handlePricesSaved(updated: Project): void {
     setProject(updated);
+    onProjectChanged(updated);
     setPricesOpen(false);
   }
 
