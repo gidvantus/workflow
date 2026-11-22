@@ -394,11 +394,22 @@ def test_put_saves_document_and_returns_revision(client: TestClient, department_
     assert body["document"] == default_process()
 
 
-def test_put_grows_registry_revision(client: TestClient, department_id: int) -> None:
-    """Каждое сохранение процесса — новая ревизия реестра, а не та же строка."""
+def test_put_process_publishes_registry_revision(client: TestClient, department_id: int) -> None:
+    """Сохранение процесса публикует реестр; повтор того же документа ревизии не даёт.
+
+    Публикует та же транзакция, что пишет колонку (`_commit_or_conflict`), отдельной
+    пересборки нет. Номер растёт вместе с содержимым документа: первое сохранение
+    добавляет отделу `process` — ревизия есть; повтор того же документа документ не
+    меняет — номера нет; правка метки снова меняет документ — номер растёт.
+    """
     first = client.put(_process_url(department_id), json=default_process()).json()["revision"]
-    second = client.put(_process_url(department_id), json=default_process()).json()["revision"]
-    assert second > first
+    repeat = client.put(_process_url(department_id), json=default_process()).json()["revision"]
+    assert repeat == first
+
+    changed = default_process()
+    changed["labels"]["test"] = "qa-ready"
+    renamed = client.put(_process_url(department_id), json=changed).json()["revision"]
+    assert renamed > first
 
 
 def test_put_renames_label_and_registry_shows_it(
