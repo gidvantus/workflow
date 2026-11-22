@@ -17,8 +17,8 @@
 теряет заведённые записи журнала и хранимый итог; цены проекта тоже пропадают —
 восстановить их после повторного `upgrade` нечем, кроме ручного ввода.
 
-Revision ID: 0012_expenses
-Revises: 0011_department_enabled
+Revision ID: 0013_expenses
+Revises: 0012_usage
 Create Date: 2026-11-22
 
 """
@@ -29,8 +29,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "0012_expenses"
-down_revision: str | None = "0011_department_enabled"
+revision: str = "0013_expenses"
+down_revision: str | None = "0012_usage"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
