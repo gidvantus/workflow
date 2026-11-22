@@ -11,12 +11,13 @@ from decimal import Decimal
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.project import Project
+from app.models.usage_shift import UsageShift
 from app.schemas.project import ProjectCreate, ProjectResponse, ProjectUpdate
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
@@ -215,6 +216,34 @@ def find_project_by_ref(db: Session, ref: str) -> Project | None:
         if project is not None and project.deleted_at is None:
             return project
     return None
+
+
+def project_ref_keys(project: Project) -> set[str]:
+    """Все ключи, под которыми смены могли записать расход этому проекту, — в нижнем регистре.
+
+    Ключ смены — `project_ref` из реестра: сначала у проекта нет кода, и реестр называет
+    его `str(id)`, а после того как человек задал код, реестр называет его кодом. Уже
+    записанные смены при этом остаются под прежним ключом. Поэтому проект ищет свои смены
+    по **обоим** ключам: только по текущему — и итог, в который деньги этих смен попали,
+    перестал бы сходиться с суммой строк журнала, ради чего тикет и делался.
+
+    Код из одних цифр запрещён (`validate_code`), поэтому `str(id)` не может совпасть с
+    чужим кодом, а совпадение ключей двух проектов невозможно.
+
+    Регистр снят здесь же: и код, и ключ смены могут прийти в любом регистре (`find_project_by_ref`
+    сравнивает их так же), а журнал обязан найти смену, которую ручка приёма засчитала.
+    """
+    return {project_ref(project).lower(), str(project.id)}
+
+
+def shifts_of_project(project: Project) -> ColumnElement[bool]:
+    """Условие «смены этого проекта» для запросов журнала: по всем ключам сразу.
+
+    Одна формула на чтение журнала и на поиск уже записанных сессий: вторая копия
+    разошлась бы с первой, и смена, записанная под `str(id)`, считалась бы дважды или
+    не считалась вовсе.
+    """
+    return func.lower(UsageShift.project_ref).in_(project_ref_keys(project))
 
 
 def prices_of(project: Project) -> dict[str, object]:

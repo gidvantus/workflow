@@ -34,7 +34,7 @@ from app.api.projects import (
     PROJECT_NOT_FOUND,
     _get_alive_project,
     prices_of,
-    project_ref,
+    shifts_of_project,
 )
 from app.db import get_db
 from app.models.expense import ProjectExpense
@@ -49,7 +49,7 @@ from app.schemas.expense import (
     JournalEntry,
     JournalTokensInput,
 )
-from app.schemas.usage import UsageTokens
+from app.schemas.usage import usage_tokens
 
 router = APIRouter(prefix="/api/projects/{project_id}/expenses", tags=["expenses"])
 
@@ -170,23 +170,6 @@ def _prices_are_empty(project: Project) -> bool:
     )
 
 
-def _tokens(
-    tokens_in: int,
-    tokens_out: int,
-    cache_read: int,
-    cache_write: int,
-) -> UsageTokens:
-    """Блок количеств строки журнала — той же формы, что у документа смены."""
-    return UsageTokens.model_validate(
-        {
-            "in": tokens_in,
-            "out": tokens_out,
-            "cacheRead": cache_read,
-            "cacheWrite": cache_write,
-        }
-    )
-
-
 def _utc(moment: datetime) -> datetime:
     """Момент в UTC.
 
@@ -203,7 +186,7 @@ def _manual_entry(expense: ProjectExpense) -> JournalEntry:
         kind=MANUAL_KIND,
         id=expense.id,
         spent_on=expense.spent_on,
-        tokens=_tokens(
+        tokens=usage_tokens(
             expense.tokens_input,
             expense.tokens_output,
             expense.tokens_cache_read,
@@ -220,7 +203,7 @@ def _shift_entry(shift: UsageShift) -> JournalEntry:
         kind=SHIFT_KIND,
         id=shift.id,
         spent_on=ended_at.date(),
-        tokens=_tokens(
+        tokens=usage_tokens(
             shift.tokens_in,
             shift.tokens_out,
             shift.tokens_cache_read,
@@ -268,9 +251,11 @@ def _merged(
 def list_expenses(project_id: int, db: DbSession) -> ExpenseListResponse:
     """Обе половины журнала одного проекта и хранимый итог проекта.
 
-    Смены ищутся по тому же ключу, что и в реестре отдела (`project_ref`: `code`, иначе
-    `str(id)`), а не по внешнему ключу: журнал смен живёт без него, потому что реестр
-    существует и без строки проекта в вебе.
+    Смены ищутся по всем ключам проекта, какие у него были (`project_ref_keys`): пока
+    кода нет, реестр зовёт его `str(id)`, а с появлением кода — кодом, и смены, записанные
+    под прежним ключом, остаются в этом журнале. По одному текущему ключу итог проекта
+    (в который деньги тех смен уже прибавлены) перестал бы сходиться с суммой строк.
+    Внешнего ключа у смен нет: реестр отдела существует и без строки проекта в вебе.
 
     Итог — `projects.total_cost`, в который прибавляют обе половины, а не сумма
     прочитанных строк: пустой журнал отдаёт `{"total": "0.000000", "items": []}`.
@@ -280,7 +265,7 @@ def list_expenses(project_id: int, db: DbSession) -> ExpenseListResponse:
         db.scalars(select(ProjectExpense).where(ProjectExpense.project_id == project_id)).all()
     )
     shifts: list[UsageShift] = list(
-        db.scalars(select(UsageShift).where(UsageShift.project_ref == project_ref(project))).all()
+        db.scalars(select(UsageShift).where(shifts_of_project(project))).all()
     )
     return ExpenseListResponse(
         total=project.total_cost,

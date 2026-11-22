@@ -2,16 +2,22 @@
 
 Ревизия доводит деньги журнала до одного вида и одного итога:
 
-1. `project_expenses.amount` расширяется с `Numeric(20, 2)` до `Numeric(20, 6)`. Сумма
+1. `project_expenses.amount` расширяется с `Numeric(20, 2)` до `Numeric(24, 6)`. Сумма
    ручной записи и сумма смены печатаются в одной ведомости одним форматом — шесть
    знаков, — и копеечное округление ручной половины разошлось бы с итогом, в который
-   смена прибавляет шесть знаков;
-2. `projects.total_cost` расширяется так же (`Numeric(20, 6)`) по той же причине:
+   смена прибавляет шесть знаков. Знаков до точки не меньше, чем у прежней `(20, 2)`:
+   восемнадцать. Максимум контракта — цена до десяти знаков и количество до 10^12 —
+   даёт строку до 4·10^16, то есть восемнадцать знаков, а `(20, 6)` оставила бы
+   четырнадцать и отдавала бы `500` на теле, прошедшем все проверки формы;
+2. `projects.total_cost` расширяется так же (`Numeric(24, 6)`) по той же причине:
    итог складывается из уже округлённых сумм обеих половин;
 3. итог **бэкфиллится** суммой принятых смен: до этой ревизии смены в итог проекта не
-   попадали вовсе, и после неё итог обязан быть суммой обеих половин. Смена ищет свой
-   проект по `project_ref` (`code`, а если кода нет — `str(id)`) — той же формулой, что
-   и ручка приёма смены, поэтому бэкфилл и дальнейший прирост считаются одинаково.
+   попадали вовсе, и после неё итог обязан быть суммой обеих половин. Смена находит свой
+   проект по `project_ref` — по **любому** из его ключей: пока кода нет, реестр зовёт
+   проект `str(id)`, а после присвоения кода — кодом, и смены, записанные под прежним
+   ключом, остаются сменами этого проекта. Тем же набором ключей ищет смены ручка приёма
+   (`app.api.projects.project_ref_keys`), поэтому бэкфилл и дальнейший прирост считаются
+   одинаково и итог сходится с суммой строк журнала.
 
 Бэкфилл берёт только живые проекты (`deleted_at IS NULL`): журнал мягко удалённого проекта
 не читается (`404`), прибавлять ему деньги некуда, и ручка приёма смены поступает так же.
@@ -38,17 +44,19 @@ down_revision: str | None = "0014_department_process"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-# Сумма принятых смен проекта — вторая половина его итога. Формула поиска проекта та же,
-# что в `app.api.projects.project_ref`/`find_project_by_ref`: код без учёта регистра, иначе
-# числовой id строкой. Код из одних цифр запрещён проверкой ручки проекта, поэтому ветки
-# не пересекаются и смена не попадёт в два проекта сразу.
+# Сумма принятых смен проекта — вторая половина его итога. Ключей у проекта два: код
+# (без учёта регистра) и числовой id строкой, — и берутся оба, как в
+# `app.api.projects.project_ref_keys`. `lower(projects.code)` у проекта без кода — `NULL`,
+# сравнение с `NULL` не истинно, поэтому лишняя ветка ничего не прибавляет. Код из одних
+# цифр запрещён проверкой ручки проекта, поэтому ключи двух проектов не пересекаются и
+# одна смена не попадёт в два итога.
 SHIFT_SUM = """
     SELECT COALESCE(sum(usage_shifts.cost_usd), 0)
       FROM usage_shifts
-     WHERE (projects.code IS NOT NULL
-            AND lower(usage_shifts.project_ref) = lower(projects.code))
-        OR (projects.code IS NULL
-            AND usage_shifts.project_ref = CAST(projects.id AS TEXT))
+     WHERE lower(usage_shifts.project_ref) IN (
+               lower(projects.code),
+               CAST(projects.id AS TEXT)
+           )
 """
 
 ADD_SHIFT_SUM = (
@@ -67,14 +75,14 @@ def upgrade() -> None:
         "project_expenses",
         "amount",
         existing_type=sa.Numeric(precision=20, scale=2),
-        type_=sa.Numeric(precision=20, scale=6),
+        type_=sa.Numeric(precision=24, scale=6),
         existing_nullable=False,
     )
     op.alter_column(
         "projects",
         "total_cost",
         existing_type=sa.Numeric(precision=20, scale=2),
-        type_=sa.Numeric(precision=20, scale=6),
+        type_=sa.Numeric(precision=24, scale=6),
         existing_nullable=False,
     )
     op.execute(ADD_SHIFT_SUM)
@@ -89,14 +97,14 @@ def downgrade() -> None:
     op.alter_column(
         "projects",
         "total_cost",
-        existing_type=sa.Numeric(precision=20, scale=6),
+        existing_type=sa.Numeric(precision=24, scale=6),
         type_=sa.Numeric(precision=20, scale=2),
         existing_nullable=False,
     )
     op.alter_column(
         "project_expenses",
         "amount",
-        existing_type=sa.Numeric(precision=20, scale=6),
+        existing_type=sa.Numeric(precision=24, scale=6),
         type_=sa.Numeric(precision=20, scale=2),
         existing_nullable=False,
     )

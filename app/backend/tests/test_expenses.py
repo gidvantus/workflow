@@ -107,6 +107,40 @@ def _post(client: TestClient, project_id: int, **overrides: Any) -> dict[str, An
     return body
 
 
+def _shift_session(
+    session: str = "sess-1",
+    tokens: dict[str, int] | None = None,
+) -> dict[str, Any]:
+    """Сессия смены в форме контракта: количества и ходы, без денег."""
+    return {
+        "role": "dev-backend",
+        "session": session,
+        "issue_number": 72,
+        "issue_title": "Один раздел «Расходы»",
+        "source": "issue-created",
+        "turns": 3,
+        "tokens": _tokens() if tokens is None else tokens,
+    }
+
+
+def _shift_document(
+    *,
+    project_ref: str,
+    shift_key: str = "2024-05-01",
+    sessions: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Документ смены отдела: сумму в нём не присылают, её считает сервер."""
+    return {
+        "project_ref": project_ref,
+        "project_title": "Workflow",
+        "shift_key": shift_key,
+        "started_at": "2024-05-01T10:00:00Z",
+        "ended_at": "2024-05-01T18:00:00Z",
+        "reason": "window",
+        "sessions": [_shift_session()] if sessions is None else sessions,
+    }
+
+
 def _post_shift(
     machine: TestClient,
     *,
@@ -119,25 +153,11 @@ def _post_shift(
     response = machine.post(
         "/api/usage/shifts",
         headers=AUTH,
-        json={
-            "project_ref": project_ref,
-            "project_title": "Workflow",
-            "shift_key": shift_key,
-            "started_at": "2024-05-01T10:00:00Z",
-            "ended_at": "2024-05-01T18:00:00Z",
-            "reason": "window",
-            "sessions": [
-                {
-                    "role": "dev-backend",
-                    "session": session,
-                    "issue_number": 72,
-                    "issue_title": "Один раздел «Расходы»",
-                    "source": "issue-created",
-                    "turns": 3,
-                    "tokens": _tokens() if tokens is None else tokens,
-                }
-            ],
-        },
+        json=_shift_document(
+            project_ref=project_ref,
+            shift_key=shift_key,
+            sessions=[_shift_session(session=session, tokens=tokens)],
+        ),
     )
     assert response.status_code == status.HTTP_201_CREATED, response.text
     body: dict[str, Any] = response.json()
@@ -251,6 +271,29 @@ def test_all_four_prices_take_part_in_amount(client: TestClient) -> None:
 
     # (0,1 + 0,2 + 0,3 + 0,4) = 1,00.
     assert body["amount"] == "1.000000"
+
+
+def test_valid_body_beyond_kopeck_precision_is_stored(client: TestClient) -> None:
+    """Максимум контракта не даёт `500`: сумма на 14 знаков до точки сохраняется целиком.
+
+    Цена шаблона пускает 10 знаков до разделителя, количество — до 10^12; произведение
+    даёт 10^14, и колонка денег журнала обязана это держать. `Numeric(20, 6)` оставила бы
+    14 знаков всего и ответила бы `numeric field overflow` на валидном вводе (на SQLite
+    теста это не воспроизводится — проверяется сам путь и вид суммы).
+    """
+    project = _create_project(
+        client,
+        price_input="100000000",
+        price_output="0",
+        price_cache_read="0",
+        price_cache_write="0",
+    )
+
+    body = _post(client, project["id"], **{"in": 10**12})
+
+    assert body["amount"] == "100000000000000.000000"
+    journal = client.get(f"/api/projects/{project['id']}/expenses").json()
+    assert journal["total"] == "100000000000000.000000"
 
 
 def test_total_is_sum_of_rounded_amounts(client: TestClient) -> None:
@@ -402,6 +445,63 @@ def test_shift_of_other_project_does_not_leak_into_journal(machine: TestClient) 
     body = machine.get(f"/api/projects/{mine['id']}/expenses").json()
 
     assert body == {"total": "0.000000", "items": []}
+
+
+def _assign_code(machine: TestClient, project_id: int, code: str) -> None:
+    """Дать проекту код: с этого момента реестр отдела зовёт его кодом, а не `str(id)`."""
+    response = machine.patch(f"/api/projects/{project_id}", json={"code": code})
+    assert response.status_code == status.HTTP_200_OK, response.text
+
+
+def test_shift_recorded_by_numeric_ref_stays_after_code_is_assigned(
+    machine: TestClient,
+) -> None:
+    """Смена, записанная под `str(id)`, остаётся в журнале и после присвоения кода.
+
+    Реестр отдела зовёт проект кодом, если код задан, и `str(id)` — если нет. Смена,
+    приехавшая до присвоения кода, лежит под числовым ключом, и её деньги уже прибавлены
+    к итогу проекта. Поиск только по текущему ключу потерял бы строку, и итог перестал
+    бы сходиться с суммой строк — ради чего тикет и делался.
+    """
+    project = _create_project(machine, **ACCEPTANCE_PRICES)
+    _post_shift(machine, project_ref=str(project["id"]))
+
+    _assign_code(machine, project["id"], "workflow")
+
+    body = machine.get(f"/api/projects/{project['id']}/expenses").json()
+    assert [item["kind"] for item in body["items"]] == ["shift"]
+    assert body["items"][0]["amount"] == "0.270000"
+    assert body["total"] == "0.270000"
+    assert sum(Decimal(item["amount"]) for item in body["items"]) == Decimal(body["total"])
+
+
+def test_shift_repeated_after_code_is_assigned_is_recognised(machine: TestClient) -> None:
+    """Повтор смены под новым ключом — та же смена: новых строк и денег не появляется.
+
+    Очередь отдела может отправить смену ещё раз уже после присвоения кода, с тем же
+    `shift_key`, но с кодом вместо `str(id)`. Ключей у проекта два, и смена ищется по
+    обоим: иначе журнал завёл бы вторую строку той же смены, а сессия считалась бы
+    дважды.
+    """
+    project = _create_project(machine, **ACCEPTANCE_PRICES)
+    first = _post_shift(machine, project_ref=str(project["id"]))
+    assert first["changed"] is True
+
+    _assign_code(machine, project["id"], "workflow")
+    response = machine.post(
+        "/api/usage/shifts",
+        headers=AUTH,
+        json=_shift_document(project_ref="workflow"),
+    )
+
+    assert response.status_code == status.HTTP_200_OK, response.text
+    again = response.json()
+    assert again["changed"] is False
+    assert again["accepted"] == 0
+    assert again["skipped"] == 1
+    body = machine.get(f"/api/projects/{project['id']}/expenses").json()
+    assert [item["kind"] for item in body["items"]] == ["shift"]
+    assert body["total"] == "0.270000"
 
 
 # ── отказы контракта ────────────────────────────────────────────────────────

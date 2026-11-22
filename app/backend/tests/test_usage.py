@@ -38,7 +38,6 @@ from app import main
 from app.api import usage as usage_api
 from app.api.registry import TOKEN_REJECTED
 from app.api.usage import (
-    COST_TOO_LARGE,
     FIELD_TOO_LONG,
     NEGATIVE_COST,
     PROJECT_REF_REQUIRED,
@@ -604,14 +603,39 @@ def test_too_many_sessions(api: TestClient) -> None:
     assert response.json()["detail"] == TOO_MANY_SESSIONS
 
 
-def test_cost_beyond_column_is_refused(api: TestClient) -> None:
-    """Посчитанная сервером сумма сверх разрядности `Numeric(14,6)` — `422`, а не `500`.
+def test_cost_beyond_column_is_skipped(api: TestClient) -> None:
+    """Сессия дороже разрядности колонки пропускается, а не отвергает всю смену.
 
-    Раньше сумму присылал harness, и её разрядность проверялась в теле. Теперь сумму
-    считает сервер: 10^12 токенов по цене 10^9 за миллион дают 10^15 — больше, чем
-    колонка держит, — и PostgreSQL ответил бы `numeric field overflow` на теле, которое
-    прошло все проверки формы.
+    Раньше сумма присылалась в теле, и её разрядность проверялась там же. Теперь сумму
+    считает сервер: опечатка в цене проекта (`price_input` = 10^9) даёт сессию дороже
+    `Numeric(14,6)`, и `422` здесь означал бы потерю расхода всей смены — очередь отдела
+    считает `422` невременным отказом и выбрасывает запись. Поэтому такая сессия уходит
+    в `skipped`, а остальные принимаются.
     """
+    _create_project(api, prices={**PRICES, "price_input": "1000000000"})
+    body = shift_body(
+        sessions=[
+            session_body(
+                session="sess-huge",
+                tokens={"in": 10**12, "out": 0, "cacheRead": 0, "cacheWrite": 0},
+            ),
+            session_body(session="sess-small", tokens=DAILY_TOKENS),
+        ]
+    )
+
+    response = post_shift(api, body)
+
+    assert response.status_code == 201, response.text
+    body_json = response.json()
+    assert body_json["accepted"] == 1
+    assert body_json["skipped"] == 1
+    assert body_json["sessions_count"] == 1
+    # Деньги смены — по принятой сессии: (1000 × 10^9 + 200 × 15 + 3000 × 0,3) / 10^6.
+    assert body_json["cost_usd"] == "1000000.003900"
+
+
+def test_cost_beyond_column_skips_only_the_session(api: TestClient) -> None:
+    """Токены пропущенной сессии не попадают в смену: количества сходятся с деньгами."""
     _create_project(api, prices={**PRICES, "price_input": "1000000000"})
     body = shift_body(
         sessions=[
@@ -622,10 +646,19 @@ def test_cost_beyond_column_is_refused(api: TestClient) -> None:
         ]
     )
 
-    response = post_shift(api, body)
+    stored = post_shift(api, body)
 
-    assert response.status_code == 422
-    assert response.json()["detail"] == COST_TOO_LARGE
+    assert stored.status_code == 201, stored.text
+    assert stored.json()["sessions_count"] == 0
+    assert stored.json()["cost_usd"] == "0.000000"
+    detail = api.get(f"/api/projects/{PROJECT}/usage")
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["totals"]["tokens"] == {
+        "in": 0,
+        "out": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+    }
 
 
 def test_flush_conflict_is_not_a_500(api: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:

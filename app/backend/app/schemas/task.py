@@ -8,14 +8,16 @@
 считать копейки сам, а `null` и `0` обязаны остаться различимыми. Поле объявлено
 строкой, поэтому в OpenAPI у него один тип — `string | null`, — и фронт читает
 контракт без догадок. Приведение `Decimal` из модели к строке делает
-`_format_cost` до проверки типа: `f"{None:.2f}"` падает, поэтому проверка на `None`
-в нём обязательна.
+`app.money.format_money` до проверки типа: `f"{None:.2f}"` падает, поэтому проверка
+на `None` здесь обязательна. Второй копии вида денег в схеме нет: у журнала расходов
+формат тот же и приходит из того же модуля.
 """
 
 from datetime import datetime
-from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, field_validator
+
+from app.money import format_money
 
 
 class TaskResponse(BaseModel):
@@ -37,7 +39,7 @@ class TaskResponse(BaseModel):
         """`Decimal("1250.5")` из базы → `"1250.50"`; нет стоимости — `None`."""
         if value is None:
             return None
-        return f"{Decimal(str(value)):.2f}"
+        return format_money(value)
 
 
 class TaskCreate(BaseModel):

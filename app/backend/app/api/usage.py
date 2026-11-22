@@ -31,10 +31,16 @@
 (#57): «Укажите проект смены», «Укажите ключ смены», «Смена должна иметь начало и
 конец», «Причина закрытия смены указывается как window или manual», «Сессия без роли или
 id», «Отрицательный расход», «Слишком много сессий в смене». Проверки тарифов и сверки
-итога из него ушли вместе с тарифами и `totals`. Сверх таблицы стоят четыре защиты от
-сломанного отправителя — длина значения сверх колонки, строка вместо числа, отрицательное
-количество и посчитанная сумма сверх разрядности колонки: они спасают от `500` на
-PostgreSQL, приходят только от машины и в интерфейсе не показываются.
+итога из него ушли вместе с тарифами и `totals`. Сверх таблицы стоят три защиты от
+сломанного отправителя — длина значения сверх колонки, строка вместо числа и
+отрицательное количество: они спасают от `500` на PostgreSQL, приходят только от машины
+и в интерфейсе не показываются. Посчитанная сумма сверх разрядности колонки отказом
+больше не является: такая сессия пропускается (`_priced_sessions`), потому что `422`
+выбросил бы из очереди отдела всю смену.
+
+**Смена ищется по всем ключам проекта, какие у него были** (`find_project_by_ref`,
+`project_ref_keys`): пока кода нет, реестр зовёт проект `str(id)`, а с появлением кода —
+кодом, и смены, записанные под прежним ключом, остаются сменами этого же проекта.
 
 **Порядок проверок фиксирован** — проект, ключ, время, причина, число сессий, сессии по
 одной, — чтобы на теле с двумя ошибками ответ был предсказуемым. Деньги считаются
@@ -45,12 +51,12 @@ PostgreSQL, приходят только от машины и в интерфе
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -58,6 +64,7 @@ from app.api.projects import (
     PROJECT_NOT_FOUND,
     find_project_by_ref,
     prices_of,
+    project_ref_keys,
 )
 from app.api.registry import require_registry_token
 from app.db import get_db
@@ -104,11 +111,10 @@ SHIFT_WRITE_RACE = "Смену не удалось записать: однов�
 # сверх колонки ломает вставку на PostgreSQL, а строка вместо числа — сравнение.
 SESSION_NUMBERS_INVALID = "Расход по сессии указывается целым неотрицательным числом"
 FIELD_TOO_LONG = "Значение поля «{field}» длиннее {limit} символов"
-# Сумма сверх разрядности колонки: `Numeric(14,6)` держит восемь знаков до точки, а
-# `1e30` ломает уже `Decimal.quantize` — оба случая иначе стали бы `500`.
-COST_TOO_LARGE = "Расход по сессии больше допустимого"
 
-# Верхняя граница денег — ровно то, что влезает в `Numeric(14,6)`.
+# Верхняя граница денег одной сессии и всей смены — ровно то, что влезает в
+# `Numeric(14,6)`: восемь знаков до точки. Сумма сверх неё не отвергает смену (её
+# выбросила бы очередь отдела), а пропускает сессию — см. `_priced_sessions`.
 MAX_COST = Decimal("99999999.999999")
 
 # Размеры колонок моделей: проверяются до вставки, иначе PostgreSQL ответил бы `500`.
@@ -245,19 +251,6 @@ def _session_amount(item: _SessionDraft, prices: Mapping[str, object] | None) ->
         },
         prices,
     )
-
-
-def _guard_cost(amount: Decimal) -> Decimal:
-    """Сумма в разрядности колонки `Numeric(14,6)`: больше — отказ отправителю, а не `500`.
-
-    Тело смены больше не приносит сумму, поэтому проверять её разрядность стало делом
-    сервера: миллиард токенов по цене с десятью знаками до точки даёт больше, чем колонка
-    держит, и PostgreSQL ответил бы `numeric field overflow` на теле, которое прошло все
-    проверки формы.
-    """
-    if amount > MAX_COST:
-        raise _reject(COST_TOO_LARGE)
-    return amount
 
 
 def _session(value: Any) -> _SessionDraft:
@@ -417,23 +410,73 @@ def _session_row(session: UsageSession) -> dict[str, Any]:
     }
 
 
-def _find_shift(db: Session, project_ref: str, shift_key: str) -> UsageShift | None:
-    """Смена по паре `(project_ref, shift_key)` — ключу идемпотентности журнала."""
+def _find_shift(
+    db: Session,
+    project_refs: set[str],
+    shift_key: str,
+) -> UsageShift | None:
+    """Смена по ключу идемпотентности и любому из ключей проекта.
+
+    Ключей бывает два: смена, записанная до присвоения кода, лежит под `str(id)`, а
+    повторная отправка после присвоения приходит уже с кодом. Без второго ключа повтор
+    завёл бы вторую смену с тем же `shift_key` и тем же временем.
+    """
     return db.scalars(
         select(UsageShift).where(
-            UsageShift.project_ref == project_ref,
+            func.lower(UsageShift.project_ref).in_(project_refs),
             UsageShift.shift_key == shift_key,
         )
-    ).one_or_none()
+    ).first()
 
 
-def _known_sessions(db: Session, project_ref: str) -> set[str]:
-    """Id сессий, уже вошедших в суммы проекта, — что нельзя посчитать второй раз."""
+def _known_sessions(db: Session, project_refs: set[str]) -> set[str]:
+    """Id сессий, уже вошедших в суммы проекта, — что нельзя посчитать второй раз.
+
+    Ключи проекта — все, что были: иначе сессия, записанная под `str(id)`, после
+    присвоения кода попала бы в суммы второй раз под новым ключом.
+    """
     return set(
         db.scalars(
-            select(UsageSession.session).where(UsageSession.project_ref == project_ref)
+            select(UsageSession.session).where(
+                func.lower(UsageSession.project_ref).in_(project_refs)
+            )
         ).all()
     )
+
+
+def _priced_sessions(
+    sessions: Sequence[_SessionDraft],
+    prices: Mapping[str, object] | None,
+    skipped: int,
+) -> tuple[list[tuple[_SessionDraft, Decimal]], Decimal, int]:
+    """Цены принятых сессий и сумма смены; сессии сверх разрядности — в `skipped`.
+
+    Колонки денег смены — `Numeric(14,6)`, восемь знаков до точки. Опечатка в цене
+    проекта (`price_output = 5000000` вместо `5`) даёт сессию дороже колонки, и раньше
+    такая сессия отвергала **всю смену** ответом `422`: очередь отдела считает `422`
+    невременным отказом и выбрасывает запись, то есть расход всех сессий смены исчезал
+    без следа в журнале. Теперь такая сессия пропускается и считается в `skipped` (как
+    дубль), а остальные принимаются: теряются деньги одной сессии, а не всей смены.
+
+    Пропускается и та сессия, после которой сумма смены перестала бы влезать в колонку, —
+    по той же причине: `500` на `numeric field overflow` потерял бы строку целиком.
+    """
+    priced: list[tuple[_SessionDraft, Decimal]] = []
+    total = Decimal(0)
+    for item in sessions:
+        try:
+            amount = _session_amount(item, prices)
+        except (InvalidOperation, OverflowError):
+            # Сумма длиннее контекста `Decimal` (10^30 токенов от сломанного
+            # отправителя): посчитать её нельзя, и в колонку она не влезет.
+            skipped += 1
+            continue
+        if amount > MAX_COST or total + amount > MAX_COST:
+            skipped += 1
+            continue
+        total += amount
+        priced.append((item, amount))
+    return priced, total, skipped
 
 
 @machine_router.post(
@@ -466,14 +509,23 @@ def store_shift(
     вошедшая в суммы проекта (в том числе «продолженный диалог» из прошлой смены),
     пропускается: `skipped` в ответе. Суммы смены считаются по **принятым** сессиям,
     поэтому повторная отправка той же смены не прибавляет денег проекту.
+
+    Смена ищется по всем ключам проекта, какие у него были: пока кода нет, реестр зовёт
+    его `str(id)`, а с появлением кода — кодом, и смены, записанные под прежним ключом,
+    остаются в журнале этого же проекта (см. `app.api.projects.project_ref_keys`).
     """
     draft = _validated(payload)
 
-    existing = _find_shift(db, draft.project_ref, draft.shift_key)
+    # Проект — раньше поиска уже записанных смен: у него бывает два ключа, и по обоим
+    # надо найти и саму смену (повтор), и вошедшие в суммы сессии (дубль).
+    project = find_project_by_ref(db, draft.project_ref)
+    refs = project_ref_keys(project) if project is not None else {draft.project_ref.lower().strip()}
+
+    existing = _find_shift(db, refs, draft.shift_key)
     if existing is not None:
         return _already_stored(existing, len(draft.sessions))
 
-    known = _known_sessions(db, draft.project_ref)
+    known = _known_sessions(db, refs)
     accepted = []
     skipped = 0
     for item in draft.sessions:
@@ -486,10 +538,8 @@ def store_shift(
 
     # Цены смены — цены проекта в момент записи. Проекта нет — смену принимаем с нулевой
     # суммой: отказ выбросил бы её из очереди отдела и потерял бы расход навсегда.
-    project = find_project_by_ref(db, draft.project_ref)
     prices = prices_of(project) if project is not None else None
-    amounts = [(item, _guard_cost(_session_amount(item, prices))) for item in accepted]
-    total_cost = _guard_cost(sum((amount for _, amount in amounts), Decimal(0)))
+    amounts, total_cost, skipped = _priced_sessions(accepted, prices, skipped)
 
     shift = UsageShift(
         project_ref=draft.project_ref,
@@ -498,11 +548,11 @@ def store_shift(
         started_at=draft.started_at,
         ended_at=draft.ended_at,
         reason=draft.reason,
-        sessions_count=len(accepted),
-        tokens_in=sum(item.tokens_in for item in accepted),
-        tokens_out=sum(item.tokens_out for item in accepted),
-        tokens_cache_read=sum(item.tokens_cache_read for item in accepted),
-        tokens_cache_write=sum(item.tokens_cache_write for item in accepted),
+        sessions_count=len(amounts),
+        tokens_in=sum(item.tokens_in for item, _ in amounts),
+        tokens_out=sum(item.tokens_out for item, _ in amounts),
+        tokens_cache_read=sum(item.tokens_cache_read for item, _ in amounts),
+        tokens_cache_write=sum(item.tokens_cache_write for item, _ in amounts),
         cost_usd=total_cost,
         rates=_rates_snapshot(project),
     )
@@ -545,14 +595,14 @@ def store_shift(
         # та же смена — отвечаем как на повторный `POST`; если конфликт по сессии —
         # смене записаться некуда, и это `409` «одновременная отправка».
         db.rollback()
-        existing = _find_shift(db, draft.project_ref, draft.shift_key)
+        existing = _find_shift(db, refs, draft.shift_key)
         if existing is None:
             raise HTTPException(status.HTTP_409_CONFLICT, SHIFT_WRITE_RACE) from error
         return _already_stored(existing, len(draft.sessions))
     db.refresh(shift)
     return UsageShiftStored(
         **_shift_numbers(shift),
-        accepted=len(accepted),
+        accepted=len(amounts),
         skipped=skipped,
         changed=True,
     )
