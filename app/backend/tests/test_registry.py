@@ -10,8 +10,13 @@
 важны все правила отдачи (незаполненные поля не попадают в документ, окно — парой,
 бот — только при включённых уведомлениях и обоих полях), в том числе на состоянии,
 которое ручки отделов не создают.
+
+Публикация реестра правкой (issue #68) проверяется здесь же: правка отделов и проектов
+пишет ревизию в своей транзакции, поэтому её документ обязан совпадать с базой, а отказы
+(`422` формы, `409` занятого номера) — не оставлять ни правки, ни ревизии.
 """
 
+import json
 from collections.abc import Iterator
 from datetime import datetime
 from typing import Any
@@ -650,3 +655,284 @@ def test_corrupted_body_is_500(
 
     assert response.status_code == 500
     assert response.json()["detail"] == api.REGISTRY_CORRUPTED
+
+
+# ---------------------------------------------------------------------------------------
+# Публикация реестра правкой в вебе (issue #68).
+#
+# Правка отделов и проектов обязана сама добавлять ревизию — в той же транзакции, что и
+# саму правку. Иначе диспетчер до следующей пересборки работает по документу, которого в
+# базе уже нет: ровно так выключенный в вебе отдел продолжал работать. Здесь проверяется
+# весь набор правил публикации: первая ревизия на пустой таблице, видимость правки без
+# `rebuild`, отсутствие ревизии у пустой правки, отказ `422` на правку, которую форма
+# реестра выразить не может, повтор гонки за номером и подрез истории.
+# ---------------------------------------------------------------------------------------
+
+
+def _create_project(client: TestClient, **overrides: Any) -> dict[str, Any]:
+    """Завести проект ручкой (как это делает веб) и вернуть тело ответа."""
+    body: dict[str, Any] = {"name": "Workflow", "repo_url": "gidvantus/workflow"}
+    body.update(overrides)
+    response = client.post("/api/projects", json=body)
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def _create_department(client: TestClient, project_id: int) -> dict[str, Any]:
+    """Завести отдел разработки ручкой и вернуть тело ответа (id вида — 1, «Разработка»)."""
+    response = client.post(f"/api/projects/{project_id}/departments", json={"kind_id": 1})
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def _published(session_factory: sessionmaker[Session]) -> dict[str, Any]:
+    """Документ последней ревизии, разобранный из базы, — в обход ручек."""
+    rows = _revisions(session_factory)
+    assert rows, "в таблице ревизий нет ни одной строки"
+    document: dict[str, Any] = json.loads(rows[-1].body)
+    return document
+
+
+def test_edit_publishes_first_revision(
+    api_client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """Пустая таблица: первая ревизия — от правки, а не `404` и не `PUT`.
+
+    Проект без отдела в документ не попадает, поэтому `POST /api/projects` публиковать
+    нечего; ревизия 1 появляется на создании отдела, и её документ совпадает с тем, что
+    собрала бы пересборка.
+    """
+    project = _create_project(api_client)
+    assert _revisions(session_factory) == []
+
+    department = _create_department(api_client, project["id"])
+
+    rows = _revisions(session_factory)
+    assert [row.revision for row in rows] == [1]
+    assert rows[0].note == api.NOTE_EDIT
+    document = api_client.get("/api/registry", headers=HEADERS).json()
+    assert document["projects"] == [
+        {
+            "id": str(project["id"]),
+            "title": project["name"],
+            "departments": [
+                {
+                    "kind": "development",
+                    "title": department["name"],
+                    "maxRework": department["max_rework"],
+                    "enabled": True,
+                }
+            ],
+        }
+    ]
+    with session_factory() as session:
+        assert document == api.build_document(session)
+
+
+def test_department_patch_is_visible_in_registry(
+    api_client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """Приёмочный сценарий: `PATCH {"enabled": false}` виден в `GET` сразу, без `rebuild`."""
+    project = _create_project(api_client)
+    department = _create_department(api_client, project["id"])
+
+    response = api_client.patch(
+        f"/api/departments/{department['id']}",
+        json={"enabled": False, "repo_path": "gidvantus/workflow"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert [row.revision for row in _revisions(session_factory)] == [1, 2]
+    published = _published(session_factory)["projects"][0]["departments"][0]
+    assert published["enabled"] is False
+    assert published["repo"] == "gidvantus/workflow"
+    # Документ ревизии — ровно текущая база, а не её прошлое состояние.
+    with session_factory() as session:
+        assert _published(session_factory) == api.build_document(session)
+
+
+def test_edit_without_changes_adds_no_revision(
+    api_client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """Повтор той же правки документ не меняет — номер ревизии не растёт.
+
+    `updated_at` в документ не попадает, поэтому перезапись того же значения не должна
+    раздувать историю и заставлять диспетчера перечитывать тот же документ.
+    """
+    project = _create_project(api_client)
+    department = _create_department(api_client, project["id"])
+    body = {"repo_path": "gidvantus/workflow"}
+    url = f"/api/departments/{department['id']}"
+    assert api_client.patch(url, json=body).status_code == 200
+    revisions = [row.revision for row in _revisions(session_factory)]
+
+    repeated = api_client.patch(url, json=body)
+
+    assert repeated.status_code == 200, repeated.text
+    assert [row.revision for row in _revisions(session_factory)] == revisions
+
+
+def test_roles_edit_adds_no_revision(
+    api_client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """Правка только ролей ревизию не поднимает: ролей в документе нет.
+
+    Ручка честно сохраняет набор ролей (`role_ids` в ответе), но документ реестра от
+    этого не меняется: `roles` в форму v2 не входят. Публиковать нечего — номер не растёт.
+    """
+    project = _create_project(api_client)
+    department = _create_department(api_client, project["id"])
+    revisions = [row.revision for row in _revisions(session_factory)]
+
+    response = api_client.patch(f"/api/departments/{department['id']}", json={"role_ids": [1]})
+
+    assert response.status_code == 200, response.text
+    assert [role["id"] for role in response.json()["roles"]] == [1]
+    assert [row.revision for row in _revisions(session_factory)] == revisions
+
+
+def test_edit_the_registry_cannot_express_is_rejected(
+    api_client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """`422` дословным текстом формы, и ни правки, ни ревизии не остаётся.
+
+    Два отдела разработки в одном проекте ручки не создают, но такая строка может лежать
+    в базе (её завели руками или до появления проверки). Правка, после которой документ
+    перестаёт проходить проверку формы, не сохраняется вовсе — иначе база и реестр
+    разошлись бы молча.
+    """
+    project_id = _seed_project(
+        session_factory,
+        "Twins",
+        [{"name": "Разработка"}, {"name": "Разработка 2"}],
+    )
+    with session_factory() as session:
+        department = session.scalars(
+            select(Department).where(Department.project_id == project_id).order_by(Department.id)
+        ).first()
+        assert department is not None
+        department_id = department.id
+
+    response = api_client.patch(
+        f"/api/departments/{department_id}", json={"repo_path": "gidvantus/workflow"}
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": api.PROJECT_DUPLICATE_DEVELOPMENT.format(id=str(project_id))
+    }
+    assert _revisions(session_factory) == []
+    with session_factory() as session:
+        stored = session.get(Department, department_id)
+        assert stored is not None
+        assert stored.repo_path is None
+
+
+def test_edit_that_empties_the_registry_publishes_empty_document(
+    api_client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """Удаление последнего отдела публикует пустой документ, а не оставляет старый.
+
+    Пустой реестр человек не может прислать через `PUT` (`422` «нет ни одного проекта»),
+    но проекция из базы обязана быть честной: иначе диспетчер обслуживал бы удалённый
+    отдел до следующей пересборки, которая на пустой базе тоже отказывает.
+    """
+    project = _create_project(api_client)
+    department = _create_department(api_client, project["id"])
+
+    response = api_client.delete(f"/api/departments/{department['id']}")
+
+    assert response.status_code == 204
+    assert _published(session_factory) == {"version": 2, "projects": []}
+    assert api_client.get("/api/registry", headers=HEADERS).json() == {
+        "version": 2,
+        "projects": [],
+    }
+
+
+def test_revision_race_is_retried_without_losing_the_edit(
+    api_client: TestClient,
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Занятый номер ревизии не теряет правку: savepoint откатывает только вставку."""
+    project = _create_project(api_client)
+    department = _create_department(api_client, project["id"])
+    real_next_revision = api._next_revision
+    calls: list[int] = []
+
+    def flaky_next_revision(session: Session) -> int:
+        calls.append(1)
+        # Первая попытка получает уже занятый номер — как при одновременной записи.
+        return 1 if len(calls) == 1 else real_next_revision(session)
+
+    monkeypatch.setattr(api, "_next_revision", flaky_next_revision)
+
+    response = api_client.patch(f"/api/departments/{department['id']}", json={"enabled": False})
+
+    assert response.status_code == 200, response.text
+    assert len(calls) == 2
+    assert [row.revision for row in _revisions(session_factory)] == [1, 2]
+    assert _published(session_factory)["projects"][0]["departments"][0]["enabled"] is False
+
+
+def test_exhausted_revision_race_rolls_the_edit_back(
+    api_client: TestClient,
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Номер не достался ни за одну попытку — `409`, и правка откатывается целиком.
+
+    Ответ `409` с текстом про одновременную запись — часть контракта; состояние «строка
+    изменена, ревизии нет» после него недопустимо.
+    """
+    project = _create_project(api_client)
+    department = _create_department(api_client, project["id"])
+    attempts: list[int] = []
+
+    def taken_next_revision(session: Session) -> int:
+        attempts.append(1)
+        return 1
+
+    monkeypatch.setattr(api, "_next_revision", taken_next_revision)
+
+    response = api_client.patch(f"/api/departments/{department['id']}", json={"enabled": False})
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": api.REVISION_CONFLICT}
+    assert len(attempts) == api.REVISION_ATTEMPTS
+    assert [row.revision for row in _revisions(session_factory)] == [1]
+    with session_factory() as session:
+        stored = session.get(Department, department["id"])
+        assert stored is not None
+        assert stored.enabled is True
+
+
+def test_history_is_pruned_to_keep_revisions(
+    api_client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """История держит последние `KEEP_REVISIONS` ревизий; `GET` работает на границе.
+
+    Подрез идёт в той же транзакции, что и публикация: старые ревизии — журнал последних
+    состояний, а не документы отката, и последняя ревизия не подрезается никогда.
+    """
+    project = _create_project(api_client)
+    department = _create_department(api_client, project["id"])
+    edits = api.KEEP_REVISIONS + 5
+    for index in range(edits):
+        response = api_client.patch(
+            f"/api/departments/{department['id']}",
+            json={"repo_path": f"gidvantus/repo-{index}"},
+        )
+        assert response.status_code == 200, response.text
+
+    rows = _revisions(session_factory)
+
+    assert len(rows) == api.KEEP_REVISIONS
+    assert rows[-1].revision == edits + 1
+    assert rows[0].revision == edits + 1 - api.KEEP_REVISIONS + 1
+    document = api_client.get("/api/registry", headers=HEADERS)
+    assert document.status_code == 200
+    assert document.json()["projects"][0]["departments"][0]["repo"] == (
+        f"gidvantus/repo-{edits - 1}"
+    )

@@ -22,6 +22,19 @@
 меняются; `GET` отдаёт последнюю. Документ сохраняется как прислан (ручка его не
 переписывает), `rebuild` собирает его из базы по правилам из контракта задачи.
 
+**Публикация на каждой правке.** Правка из веба (`POST`/`PATCH`/`DELETE` отделов и
+проектов) публикует документ в **той же транзакции**, что и саму правку: `flush` правки,
+сборка документа, добавление ревизии, один `commit`. Состояния «строка в базе изменена,
+а документ реестра остался прежним» быть не должно — именно из него выросла поломка,
+когда выключенный в вебе отдел продолжал работать. Отсюда три следствия. Правка,
+после которой документ не проходит проверку формы, отклоняется тем же `422` с текстом
+из таблицы отказов, а данные остаются нетронутыми. Гонка за номер ревизии повторяется
+в savepoint и не откатывает правку; если номер не достался ни за `REVISION_ATTEMPTS`
+попыток, ручка отвечает `409` и откатывает правку целиком. Правка, ничего не
+изменившая в документе, ревизии не добавляет: номер растёт только вместе с содержимым.
+Публикация не требует токена — она часть транзакции правки, а не отдельная запись
+документа человеком.
+
 **Расписание отделов.** В базе окна лежат колонкой `departments.windows` с ключами
 `start_time`/`end_time`, а в документе v2 — массивом `windows` у отдела с ключами
 `start`/`stop`: форму документа задаёт `plugins/registry.mjs`, и переименовывать его
@@ -36,7 +49,7 @@ from datetime import datetime, time
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -66,15 +79,21 @@ WINDOW_CLOSED = "Начало и конец рабочего времени со
 DEFAULT_UNKNOWN = "default указывает на неизвестный проект: «{id}»"
 TELEGRAM_INCOMPLETE = "У бота проекта «{id}» не задан токен или id чата"
 REVISION_CONFLICT = "Ревизию реестра не удалось записать: одновременная запись"
+# Описание отказа `422` у ручек, которые публикуют реестр: текст ответа — из таблицы
+# отказов проверки формы, своего текста правка не сочиняет.
+PUBLISH_REFUSED = "Реестр не может выразить правку: текст отказа — у проверки формы реестра."
 
 # Версия формата реестра, которую понимают плагин и эти ручки.
 SUPPORTED_VERSION = 2
 DEVELOPMENT_KIND = "development"
 # Сколько раз пробовать записать ревизию, если номер заняли между чтением и вставкой.
 REVISION_ATTEMPTS = 3
+# Сколько последних ревизий хранится: дальше история подрезается в той же транзакции.
+KEEP_REVISIONS = 20
 # Пометки о происхождении ревизии: их видно в базе и они объясняют, откуда документ.
 NOTE_PUT = "получен через PUT /api/registry"
 NOTE_REBUILD = "собран из базы: POST /api/registry/rebuild"
+NOTE_EDIT = "опубликован правкой в вебе"
 
 ClockPair = tuple[time, time]
 
@@ -236,28 +255,90 @@ def _next_revision(db: Session) -> int:
     return (current or 0) + 1
 
 
+def _body(document: dict[str, Any]) -> str:
+    """Текст документа для колонки `body`: одна и та же запись у всех, кто её пишет."""
+    return json.dumps(document, ensure_ascii=False, indent=2)
+
+
 def _store(db: Session, document: dict[str, Any], note: str) -> RegistryDocument:
-    """Записать новую ревизию документа; прошлые не меняются.
+    """Добавить ревизию в **текущую** транзакцию; коммитит вызывающий.
 
     Номер выдаётся приложением, поэтому гонка двух одновременных записей возможна.
     Уникальный индекс `uq_registry_documents_revision` её ловит, а не превращает в два
-    документа с одним номером: после `IntegrityError` номер пересчитывается и попытка
-    повторяется.
+    документа с одним номером: вставка идёт в savepoint (`begin_nested`), после
+    `IntegrityError` откатывается только она, номер пересчитывается и попытка
+    повторяется. Внешнюю транзакцию трогать нельзя: в ней лежит сама правка, ради
+    которой публикуется документ, и `rollback()` потерял бы её. Исчерпав попытки,
+    отдаём `409`: вызывающий ручку откатывает транзакцию целиком.
     """
-    body = json.dumps(document, ensure_ascii=False, indent=2)
     for attempt in range(REVISION_ATTEMPTS):
-        row = RegistryDocument(revision=_next_revision(db), body=body, note=note)
-        db.add(row)
+        row = RegistryDocument(revision=_next_revision(db), body=_body(document), note=note)
         try:
-            db.commit()
+            with db.begin_nested():
+                db.add(row)
         except IntegrityError:
-            db.rollback()
             if attempt == REVISION_ATTEMPTS - 1:
                 raise HTTPException(status.HTTP_409_CONFLICT, REVISION_CONFLICT) from None
             continue
-        db.refresh(row)
         return row
     raise HTTPException(status.HTTP_409_CONFLICT, REVISION_CONFLICT)
+
+
+def _prune(db: Session) -> None:
+    """Оставить последние `KEEP_REVISIONS` ревизий, старые удалить в этой же транзакции.
+
+    Ревизии — не документы отката, а журнал последних состояний (`GET` отдаёт только
+    последнюю), поэтому история не растёт бесконечно. Текущая ревизия не подрезается
+    никогда: порог считается по последним `KEEP_REVISIONS` строкам, а удаляются лишь те,
+    что старше самой старой из них.
+    """
+    revisions = db.scalars(
+        select(RegistryDocument.revision)
+        .order_by(RegistryDocument.revision.desc())
+        .limit(KEEP_REVISIONS)
+    ).all()
+    if len(revisions) < KEEP_REVISIONS:
+        return
+    oldest = min(revisions)
+    db.execute(delete(RegistryDocument).where(RegistryDocument.revision < oldest))
+
+
+def publish_registry(db: Session, note: str = NOTE_EDIT) -> RegistryDocument | None:
+    """Опубликовать текущее состояние базы ревизией — в чужой транзакции, без коммита.
+
+    Вызывается ручками правки перед их `commit()`: правка и документ фиксируются вместе.
+    `None` — «публиковать нечего»: документ совпадает с последней ревизией, либо в базе
+    ещё нет ни одного проекта с отделами и реестр ни разу не собирался.
+
+    Порядок: собрать → проверить форму → сравнить с последней ревизией → записать →
+    подрезать историю. Проверка идёт до записи, поэтому «кривая» правка не оставляет ни
+    строки, ни ревизии. Сравнение по тексту документа отсекает пустые правки: номер
+    ревизии растёт только вместе с содержимым, иначе каждая перезапись того же значения
+    раздувала бы историю и заставляла диспетчера перечитывать тот же документ.
+
+    Пустой документ — единственное исключение из проверки формы: `validate_document`
+    отвечает на него `NO_PROJECTS`, потому что человек не должен стирать реестр пустым
+    телом `PUT`. Проекция из базы, наоборот, обязана быть честной: если правка убрала
+    последний проект или отдел, публикуется пустой документ, а не прежняя ревизия с уже
+    удалёнными строками (иначе диспетчер продолжал бы обслуживать удалённое). Пока
+    ревизий нет, публиковать нечего: реестр ещё не собран, и первая же правка, давшая
+    проект с отделом, создаст ревизию 1.
+    """
+    document = build_document(db)
+    latest = db.scalars(
+        select(RegistryDocument).order_by(RegistryDocument.revision.desc()).limit(1)
+    ).first()
+    body = _body(document)
+    if not document["projects"]:
+        if latest is None or latest.body == body:
+            return None
+    else:
+        validate_document(document)
+        if latest is not None and latest.body == body:
+            return None
+    row = _store(db, document, note)
+    _prune(db)
+    return row
 
 
 def _latest(db: Session) -> RegistryDocument:
@@ -365,6 +446,11 @@ def build_document(db: Session) -> dict[str, Any]:
 
     Отделы читаются одним запросом на все проекты: список проектов маленький, но
     запрос на проект в ручке, которую вызывают после каждой правки, — лишнее.
+
+    **Виды отделов — только чтение.** `kind.code` приходит из справочника
+    `department_kinds`, а у него в API есть только `GET`: завести или переименовать вид
+    через веб нельзя, поэтому публикация в `department_kinds.py` не нужна. Появится
+    ручка записи вида — понадобится и публикация, как у отделов и проектов.
     """
     projects = db.scalars(
         select(Project).where(Project.deleted_at.is_(None)).order_by(Project.id)
@@ -436,6 +522,8 @@ def store_registry(
     """
     checked = validate_document(document)
     row = _store(db, checked, NOTE_PUT)
+    db.commit()
+    db.refresh(row)
     return RegistryStoredResponse(revision=row.revision, stored_at=_stored_at(row))
 
 
@@ -462,6 +550,8 @@ def rebuild_registry(db: DbSession) -> RegistryRebuildResponse:
     """
     document = validate_document(build_document(db))
     row = _store(db, document, NOTE_REBUILD)
+    db.commit()
+    db.refresh(row)
     return RegistryRebuildResponse(
         revision=row.revision,
         stored_at=_stored_at(row),

@@ -45,6 +45,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.projects import PROJECT_NOT_FOUND, _get_alive_project
+from app.api.registry import PUBLISH_REFUSED, REVISION_CONFLICT, publish_registry
 from app.db import get_db
 from app.models.department import DEFAULT_MAX_REWORK, Department
 from app.models.department_kind import DepartmentKind
@@ -297,12 +298,26 @@ def _get_alive_department(db: Session, department_id: int) -> Department:
 
 
 def _commit_or_conflict(db: Session) -> None:
-    """Фиксация изменений; гонку по имени ловит индекс и превращается в тот же `409`."""
+    """Зафиксировать правку вместе с ревизией реестра — одной транзакцией.
+
+    `flush` идёт первым: правка обязана быть в транзакции до сборки документа (её читает
+    `publish_registry`), и гонку по имени ловит тот же момент — индекс отдаёт
+    `IntegrityError`, который превращается в прежний `409` с текстом про имя.
+    Публикация добавляет ревизию в эту же транзакцию и ничего не коммитит, поэтому
+    `commit` здесь один и общий. Отказ любой половины откатывает обе: `422` от проверки
+    формы документа и `409` от номера ревизии возвращаются после `rollback()`, и
+    «строка изменена, документ старый» не наступает.
+    """
     try:
+        db.flush()
+        publish_registry(db)
         db.commit()
     except IntegrityError as error:
         db.rollback()
         raise HTTPException(status.HTTP_409_CONFLICT, NAME_TAKEN) from error
+    except HTTPException:
+        db.rollback()
+        raise
 
 
 @router.get(
@@ -338,9 +353,11 @@ def list_departments(project_id: int, db: DbSession) -> Sequence[Department]:
     summary="Создание отдела в проекте",
     responses={
         status.HTTP_404_NOT_FOUND: {"description": f"Проекта нет: «{PROJECT_NOT_FOUND}»."},
-        status.HTTP_409_CONFLICT: {"description": f"Имя занято: «{NAME_TAKEN}»."},
+        status.HTTP_409_CONFLICT: {
+            "description": f"Имя занято: «{NAME_TAKEN}»; номер ревизии: «{REVISION_CONFLICT}»."
+        },
         status.HTTP_422_UNPROCESSABLE_CONTENT: {
-            "description": f"Вида нет в справочнике: «{KIND_UNKNOWN}».",
+            "description": f"Вида нет в справочнике: «{KIND_UNKNOWN}»; {PUBLISH_REFUSED}",
         },
     },
 )
@@ -379,9 +396,11 @@ def create_department(project_id: int, payload: DepartmentCreate, db: DbSession)
     summary="Правка отдела",
     responses={
         status.HTTP_404_NOT_FOUND: {"description": f"Отдела нет: «{DEPARTMENT_NOT_FOUND}»."},
+        status.HTTP_409_CONFLICT: {"description": f"Номер ревизии: «{REVISION_CONFLICT}»."},
         status.HTTP_422_UNPROCESSABLE_CONTENT: {
             "description": (
-                f"Пустое тело: «{NO_FIELDS_TO_UPDATE}», кривое поле: тексты отказов контракта."
+                f"Пустое тело: «{NO_FIELDS_TO_UPDATE}», кривое поле: тексты отказов "
+                f"контракта; {PUBLISH_REFUSED}"
             ),
         },
     },
@@ -460,15 +479,19 @@ def update_department(
     summary="Мягкое удаление отдела",
     responses={
         status.HTTP_404_NOT_FOUND: {"description": f"Отдела нет: «{DEPARTMENT_NOT_FOUND}»."},
+        status.HTTP_409_CONFLICT: {"description": f"Номер ревизии: «{REVISION_CONFLICT}»."},
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {"description": PUBLISH_REFUSED},
     },
 )
 def delete_department(department_id: int, db: DbSession) -> Response:
     """`204` без тела: строка остаётся в таблице с `deleted_at`, из списка исчезает.
 
     Строки `department_roles` при этом не удаляются: физического удаления в приложении
-    нет. Повторный `DELETE` — `404`.
+    нет. Повторный `DELETE` — `404`. Удаление публикует реестр: проект без живых отделов
+    из документа исчезает, поэтому диспетчер перестаёт его обслуживать, не дожидаясь
+    пересборки.
     """
     department = _get_alive_department(db, department_id)
     department.deleted_at = datetime.now(UTC)
-    db.commit()
+    _commit_or_conflict(db)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

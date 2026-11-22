@@ -15,6 +15,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.api.registry import PUBLISH_REFUSED, REVISION_CONFLICT, publish_registry
 from app.db import get_db
 from app.models.project import Project
 from app.schemas.project import ProjectCreate, ProjectResponse, ProjectUpdate
@@ -195,18 +196,29 @@ def _conflict_detail(error: IntegrityError) -> str:
 
 
 def _commit_or_conflict(db: Session) -> None:
-    """Зафиксировать изменения; гонку ловит индекс и превращается в `409` с текстом.
+    """Зафиксировать правку проекта вместе с ревизией реестра — одной транзакцией.
 
-    Проверка занятости до записи не атомарна: две одновременные правки проходят её обе,
-    и вторую ловит частичный уникальный индекс. Текст отказа выбирается по имени
-    сработавшего индекса (`_conflict_detail`), чтобы фронт получил ту же фразу, что и
-    при обычной проверке.
+    `flush` идёт первым: правка обязана быть в транзакции до сборки документа (её читает
+    `publish_registry`), и гонку ловит тот же момент — частичный уникальный индекс отдаёт
+    `IntegrityError`, который превращается в прежний `409` (текст выбирает
+    `_conflict_detail`). Проверка занятости до записи не атомарна: две одновременные
+    правки проходят её обе, и вторую ловит индекс.
+
+    Публикация добавляет ревизию в эту же транзакцию и ничего не коммитит, поэтому
+    `commit` здесь один и общий. Отказ любой половины откатывает обе: `422` от проверки
+    формы документа и `409` от номера ревизии возвращаются после `rollback()`, и
+    «строка изменена, документ старый» не наступает.
     """
     try:
+        db.flush()
+        publish_registry(db)
         db.commit()
     except IntegrityError as error:
         db.rollback()
         raise HTTPException(status.HTTP_409_CONFLICT, _conflict_detail(error)) from error
+    except HTTPException:
+        db.rollback()
+        raise
 
 
 @router.get(
@@ -228,12 +240,20 @@ def list_projects(db: DbSession) -> Sequence[Project]:
     summary="Создание проекта",
     responses={
         status.HTTP_409_CONFLICT: {
-            "description": f"Имя занято: «{NAME_TAKEN}»; код занят: «{CODE_TAKEN}»."
+            "description": (
+                f"Имя занято: «{NAME_TAKEN}»; код занят: «{CODE_TAKEN}»; "
+                f"номер ревизии: «{REVISION_CONFLICT}»."
+            )
         },
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {"description": PUBLISH_REFUSED},
     },
 )
 def create_project(payload: ProjectCreate, db: DbSession) -> Project:
-    """`201` с созданным проектом; `409` — имя или код заняты живым проектом."""
+    """`201` с созданным проектом; `409` — имя или код заняты живым проектом.
+
+    Создание публикует реестр: проект без отделов в документ не попадает, поэтому первая
+    же ревизия появится, когда у него будет отдел.
+    """
     name = validate_name(payload.name)
     repo_url = validate_repo_url(payload.repo_url)
     description = validate_description(payload.description)
@@ -264,11 +284,15 @@ def create_project(payload: ProjectCreate, db: DbSession) -> Project:
     responses={
         status.HTTP_404_NOT_FOUND: {"description": f"Проекта нет: «{PROJECT_NOT_FOUND}»."},
         status.HTTP_409_CONFLICT: {
-            "description": f"Имя занято: «{NAME_TAKEN}»; код занят: «{CODE_TAKEN}»."
+            "description": (
+                f"Имя занято: «{NAME_TAKEN}»; код занят: «{CODE_TAKEN}»; "
+                f"номер ревизии: «{REVISION_CONFLICT}»."
+            )
         },
         status.HTTP_422_UNPROCESSABLE_CONTENT: {
             "description": (
-                f"Пустое тело: «{NO_FIELDS_TO_UPDATE}»; смена заданного кода: «{CODE_IMMUTABLE}»."
+                f"Пустое тело: «{NO_FIELDS_TO_UPDATE}»; смена заданного кода: "
+                f"«{CODE_IMMUTABLE}»; {PUBLISH_REFUSED}"
             ),
         },
     },
@@ -279,6 +303,9 @@ def update_project(
     db: DbSession,
 ) -> Project:
     """`200` с обновлённым проектом; `422` на пустое тело и смену кода, `404` для удалённого.
+
+    Правка публикует реестр: `name` проекта — это `title` в документе, поэтому
+    переименование доезжает до диспетчера сразу, а не после пересборки.
 
     Сначала проверяются все присланные поля, и только потом они присваиваются:
     отказ не должен оставлять в сессии половину правки.
@@ -341,14 +368,18 @@ def update_project(
     summary="Мягкое удаление проекта",
     responses={
         status.HTTP_404_NOT_FOUND: {"description": f"Проекта нет: «{PROJECT_NOT_FOUND}»."},
+        status.HTTP_409_CONFLICT: {"description": f"Номер ревизии: «{REVISION_CONFLICT}»."},
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {"description": PUBLISH_REFUSED},
     },
 )
 def delete_project(project_id: int, db: DbSession) -> Response:
     """`204` без тела: строка остаётся в таблице с `deleted_at`, из списка исчезает.
 
-    Физического удаления строк в приложении нет. Повторный `DELETE` — `404`.
+    Физического удаления строк в приложении нет. Повторный `DELETE` — `404`. Удаление
+    публикует реестр: проекта не остаётся в документе, который заберёт диспетчер, а
+    отделы удалённого проекта в документ не попадают и без отдельной чистки.
     """
     project = _get_alive_project(db, project_id)
     project.deleted_at = datetime.now(UTC)
-    db.commit()
+    _commit_or_conflict(db)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
