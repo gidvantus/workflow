@@ -10,6 +10,7 @@
 `uq_departments_project_name_alive` гонку по имени проверить нечем.
 """
 
+import json
 from datetime import datetime
 from typing import Any
 
@@ -20,8 +21,10 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.api import departments as api
+from app.api import registry as registry_api
 from app.models.department import Department, department_roles
 from app.models.department_kind import FIELD_KEYS_BY_CODE
+from app.models.registry import RegistryDocument
 from app.models.role import DEFAULT_ROLES
 
 PROJECT: dict[str, str] = {
@@ -1168,6 +1171,58 @@ def test_name_of_deleted_department_can_be_used_again(
 
     assert repeated["name"] == created["name"]
     assert repeated["id"] != created["id"]
+
+
+# ---------------------------------------------------------------------------------------
+# Публикация реестра правкой отдела (issue #68): каждая правка пишет ревизию в своей же
+# транзакции, поэтому документ ревизии обязан совпадать с текущей базой — без `rebuild`.
+# ---------------------------------------------------------------------------------------
+
+
+def _revisions(session_factory: sessionmaker[Session]) -> list[RegistryDocument]:
+    """Строки ревизий реестра напрямую из базы — в обход ручек."""
+    with session_factory() as session:
+        return list(session.scalars(select(RegistryDocument).order_by(RegistryDocument.revision)))
+
+
+def test_patch_publishes_registry_revision(
+    client: TestClient,
+    project_id: int,
+    session_factory: sessionmaker[Session],
+) -> None:
+    """`PATCH` отдела добавляет ревизию, и её документ — ровно текущая база."""
+    created = _create(client, project_id)
+    assert [row.revision for row in _revisions(session_factory)] == [1]
+
+    response = client.patch(
+        _department_url(created["id"]),
+        json={"enabled": False, "repo_path": "gidvantus/workflow"},
+    )
+
+    assert response.status_code == status.HTTP_200_OK, response.text
+    rows = _revisions(session_factory)
+    assert [row.revision for row in rows] == [1, 2]
+    assert rows[-1].note == registry_api.NOTE_EDIT
+    published = json.loads(rows[-1].body)
+    assert published["projects"][0]["departments"][0]["enabled"] is False
+    with session_factory() as session:
+        assert published == registry_api.build_document(session)
+
+
+def test_delete_publishes_registry_revision(
+    client: TestClient,
+    project_id: int,
+    session_factory: sessionmaker[Session],
+) -> None:
+    """`DELETE` отдела публикует документ, в котором отдела уже нет."""
+    created = _create(client, project_id)
+
+    response = client.delete(_department_url(created["id"]))
+
+    assert response.status_code == status.HTTP_204_NO_CONTENT
+    rows = _revisions(session_factory)
+    assert [row.revision for row in rows] == [1, 2]
+    assert json.loads(rows[-1].body) == {"version": 2, "projects": []}
 
 
 @pytest.mark.parametrize(

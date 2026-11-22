@@ -7,6 +7,7 @@
 один общий движок на все ручки, чтобы не держать копию фикстуры в каждом модуле.
 """
 
+import json
 from datetime import datetime
 from typing import Any
 
@@ -17,7 +18,9 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.api import projects as api
+from app.api import registry as registry_api
 from app.models.project import Project
+from app.models.registry import RegistryDocument
 
 PROJECT: dict[str, str] = {
     "name": "Workflow",
@@ -701,3 +704,67 @@ def test_patch_does_not_change_total_cost(client: TestClient) -> None:
     body = response.json()
     assert body["name"] == "Другое имя"
     assert "total_cost" not in body
+
+
+# ---------------------------------------------------------------------------------------
+# Публикация реестра правкой проекта (issue #68): `title` документа — это `name` строки,
+# поэтому переименование и удаление проекта обязаны доезжать до диспетчера без `rebuild`.
+# ---------------------------------------------------------------------------------------
+
+
+def _with_department(client: TestClient, **overrides: Any) -> dict[str, Any]:
+    """Завести проект и отдел разработки ручками: проект без отдела в реестр не попадает."""
+    project = _create(client, **overrides)
+    response = client.post(f"/api/projects/{project['id']}/departments", json={"kind_id": 1})
+    assert response.status_code == status.HTTP_201_CREATED, response.text
+    return project
+
+
+def _published(session_factory: sessionmaker[Session]) -> dict[str, Any]:
+    """Документ последней ревизии реестра, разобранный из базы, — в обход ручек."""
+    with session_factory() as session:
+        rows = list(
+            session.scalars(
+                select(RegistryDocument).order_by(RegistryDocument.revision.desc()).limit(1)
+            )
+        )
+        if not rows:
+            return {}
+        document: dict[str, Any] = json.loads(rows[0].body)
+        return document
+
+
+def test_patch_publishes_registry_with_new_title(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """Переименование проекта публикует ревизию: `title` в документе — новое имя."""
+    project = _with_department(client)
+    assert _published(session_factory)["projects"][0]["title"] == project["name"]
+
+    response = client.patch(f"/api/projects/{project['id']}", json={"name": "Workflow 2"})
+
+    assert response.status_code == status.HTTP_200_OK, response.text
+    with session_factory() as session:
+        revisions = list(
+            session.scalars(select(RegistryDocument).order_by(RegistryDocument.revision))
+        )
+        assert [row.revision for row in revisions] == [1, 2]
+        assert revisions[-1].note == registry_api.NOTE_EDIT
+        published = json.loads(revisions[-1].body)
+        assert published["projects"][0]["title"] == "Workflow 2"
+        assert published == registry_api.build_document(session)
+
+
+def test_delete_removes_project_from_registry_document(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """Удаление проекта публикует документ без него; второй проект остаётся."""
+    first = _with_department(client)
+    second = _with_department(client, name="CloudPass", repo_url="gidvantus/cloudpass")
+    assert len(_published(session_factory)["projects"]) == 2
+
+    response = client.delete(f"/api/projects/{first['id']}")
+
+    assert response.status_code == status.HTTP_204_NO_CONTENT
+    document = _published(session_factory)
+    assert [project["id"] for project in document["projects"]] == [str(second["id"])]
