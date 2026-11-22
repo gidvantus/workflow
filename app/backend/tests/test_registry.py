@@ -23,7 +23,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app import main
@@ -943,32 +943,34 @@ def test_revision_race_publishes_fresh_document(
     session_factory: sessionmaker[Session],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Повтор после занятого номера пересобирает документ, а не пишет устаревший.
+    """Повтор пересобирает документ и перечитывает строки, а не берёт их из identity map.
 
-    Гонка двух вкладок: пока эта правка собирает документ, соседняя фиксирует свою
-    (выключает отдел другого проекта) — и номер ревизии достаётся ей. Первая попытка
-    вставки откатывается в savepoint, повтор обязан увидеть уже зафиксированное изменение.
-    Если документ собран один раз до цикла попыток, ревизия `N+1` запишет состояние *до*
-    чужого коммита: выключенный в соседней вкладке отдел останется в реестре включённым —
-    ровно исходный инцидент, из которого выросла задача.
+    Гонка двух вкладок на одном отделе: соседняя выключает отдел `cloudpass`, наша
+    меняет ему `repo`. Номер ревизии достаётся соседу, наша первая попытка вставки
+    откатывается в savepoint, и повтор обязан опубликовать **его** состояние вместе с
+    нашей правкой. Две вещи мешают этому сами по себе:
+
+    - документ, собранный один раз до цикла попыток (замечание Б1);
+    - identity map: `select()` вернёт уже загруженный объект с прежними колонками, хотя в
+      базе они новые (замечание Б2). Соседнюю правку здесь делает `UPDATE` мимо ORM: в
+      базе строка новая, объект в сессии — старый, ровно как после чужого коммита.
+
+    Отдел в этой сессии уже загружен ручкой правки, поэтому объект живой и перечитывать
+    его без `expire_all()` некому. Итог без исправления — ревизия, в которой отдел
+    включён, хотя в базе он выключен: исходный инцидент из постановки.
     """
     project = _create_project(api_client)
     department = _create_department(api_client, project["id"])
-    neighbour = _create_project(api_client, name="Neighbour", repo_url="gidvantus/other")
-    neighbour_department = _create_department(api_client, neighbour["id"])
     real_next_revision = api._next_revision
     calls: list[int] = []
 
     def racing_next_revision(session: Session) -> int:
         calls.append(1)
         if len(calls) == 1:
-            # Соседняя вкладка успела закоммитить свою правку до нашей вставки. В тесте её
-            # изображает та же сессия: UPDATE уходит во внешнюю транзакцию до savepoint,
-            # поэтому откат вставки его не отменяет — как и чужой `commit()` в жизни.
-            other = session.get(Department, neighbour_department["id"])
-            assert other is not None
-            other.enabled = False
-            session.flush()
+            session.execute(
+                text("UPDATE departments SET enabled = :enabled WHERE id = :id"),
+                {"enabled": False, "id": department["id"]},
+            )
             return real_next_revision(session) - 1
         return real_next_revision(session)
 
@@ -980,12 +982,49 @@ def test_revision_race_publishes_fresh_document(
 
     assert response.status_code == 200, response.text
     assert len(calls) == 2
-    assert [row.revision for row in _revisions(session_factory)] == [1, 2, 3]
+    assert [row.revision for row in _revisions(session_factory)] == [1, 2]
     with session_factory() as session:
         fresh = api.build_document(session)
     published = _published(session_factory)
     assert published == fresh
-    assert published["projects"][1]["departments"][0]["enabled"] is False
+    # Чужое изменение и наша правка — обе в опубликованном документе.
+    assert published["projects"][0]["departments"][0]["enabled"] is False
+    assert published["projects"][0]["departments"][0]["repo"] == "gidvantus/workflow"
+
+
+def test_rebuild_rereads_rows_and_document_on_retry(
+    api_client: TestClient,
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`rebuild` собирает документ на каждой попытке, а не публикует снимок до неё.
+
+    Пересборка, запущенная одновременно с правкой в вебе, не должна публиковать проекцию
+    без этой правки: номер занимает сосед, повтор обязан увидеть его изменение в базе.
+    """
+    project = _create_project(api_client)
+    department = _create_department(api_client, project["id"])
+    real_next_revision = api._next_revision
+    calls: list[int] = []
+
+    def racing_next_revision(session: Session) -> int:
+        calls.append(1)
+        if len(calls) == 1:
+            session.execute(
+                text("UPDATE departments SET enabled = :enabled WHERE id = :id"),
+                {"enabled": False, "id": department["id"]},
+            )
+            return real_next_revision(session) - 1
+        return real_next_revision(session)
+
+    monkeypatch.setattr(api, "_next_revision", racing_next_revision)
+
+    response = api_client.post("/api/registry/rebuild", headers=HEADERS)
+
+    assert response.status_code == 200, response.text
+    assert len(calls) == 2
+    assert response.json()["document"]["projects"][0]["departments"][0]["enabled"] is False
+    assert _published(session_factory) == response.json()["document"]
 
 
 def test_rebuild_prunes_history_like_edits(

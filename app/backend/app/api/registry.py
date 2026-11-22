@@ -18,9 +18,12 @@
 ронять сохранение. Порядок проверок фиксирован — версия, проекты, проект, расписание,
 `default`, бот, — чтобы на документе с двумя ошибками ответ был предсказуемым.
 
-**Ревизии только добавляются.** `PUT` и `rebuild` пишут новую строку, прошлые не
-меняются; `GET` отдаёт последнюю. Документ сохраняется как прислан (ручка его не
-переписывает), `rebuild` собирает его из базы по правилам из контракта задачи.
+**Ревизии только добавляются.** Новая строка — на `PUT`, на `rebuild` и на каждую правку
+из веба; прошлые не меняются, `GET` отдаёт последнюю. Документ сохраняется как прислан
+(ручка его не переписывает), `rebuild` собирает его из базы по правилам из контракта
+задачи. Хранятся последние `KEEP_REVISIONS = 20` ревизий — они журнал последних
+состояний, а не документы отката, поэтому старые строки подрезаются в той же транзакции,
+что и запись новой (`_prune`), одинаково для правок, `PUT` и `rebuild`.
 
 **Публикация на каждой правке.** Правка из веба (`POST`/`PATCH`/`DELETE` отделов и
 проектов) публикует документ в **той же транзакции**, что и саму правку: `flush` правки,
@@ -44,7 +47,7 @@
 
 import json
 import secrets
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import datetime, time
 from typing import Annotated, Any
 
@@ -275,27 +278,36 @@ def _insert(db: Session, document: dict[str, Any], note: str) -> RegistryDocumen
     return row
 
 
-def _store(db: Session, document: dict[str, Any], note: str) -> RegistryDocument:
-    """Записать известный документ ревизией, повторив занятый номер. Коммитит вызывающий.
+def _store(
+    db: Session, document_of: Callable[[], dict[str, Any]], note: str
+) -> tuple[RegistryDocument, dict[str, Any]]:
+    """Записать документ ревизией, повторив занятый номер. Коммитит вызывающий.
 
-    Для `PUT` и `rebuild`: документ уже посчитан и на повторе не меняется — `PUT` пишет
-    ровно то, что прислали, а `rebuild` собирает документ заново до вызова. Публикация
-    правки сюда не ходит: у неё документ пересобирается на каждой попытке — см.
-    `publish_registry`, иначе повтор записал бы состояние до чужого коммита.
+    Для `PUT` и `rebuild`. Документ берётся из `document_of()` **перед каждой попыткой**:
+    `PUT` отдаёт присланное и на повторе не меняется, `rebuild` пересобирает проекцию из
+    базы — иначе пересборка, запущенная одновременно с правкой в вебе, опубликовала бы
+    документ без этой правки.
+
+    После `IntegrityError` номер заняла чужая зафиксированная запись, и сессия помнит
+    строки из identity map — `expire_all()` сбрасывает их, иначе пересборка вернёт прежние
+    значения колонок, хотя в базе уже новые. Своя незакоммиченная правка при этом не
+    теряется: она выходит во внешнюю транзакцию `flush()`-ем до вызова.
 
     Подрез истории — здесь, а не в публикации: он общий для всех трёх записей, включая
     `PUT` и `rebuild`, иначе «хранятся последние `KEEP_REVISIONS`» было бы верно только
     для правок из веба.
     """
     for attempt in range(REVISION_ATTEMPTS):
+        document = document_of()
         try:
             row = _insert(db, document, note)
         except IntegrityError:
+            db.expire_all()
             if attempt == REVISION_ATTEMPTS - 1:
                 raise HTTPException(status.HTTP_409_CONFLICT, REVISION_CONFLICT) from None
             continue
         _prune(db)
-        return row
+        return row, document
     raise HTTPException(status.HTTP_409_CONFLICT, REVISION_CONFLICT)
 
 
@@ -369,6 +381,10 @@ def publish_registry(db: Session, note: str = NOTE_EDIT) -> RegistryDocument | N
         except IntegrityError:
             if attempt == REVISION_ATTEMPTS - 1:
                 raise HTTPException(status.HTTP_409_CONFLICT, REVISION_CONFLICT) from None
+            # Чужой коммит уже в базе, но ORM помнит строки из identity map. Без сброса
+            # следующая сборка вернёт прежние колонки — пересобранный документ совпадёт
+            # с устаревшим, и ревизия N+1 снова покажет выключенный отдел включённым.
+            db.expire_all()
             continue
         _prune(db)
         return row
@@ -553,7 +569,7 @@ def store_registry(
     нормализация (умолчания `title`, `base`, портов) живёт в `plugins/registry.mjs`.
     """
     checked = validate_document(document)
-    row = _store(db, checked, NOTE_PUT)
+    row, _ = _store(db, lambda: checked, NOTE_PUT)
     db.commit()
     db.refresh(row)
     return RegistryStoredResponse(revision=row.revision, stored_at=_stored_at(row))
@@ -579,9 +595,16 @@ def rebuild_registry(db: DbSession) -> RegistryRebuildResponse:
 
     Собранный документ проходит ту же проверку, что и присланный `PUT`: одна таблица
     отказов на две ручки, и «кривая» база не попадает в реестр молча.
+
+    Документ собирается заново на каждой попытке: пересборка, запущенная одновременно с
+    правкой в вебе, иначе опубликовала бы проекцию без этой правки — та же гонка, что и у
+    публикации правки, только в ручном инструменте.
     """
-    document = validate_document(build_document(db))
-    row = _store(db, document, NOTE_REBUILD)
+
+    def document_of() -> dict[str, Any]:
+        return validate_document(build_document(db))
+
+    row, document = _store(db, document_of, NOTE_REBUILD)
     db.commit()
     db.refresh(row)
     return RegistryRebuildResponse(
