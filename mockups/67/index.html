@@ -371,7 +371,7 @@ body {
 .proc-row {
   display: grid;
   grid-template-columns:
-    3.5rem minmax(0, 1.2fr) minmax(0, 0.95fr) minmax(0, 1.4fr) minmax(0, 0.8fr)
+    3.5rem minmax(0, 1.7fr) minmax(0, 0.95fr) minmax(0, 1.35fr) minmax(0, 0.75fr)
     minmax(0, 0.7fr) minmax(0, 0.8fr) minmax(0, 0.9fr) 4.5rem;
   gap: 0.5rem;
   align-items: start;
@@ -428,13 +428,21 @@ body {
   line-height: 1.4;
 }
 
-/* Вид ступени — вторая строка ячейки: сессия запускает агента, маршрут только
-   раскладывает по путям, метки ничего не запускают. */
+/* Вторая строка ячейки: id ступени из документа и её вид. id стоит здесь, потому что
+   тексты отказов сервера называют именно его: «У ступени «dev-backend»…». Вид:
+   сессия запускает агента, маршрут только раскладывает по путям, метки ничего не запускают. */
 .proc-row__kind {
   display: block;
   margin-top: 0.0625rem;
   font-size: 0.6875rem;
-  line-height: 1.35;
+  line-height: 1.4;
+  color: var(--muted);
+  overflow-wrap: break-word;
+}
+
+.proc-row__id {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 0.6875rem;
   color: var(--muted);
 }
 
@@ -443,7 +451,7 @@ body {
    areaFullstack переносится целиком на свою строку, а не рвётся посередине. */
 .lbl {
   font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
-  font-size: 0.75rem;
+  font-size: 0.6875rem;
   line-height: 1.5;
   color: var(--ink);
   overflow-wrap: break-word;
@@ -808,16 +816,12 @@ body {
   .proc-head,
   .proc-row {
     grid-template-columns:
-      3.25rem minmax(0, 1.15fr) minmax(0, 1fr) minmax(0, 1.3fr) minmax(0, 0.7fr)
-      minmax(0, 0.7fr) minmax(0, 0.85fr) minmax(0, 0.9fr) 4.25rem;
+      3.25rem minmax(0, 1.5fr) minmax(0, 0.95fr) minmax(0, 1.2fr) minmax(0, 0.7fr)
+      minmax(0, 0.65fr) minmax(0, 0.75fr) minmax(0, 0.85fr) 4.25rem;
     gap: 0.4375rem;
     padding-left: 0.875rem;
     padding-right: 0.875rem;
   }
-
-  /* Кегль ключей на шаг меньше: при 1280 столбец «входящие» сузился настолько, что
-     areaFullstack рвался посередине. Моноширинный на 11 px держит ключ целиком. */
-  .lbl { font-size: 0.6875rem; }
 }
 
 /* ---------- ≤ 900 px: меню полосой, ступень блоком ---------- */
@@ -1047,10 +1051,10 @@ body {
 
           <ul class="proc-body">
             <li class="proc-row" data-testid="process-step-row">
-              <span class="proc-row__order">1</span>
+              <span class="proc-row__order" data-testid="process-step-priority">1</span>
               <span class="proc-row__step">
                 <span class="proc-row__title" data-testid="process-step-title">Макет постановки</span>
-                <span class="proc-row__kind">сессия</span>
+                <span class="proc-row__kind"><span class="proc-row__id">mockup</span> · сессия</span>
               </span>
               <button class="proc-cell proc-cell--edit" type="button" data-label="Входящие" data-testid="process-step-when">
                 <span class="lbl">mockup</span>
@@ -1073,10 +1077,10 @@ body {
             </li>
 
             <li class="proc-row" data-testid="process-step-row">
-              <span class="proc-row__order">61</span>
+              <span class="proc-row__order" data-testid="process-step-priority">61</span>
               <span class="proc-row__step">
                 <span class="proc-row__title" data-testid="process-step-title">Маршрут по путям</span>
-                <span class="proc-row__kind">маршрут</span>
+                <span class="proc-row__kind"><span class="proc-row__id">route</span> · маршрут</span>
               </span>
               <button class="proc-cell proc-cell--edit" type="button" data-label="Входящие" data-testid="process-step-when">
                 <span class="lbl">dev</span>
@@ -1094,10 +1098,10 @@ body {
             </li>
 
             <li class="proc-row" data-testid="process-step-row">
-              <span class="proc-row__order">121</span>
+              <span class="proc-row__order" data-testid="process-step-priority">121</span>
               <span class="proc-row__step">
                 <span class="proc-row__title" data-testid="process-step-title">Передать фронтенд</span>
-                <span class="proc-row__kind">метки</span>
+                <span class="proc-row__kind"><span class="proc-row__id">handoff-frontend</span> · метки</span>
               </span>
               <button class="proc-cell proc-cell--edit" type="button" data-label="Входящие" data-testid="process-step-when">
                 <span class="lbl">test</span><span class="lbl">areaFullstack</span>
@@ -1119,10 +1123,10 @@ body {
             </li>
 
             <li class="proc-row" data-testid="process-step-row">
-              <span class="proc-row__order">181</span>
+              <span class="proc-row__order" data-testid="process-step-priority">181</span>
               <span class="proc-row__step">
                 <span class="proc-row__title" data-testid="process-step-title">Код-ревью</span>
-                <span class="proc-row__kind">сессия</span>
+                <span class="proc-row__kind"><span class="proc-row__id">review</span> · сессия</span>
               </span>
               <button class="proc-cell proc-cell--edit" type="button" data-label="Входящие" data-testid="process-step-when">
                 <span class="lbl">review</span>
@@ -1138,10 +1142,10 @@ body {
             </li>
 
             <li class="proc-row" data-testid="process-step-row">
-              <span class="proc-row__order">241</span>
+              <span class="proc-row__order" data-testid="process-step-priority">241</span>
               <span class="proc-row__step">
                 <span class="proc-row__title" data-testid="process-step-title">Тестирование</span>
-                <span class="proc-row__kind">сессия</span>
+                <span class="proc-row__kind"><span class="proc-row__id">test</span> · сессия</span>
               </span>
               <button class="proc-cell proc-cell--edit" type="button" data-label="Входящие" data-testid="process-step-when">
                 <span class="lbl">test</span>
@@ -1157,10 +1161,10 @@ body {
             </li>
 
             <li class="proc-row" data-testid="process-step-row">
-              <span class="proc-row__order">301</span>
+              <span class="proc-row__order" data-testid="process-step-priority">301</span>
               <span class="proc-row__step">
                 <span class="proc-row__title" data-testid="process-step-title">Слияние PR</span>
-                <span class="proc-row__kind">сессия</span>
+                <span class="proc-row__kind"><span class="proc-row__id">merge</span> · сессия</span>
               </span>
               <button class="proc-cell proc-cell--edit" type="button" data-label="Входящие" data-testid="process-step-when">
                 <span class="lbl">ok</span>
@@ -1176,10 +1180,10 @@ body {
             </li>
 
             <li class="proc-row" data-testid="process-step-row">
-              <span class="proc-row__order">361</span>
+              <span class="proc-row__order" data-testid="process-step-priority">361</span>
               <span class="proc-row__step">
                 <span class="proc-row__title" data-testid="process-step-title">Доработка после теста</span>
-                <span class="proc-row__kind">сессия</span>
+                <span class="proc-row__kind"><span class="proc-row__id">rework-test</span> · сессия</span>
               </span>
               <button class="proc-cell proc-cell--edit" type="button" data-label="Входящие" data-testid="process-step-when">
                 <span class="lbl">failed</span>
@@ -1199,10 +1203,10 @@ body {
             </li>
 
             <li class="proc-row" data-testid="process-step-row">
-              <span class="proc-row__order">421</span>
+              <span class="proc-row__order" data-testid="process-step-priority">421</span>
               <span class="proc-row__step">
                 <span class="proc-row__title" data-testid="process-step-title">Бэкенд</span>
-                <span class="proc-row__kind">сессия</span>
+                <span class="proc-row__kind"><span class="proc-row__id">dev-backend</span> · сессия</span>
               </span>
               <button class="proc-cell proc-cell--edit" type="button" data-label="Входящие" data-testid="process-step-when">
                 <span class="lbl">dev</span><span class="lbl">areaBackend</span>
@@ -1224,10 +1228,10 @@ body {
             </li>
 
             <li class="proc-row" data-testid="process-step-row">
-              <span class="proc-row__order">481</span>
+              <span class="proc-row__order" data-testid="process-step-priority">481</span>
               <span class="proc-row__step">
                 <span class="proc-row__title" data-testid="process-step-title">Фронтенд</span>
-                <span class="proc-row__kind">сессия</span>
+                <span class="proc-row__kind"><span class="proc-row__id">dev-frontend</span> · сессия</span>
               </span>
               <button class="proc-cell proc-cell--edit" type="button" data-label="Входящие" data-testid="process-step-when">
                 <span class="lbl">dev</span><span class="lbl">areaFrontend</span>
@@ -1249,10 +1253,10 @@ body {
             </li>
 
             <li class="proc-row" data-testid="process-step-row">
-              <span class="proc-row__order">541</span>
+              <span class="proc-row__order" data-testid="process-step-priority">541</span>
               <span class="proc-row__step">
                 <span class="proc-row__title" data-testid="process-step-title">Полный стек: бэкенд</span>
-                <span class="proc-row__kind">сессия</span>
+                <span class="proc-row__kind"><span class="proc-row__id">dev-fullstack-backend</span> · сессия</span>
               </span>
               <button class="proc-cell proc-cell--edit" type="button" data-label="Входящие" data-testid="process-step-when">
                 <span class="lbl">dev</span><span class="lbl">areaFullstack</span>
@@ -1274,10 +1278,10 @@ body {
             </li>
 
             <li class="proc-row" data-testid="process-step-row">
-              <span class="proc-row__order">601</span>
+              <span class="proc-row__order" data-testid="process-step-priority">601</span>
               <span class="proc-row__step">
                 <span class="proc-row__title" data-testid="process-step-title">Полный стек: фронтенд</span>
-                <span class="proc-row__kind">сессия</span>
+                <span class="proc-row__kind"><span class="proc-row__id">dev-fullstack-frontend</span> · сессия</span>
               </span>
               <button class="proc-cell proc-cell--edit" type="button" data-label="Входящие" data-testid="process-step-when">
                 <span class="lbl">frontend</span>
@@ -1299,10 +1303,10 @@ body {
             </li>
 
             <li class="proc-row" data-testid="process-step-row">
-              <span class="proc-row__order">661</span>
+              <span class="proc-row__order" data-testid="process-step-priority">661</span>
               <span class="proc-row__step">
                 <span class="proc-row__title" data-testid="process-step-title">Полный стек</span>
-                <span class="proc-row__kind">сессия</span>
+                <span class="proc-row__kind"><span class="proc-row__id">dev-fullstack-default</span> · сессия</span>
               </span>
               <button class="proc-cell proc-cell--edit" type="button" data-label="Входящие" data-testid="process-step-when">
                 <span class="lbl">dev</span>
@@ -1324,10 +1328,10 @@ body {
             </li>
 
             <li class="proc-row" data-testid="process-step-row">
-              <span class="proc-row__order">721</span>
+              <span class="proc-row__order" data-testid="process-step-priority">721</span>
               <span class="proc-row__step">
                 <span class="proc-row__title" data-testid="process-step-title">Продолжить</span>
-                <span class="proc-row__kind">сессия</span>
+                <span class="proc-row__kind"><span class="proc-row__id">continue</span> · сессия</span>
               </span>
               <button class="proc-cell proc-cell--edit" type="button" data-label="Входящие" data-testid="process-step-when">
                 <span class="lbl">progress</span>
@@ -1590,10 +1594,10 @@ body {
 
     <ul class="proc-body">
       <li class="proc-row">
-        <span class="proc-row__order">421</span>
+        <span class="proc-row__order" data-testid="process-step-priority">421</span>
         <span class="proc-row__step">
           <span class="proc-row__title">Бэкенд</span>
-          <span class="proc-row__kind">сессия</span>
+          <span class="proc-row__kind"><span class="proc-row__id">dev-backend</span> · сессия</span>
         </span>
         <button class="proc-cell proc-cell--edit" type="button" data-label="Входящие">
           <span class="lbl">dev</span><span class="lbl">areaBackend</span>
@@ -1642,10 +1646,10 @@ body {
 
     <ul class="proc-body">
       <li class="proc-row proc-row--off">
-        <span class="proc-row__order">421</span>
+        <span class="proc-row__order" data-testid="process-step-priority">421</span>
         <span class="proc-row__step">
           <span class="proc-row__title">Бэкенд</span>
-          <span class="proc-row__kind">сессия</span>
+          <span class="proc-row__kind"><span class="proc-row__id">dev-backend</span> · сессия</span>
         </span>
         <button class="proc-cell proc-cell--edit" type="button" data-label="Входящие">
           <span class="lbl">dev</span><span class="lbl">areaBackend</span>
