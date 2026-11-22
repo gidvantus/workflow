@@ -62,9 +62,7 @@ from sqlalchemy.orm import Session
 
 from app.api.projects import (
     PROJECT_NOT_FOUND,
-    find_project_by_ref,
     prices_of,
-    project_ref_keys,
 )
 from app.api.registry import require_registry_token
 from app.db import get_db
@@ -72,6 +70,7 @@ from app.models.project import Project
 from app.models.usage_session import UsageSession
 from app.models.usage_shift import UsageShift
 from app.money import amount_for
+from app.project_refs import find_project_by_ref, project_ref_keys
 from app.schemas.usage import (
     UsageProjectTotal,
     UsageProjectUsage,
@@ -512,7 +511,7 @@ def store_shift(
 
     Смена ищется по всем ключам проекта, какие у него были: пока кода нет, реестр зовёт
     его `str(id)`, а с появлением кода — кодом, и смены, записанные под прежним ключом,
-    остаются в журнале этого же проекта (см. `app.api.projects.project_ref_keys`).
+    остаются в журнале этого же проекта (см. `app.project_refs.project_ref_keys`).
     """
     draft = _validated(payload)
 

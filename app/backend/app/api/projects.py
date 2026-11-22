@@ -11,14 +11,13 @@ from decimal import Decimal
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from sqlalchemy import ColumnElement, func, select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.registry import PUBLISH_REFUSED, REVISION_CONFLICT, publish_registry
 from app.db import get_db
 from app.models.project import Project
-from app.models.usage_shift import UsageShift
 from app.schemas.project import ProjectCreate, ProjectResponse, ProjectUpdate
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
@@ -177,74 +176,6 @@ def _get_alive_project(db: Session, project_id: int) -> Project:
     if project is None or project.deleted_at is not None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, PROJECT_NOT_FOUND)
     return project
-
-
-def project_ref(project: Project) -> str:
-    """Id проекта в реестре отдела: `code`, а если код не задан — `str(id)`.
-
-    Одна формула на весь отдел: по ней строится `id` проекта в документе реестра, по ней
-    же ищется проект, которому принадлежит смена, приехавшая от harness. Вторая копия
-    разошлась бы с первой, и смена нашла бы не тот проект (или не нашла бы никакого).
-    """
-    return project.code or str(project.id)
-
-
-def find_project_by_ref(db: Session, ref: str) -> Project | None:
-    """Живой проект по id из реестра: сначала по коду, потом по числовому `id`.
-
-    Код сравнивается без учёта регистра — так же, как его держит уникальный индекс
-    `uq_projects_code_alive`. Мягко удалённый проект не находится: его журнал отвечает
-    `404`, и деньги ему прибавлять некуда.
-
-    `None` — проекта в вебе нет. Для смены это не отказ: она принимается с нулевой
-    суммой (см. `app.api.usage`).
-    """
-    text = ref.strip()
-    if not text:
-        return None
-    project = db.scalars(
-        select(Project).where(
-            Project.deleted_at.is_(None),
-            func.lower(Project.code) == text.lower(),
-        )
-    ).first()
-    if project is not None:
-        return project
-    # Числовой id — запасной ключ: он же стоит в реестре у проекта без кода. Код из одних
-    # цифр запрещён, поэтому ветки не пересекаются.
-    if text.isdigit():
-        project = db.get(Project, int(text))
-        if project is not None and project.deleted_at is None:
-            return project
-    return None
-
-
-def project_ref_keys(project: Project) -> set[str]:
-    """Все ключи, под которыми смены могли записать расход этому проекту, — в нижнем регистре.
-
-    Ключ смены — `project_ref` из реестра: сначала у проекта нет кода, и реестр называет
-    его `str(id)`, а после того как человек задал код, реестр называет его кодом. Уже
-    записанные смены при этом остаются под прежним ключом. Поэтому проект ищет свои смены
-    по **обоим** ключам: только по текущему — и итог, в который деньги этих смен попали,
-    перестал бы сходиться с суммой строк журнала, ради чего тикет и делался.
-
-    Код из одних цифр запрещён (`validate_code`), поэтому `str(id)` не может совпасть с
-    чужим кодом, а совпадение ключей двух проектов невозможно.
-
-    Регистр снят здесь же: и код, и ключ смены могут прийти в любом регистре (`find_project_by_ref`
-    сравнивает их так же), а журнал обязан найти смену, которую ручка приёма засчитала.
-    """
-    return {project_ref(project).lower(), str(project.id)}
-
-
-def shifts_of_project(project: Project) -> ColumnElement[bool]:
-    """Условие «смены этого проекта» для запросов журнала: по всем ключам сразу.
-
-    Одна формула на чтение журнала и на поиск уже записанных сессий: вторая копия
-    разошлась бы с первой, и смена, записанная под `str(id)`, считалась бы дважды или
-    не считалась вовсе.
-    """
-    return func.lower(UsageShift.project_ref).in_(project_ref_keys(project))
 
 
 def prices_of(project: Project) -> dict[str, object]:

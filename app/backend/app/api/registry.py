@@ -56,12 +56,12 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.api.projects import project_ref
 from app.config import Settings, get_settings
 from app.db import get_db
 from app.models.department import Department
 from app.models.project import Project
 from app.models.registry import RegistryDocument
+from app.project_refs import project_ref
 from app.schemas.registry import RegistryRebuildResponse, RegistryStoredResponse
 
 router = APIRouter(prefix="/api/registry", tags=["registry"])

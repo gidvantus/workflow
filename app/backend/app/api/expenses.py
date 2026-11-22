@@ -34,13 +34,13 @@ from app.api.projects import (
     PROJECT_NOT_FOUND,
     _get_alive_project,
     prices_of,
-    shifts_of_project,
 )
 from app.db import get_db
 from app.models.expense import ProjectExpense
 from app.models.project import Project
 from app.models.usage_shift import UsageShift
 from app.money import TOKEN_PRICE_FIELDS, amount_for
+from app.project_refs import shifts_of_project
 from app.schemas.expense import (
     MANUAL_KIND,
     SHIFT_KIND,
