@@ -600,7 +600,9 @@ status = await app.status()
 check('Ф2: карточка статуса считает тикет целиком, а не смену', status.projects[0].usage.totals,
   { in: 73900, out: 1090, cacheRead: 0, cacheWrite: 0 })
 
-// Тариф задан человеком — цена появляется; числа тарифа в коде не живут.
+// Цена уехала в веб вместе с прайсом проекта (#72): тариф в настройках отдела больше не
+// читается, и строки «цена $…» в сводке не бывает вовсе. Старый ключ в файле — не
+// поломка настройки: отдел обязан запуститься на файле прошлой версии.
 writeConfig({ usageRates: { inputUsdPerM: 3, outputUsdPerM: 15, cacheReadUsdPerM: 0.3, cacheWriteUsdPerM: 3 } })
 issues.set(17, {
   number: 17, title: 'Токены по тикету, второй прогон', state: 'open', body: 'постановка',
@@ -616,9 +618,12 @@ surfaces.set(paidSession, [msg(1, 1, 1000000, 1000)])
 telegram.length = 0
 await app.summary()
 const paidText = telegram.join('\n')
-checkText('с тарифом цена напечатана', paidText, 'цена $')
-checkText('цена стоит в строке расхода тикета', paidText, 'потрачено #17:')
-checkText('и в итоге смены', paidText, 'Итого за смену:')
+check('старый тариф в настройках цену не печатает', paidText.includes('цена '), false)
+checkText('строка расхода тикета на месте', paidText, 'потрачено #17:')
+checkText('и итог смены', paidText, 'Итого за смену:')
+// Адреса веба в этой настройке нет, поэтому смена ждёт в очереди, а не уезжает:
+// тело проверяется в сценарии 11, где стенд веба подделан.
+checkText('смена без веба ждёт в очереди', paidText, 'останется в очереди')
 
 // ── сценарий 4: запасной путь по стенограмме ────────────────────────────────
 
@@ -934,7 +939,6 @@ usagePosts.length = 0
 fs.rmSync(path.join(stateDir, 'dev-department-usage-queue.json'), { force: true })
 writeConfig({
   windows: [{ start: '13:00', stop: '04:00' }, { start: '07:00', stop: '09:00' }],
-  usageRates: { inputUsdPerM: 3, cacheReadUsdPerM: 0.3, cacheWriteUsdPerM: 3.75, outputUsdPerM: 15 },
   registry: { apiUrl: 'https://web.local/api/registry', token: 't' },
 })
 issues.clear()
@@ -964,10 +968,15 @@ check('Б1: ключ смены — дата её начала и время о�
 check('Б1: начало смены — предыдущий день', new RealDate(night.started_at).toISOString().slice(0, 10), '2026-11-20')
 check('Б1: конец смены — уже следующие сутки', new RealDate(night.ended_at).toISOString().slice(0, 10), '2026-11-21')
 check('Б1: интервал не нулевой длины', night.started_at === night.ended_at, false)
-check('Б1: тарифы уехали снимком', Object.keys(night.rates || {}).sort(),
-  ['cacheReadUsdPerM', 'cacheWriteUsdPerM', 'inputUsdPerM', 'outputUsdPerM'])
+// Цены в теле смены больше нет: их хранит веб снимком у строки журнала (#72), а тело
+// несёт только количества токенов.
+check('Б1: тарифов в теле смены нет', [night.rates, night.totals], [undefined, undefined])
 check('Б1: сессия ночной смены в теле', (night.sessions || []).length, 1)
+// Сумма смены печатается из ответа веба как есть (подделка отвечает `0.000000`):
+// своей формулы в отделе больше нет, а веб считает по ценам проекта (#72).
+check('Б1: деньги в теле считает веб', (night.sessions[0] || {}).cost_usd, undefined)
 checkText('Б1: строка сводки называет ключ смены', telegram.join('\n'), 'смена 2026-11-20T13:00 сохранена в вебе')
+checkText('Б1: расход смены — из ответа веба', telegram.join('\n'), 'расход: 0.000000 USD')
 
 // Утренняя смена того же дня — свой ключ, а не тот же, что у ночной.
 setLabels(60, ['ready-for-dev', 'area:frontend'])

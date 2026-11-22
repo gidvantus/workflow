@@ -45,7 +45,6 @@ PRICE_QUANTUM = Decimal("0.000001")
 
 # Четыре цены проекта. Общий список нужен и ручке правки, и ответу схемы.
 PRICE_FIELDS = ("price_input", "price_output", "price_cache_read", "price_cache_write")
-
 NAME_REQUIRED = "Укажите название проекта"
 NAME_TOO_LONG = "Название длиннее 200 символов"
 REPO_URL_REQUIRED = "Укажите адрес репозитория"
@@ -177,6 +176,14 @@ def _get_alive_project(db: Session, project_id: int) -> Project:
     if project is None or project.deleted_at is not None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, PROJECT_NOT_FOUND)
     return project
+
+
+def prices_of(project: Project) -> dict[str, object]:
+    """Четыре цены проекта словарём — вход `app.money.amount_for`.
+
+    Прайс проекта в долларах США за 1 000 000 токенов: другого прайса в отделе нет.
+    """
+    return {field: getattr(project, field) for field in PRICE_FIELDS}
 
 
 def _conflict_detail(error: IntegrityError) -> str:

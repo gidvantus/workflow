@@ -106,7 +106,6 @@ const writeConfig = (registry) => {
     maxRework: 3,
     maxAttempts: 4,
     stuckAfterMinutes: 30,
-    usageRates: { inputUsdPerM: 0.15, cacheReadUsdPerM: 0.003, cacheWriteUsdPerM: 0, outputUsdPerM: 0.6 },
   }
   if (registry) config.registry = registry
   fs.writeFileSync(path.join(stateDir, 'dev-department.json'), JSON.stringify(config, null, 2))

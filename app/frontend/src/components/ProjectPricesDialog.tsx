@@ -1,14 +1,17 @@
 /**
  * Окно «Цены за токены» — единственное место, где цены вводятся.
  *
- * Открывается с вкладки «Стоимость» кнопкой «Изменить» в строке цен: всё, что про деньги,
+ * Открывается с вкладки «Расходы» кнопкой «Изменить» в строке цен: всё, что про деньги,
  * живёт на этой вкладке, а форма проекта (в списке проектов) деньгами не занимается.
  * `PATCH` отправляет ровно четыре поля — остальные поля проекта окно не трогает.
  *
- * Цены — рубли за 1 000 000 токенов. Сервер отдаёт их строкой с шестью знаками
+ * Цены — доллары США за 1 000 000 токенов. Сервер отдаёт их строкой с шестью знаками
  * (`"0.270000"`), в поле печатается без хвостовых нулей (`0,27`): человек видит то, что
  * отправляет обратно. Пустое поле уходит нулём — «не тарифицируется». Запятая ввода
  * переводится в точку: в контракте запроса точка.
+ *
+ * Единица названа и здесь, и в строке цен: без неё четыре числа читались бы как деньги
+ * вообще, а не как цена за миллион токенов.
  *
  * Тексты отказов — серверные, дословно. Подсветка поля под отказом считается по введённым
  * значениям: текст говорит, что не так, но не в каком поле, и своё поле окно находит само.
@@ -24,10 +27,10 @@ import Dialog from './Dialog';
 
 /** Четыре цены: порядок как в строке цен и в ответе API. */
 const PRICE_FIELDS = [
-  { key: 'price_input', label: 'Вход', testId: 'project-form-price-input' },
-  { key: 'price_output', label: 'Выход', testId: 'project-form-price-output' },
-  { key: 'price_cache_read', label: 'Кэш-чтение', testId: 'project-form-price-cache-read' },
-  { key: 'price_cache_write', label: 'Кэш-запись', testId: 'project-form-price-cache-write' },
+  { key: 'price_input', label: 'Вход', testId: 'prices-form-price-input' },
+  { key: 'price_output', label: 'Выход', testId: 'prices-form-price-output' },
+  { key: 'price_cache_read', label: 'Кэш-чтение', testId: 'prices-form-price-cache-read' },
+  { key: 'price_cache_write', label: 'Кэш-запись', testId: 'prices-form-price-cache-write' },
 ] as const;
 
 type PriceKey = (typeof PRICE_FIELDS)[number]['key'];
@@ -145,7 +148,7 @@ export default function ProjectPricesDialog({
         noValidate
         onSubmit={(event) => void handleSubmit(event)}
       >
-        <p className="field__hint">В рублях за 1 млн токенов.</p>
+        <p className="field__hint">В долларах США за 1 млн токенов.</p>
 
         <div className="form-grid">
           {PRICE_FIELDS.map(({ key, label, testId }) => (

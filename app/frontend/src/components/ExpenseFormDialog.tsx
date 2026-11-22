@@ -1,14 +1,16 @@
 /**
- * Окно записи в журнал: дата и четыре количества токенов.
+ * Окно записи в объединённый журнал: дата и четыре количества токенов.
  *
- * Суммы в окне нет: её считает сервер по ценам проекта и возвращает снимком в записи.
- * Пустое количество уходит нулём — это «таких токенов не было», а не пропуск поля:
- * обязательных к заполнению чисел в журнале нет, зато запись без единого отличного от
- * нуля количества сервер отклонит своим текстом.
+ * Половину журнала выбирать не нужно: это всегда ручная запись (`kind: "manual"`) —
+ * смену пишет отдел сам. Суммы в окне нет: её считает сервер по ценам проекта ($ за
+ * 1 000 000 токенов) и возвращает снимком в записи. Пустое количество уходит нулём — это
+ * «таких токенов не было», а не пропуск поля: обязательных к заполнению чисел в журнале
+ * нет, зато запись без единого отличного от нуля количества сервер отклонит своим текстом.
  *
  * Тексты отказов рисуются дословно из `detail`, своих формулировок здесь нет. Единственная
  * строка, которую пишет фронт, — «куда идти за ценами» под отказом «Цены проекта не
- * заполнены»: без неё человек ищет цены там, где их нет.
+ * заполнены»: без неё человек ищет цены там, где их нет. Цены живут в строке цен той же
+ * вкладки «Расходы», поэтому и подсказка зовёт туда.
  *
  * `noValidate` на форме — сознательное решение: `type="number"` со `step="1"` иначе
  * перехватил бы дробное количество подсказкой браузера, и до контрактного текста сервера
@@ -18,16 +20,26 @@
 
 import { useId, useState, type FormEvent } from 'react';
 
-import { createExpense } from '../api/expenses';
+import { createExpense, type JournalTokens } from '../api/expenses';
 import { ApiError, UNREACHABLE_TEXT } from '../api/http';
 import Dialog from './Dialog';
 
 /** Четыре количества токенов: порядок как в ответе API и в строке цен. */
 const COUNT_FIELDS = [
-  { key: 'tokens_input', label: 'Вход', testId: 'expense-form-tokens-input' },
-  { key: 'tokens_output', label: 'Выход', testId: 'expense-form-tokens-output' },
-  { key: 'tokens_cache_read', label: 'Кэш-чтение', testId: 'expense-form-tokens-cache-read' },
-  { key: 'tokens_cache_write', label: 'Кэш-запись', testId: 'expense-form-tokens-cache-write' },
+  { key: 'tokens_input', apiKey: 'in', label: 'Вход', testId: 'expense-form-tokens-input' },
+  { key: 'tokens_output', apiKey: 'out', label: 'Выход', testId: 'expense-form-tokens-output' },
+  {
+    key: 'tokens_cache_read',
+    apiKey: 'cacheRead',
+    label: 'Кэш-чтение',
+    testId: 'expense-form-tokens-cache-read',
+  },
+  {
+    key: 'tokens_cache_write',
+    apiKey: 'cacheWrite',
+    label: 'Кэш-запись',
+    testId: 'expense-form-tokens-cache-write',
+  },
 ] as const;
 
 type CountKey = (typeof COUNT_FIELDS)[number]['key'];
@@ -119,13 +131,13 @@ export default function ExpenseFormDialog({
     setBusy(true);
     setErrorText(null);
     try {
-      await createExpense(projectId, {
-        spent_on: spentOn,
-        tokens_input: countValue(counts.tokens_input),
-        tokens_output: countValue(counts.tokens_output),
-        tokens_cache_read: countValue(counts.tokens_cache_read),
-        tokens_cache_write: countValue(counts.tokens_cache_write),
-      });
+      const tokens: JournalTokens = {
+        in: countValue(counts.tokens_input),
+        out: countValue(counts.tokens_output),
+        cacheRead: countValue(counts.tokens_cache_read),
+        cacheWrite: countValue(counts.tokens_cache_write),
+      };
+      await createExpense(projectId, { spent_on: spentOn, tokens });
       onSaved();
     } catch (error) {
       setErrorText(error instanceof ApiError ? error.message : UNREACHABLE_TEXT);
@@ -223,7 +235,7 @@ export default function ExpenseFormDialog({
 
       {pricesMissing && (
         <p className="field__hint">
-          Задайте цены кнопкой «Изменить» на вкладке «Стоимость».
+          Задайте цены кнопкой «Изменить» в строке цен на вкладке «Расходы».
         </p>
       )}
     </Dialog>

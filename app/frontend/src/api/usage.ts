@@ -1,24 +1,19 @@
 /**
- * Клиент журнала расхода смен: суммы проекта и детализация одной смены.
+ * Клиент детализации одной смены: смена целиком со списком сессий.
+ *
+ * Список смен у проекта читается не здесь, а в `expenses.ts`: с #72 смены и ручные записи
+ * лежат в одном журнале `/api/projects/{id}/expenses`, и второй ручки журнала фронт не
+ * держит — иначе две половины одного раздела снова разъехались бы по двум экранам.
  *
  * Расход считает harness, а не веб: закрытая смена приезжает готовым снимком вместе с
  * тарифами. Поэтому `cost_usd` здесь — **строка** с шестью знаками (`"0.420000"`), и
- * фронт её только показывает, ничего не пересчитывая и не складывая: сумма проекта
- * приходит в `totals.cost_usd`, сумма смены — в `cost_usd` строки, сумма сессии — в её
- * собственной `cost_usd`. Сложи фронт эти числа сам — округления разъехались бы с
- * бэкендом, а при смене тарифов прошлые смены пересчитались бы задним числом.
+ * фронт её только показывает, ничего не пересчитывая и не складывая: сумма смены — в
+ * `cost_usd` строки, сумма сессии — в её собственной `cost_usd`. Сложи фронт эти числа
+ * сам — округления разъехались бы с бэкендом, а при смене тарифов прошлые смены
+ * пересчитались бы задним числом.
  *
- * `project_ref` — id проекта из реестра отдела, а не `projects.id` базы: журнал живёт
- * отдельно от справочника, внешнего ключа нет. Ручка `rebuild` собирает документ реестра
- * как `project.code or str(project.id)` (`app/api/registry.py`), поэтому страница проекта
- * подставляет сюда `project.code ?? String(project.id)` — ту же пару, что попадает в
- * документ реестра.
- *
- * Два `404` в этом разделе значат разное, и клиент различает их сам:
- * `GET /api/projects/{ref}/usage` отвечает `404 «Проект не найден»`, когда у проекта ещё
- * нет ни одной смены, — это пустой журнал, а не отказ: `loadProjectUsage` возвращает
- * `null`. У `GET /api/usage/shifts/{id}` `404` значит «смены нет»: текст уходит
- * пользователю дословно, как и любой другой `detail`.
+ * `404` у `GET /api/usage/shifts/{id}` значит «смены нет»: текст уходит пользователю
+ * дословно, как и любой другой `detail`.
  *
  * Тексты отказов — часть контракта: сервер присылает их в `detail`, и они показываются
  * пользователю как есть, своих формулировок фронт не придумывает.
@@ -26,7 +21,6 @@
 
 import { ApiError, UNREACHABLE_TEXT, isRecord, readDetail, readJson, send } from './http';
 
-const PROJECTS_URL = '/api/projects';
 const SHIFTS_URL = '/api/usage/shifts';
 
 /** Токены по видам: те же четыре ключа, что в документе смены и `usageRates`. */
@@ -37,7 +31,7 @@ export type UsageTokens = {
   cacheWrite: number;
 };
 
-/** Смена в списке журнала: интервал, причина закрытия и итоги по сессиям. */
+/** Смена в детализации: интервал, причина закрытия и итоги по сессиям. */
 export type UsageShift = {
   id: number;
   /** Метка смены (дата и время начала окна) — ключ идемпотентности, не для чтения. */
@@ -50,22 +44,6 @@ export type UsageShift = {
   tokens: UsageTokens;
   /** Деньги строкой с шестью знаками; фронт округляет только для показа. */
   cost_usd: string;
-};
-
-/** Итоги проекта по журналу: смены, сессии, токены и деньги. */
-export type UsageTotals = {
-  shifts: number;
-  sessions: number;
-  tokens: UsageTokens;
-  cost_usd: string;
-};
-
-/** `GET /api/projects/{project_ref}/usage`: итог проекта и его смены от новых к старым. */
-export type ProjectUsage = {
-  project_ref: string;
-  project_title: string;
-  totals: UsageTotals;
-  shifts: UsageShift[];
 };
 
 /** Сессия роли внутри смены: тикет (может быть пустым), ходы, токены и цена. */
@@ -136,20 +114,6 @@ function readTokens(payload: unknown): UsageTokens | null {
   return { in: input, out: output, cacheRead, cacheWrite };
 }
 
-/** Итоги из ответа; `null` — форма не по контракту. */
-function readTotals(payload: unknown): UsageTotals | null {
-  if (!isRecord(payload)) {
-    return null;
-  }
-  const { shifts, sessions } = payload;
-  const tokens = readTokens(payload.tokens);
-  const cost = payload.cost_usd;
-  if (!isCount(shifts) || !isCount(sessions) || tokens === null || !isMoney(cost)) {
-    return null;
-  }
-  return { shifts, sessions, tokens, cost_usd: cost };
-}
-
 /** Строка смены из ответа; `null` — форма не по контракту. */
 function readShift(payload: unknown): UsageShift | null {
   if (!isRecord(payload)) {
@@ -217,31 +181,6 @@ function readSession(payload: unknown): UsageSession | null {
   };
 }
 
-/** Ответ `GET /api/projects/{ref}/usage`; `null` — форма не по контракту. */
-function readProjectUsage(payload: unknown): ProjectUsage | null {
-  if (!isRecord(payload)) {
-    return null;
-  }
-  const { project_ref, project_title } = payload;
-  const totals = readTotals(payload.totals);
-  if (typeof project_ref !== 'string' || typeof project_title !== 'string' || totals === null) {
-    return null;
-  }
-  const rows = payload.shifts;
-  if (!Array.isArray(rows)) {
-    return null;
-  }
-  const shifts: UsageShift[] = [];
-  for (const row of rows) {
-    const shift = readShift(row);
-    if (shift === null) {
-      return null;
-    }
-    shifts.push(shift);
-  }
-  return { project_ref, project_title, totals, shifts };
-}
-
 /** Ответ `GET /api/usage/shifts/{id}`; `null` — форма не по контракту. */
 function readShiftDetail(payload: unknown): UsageShiftDetail | null {
   const shift = readShift(payload);
@@ -265,29 +204,6 @@ function readShiftDetail(payload: unknown): UsageShiftDetail | null {
     sessions.push(session);
   }
   return { ...shift, project_ref, project_title, sessions };
-}
-
-/**
- * `GET /api/projects/{project_ref}/usage` — журнал проекта, смены от новых к старым.
- *
- * `404` здесь не ошибка: у проекта ещё нет ни одной смены, и экран показывает пустое
- * состояние. Остальные отказы — исключение с текстом из `detail`.
- */
-export async function loadProjectUsage(projectRef: string): Promise<ProjectUsage | null> {
-  const response = await send(`${PROJECTS_URL}/${encodeURIComponent(projectRef)}/usage`, {
-    method: 'GET',
-  });
-  if (response.status === 404) {
-    return null;
-  }
-  if (!response.ok) {
-    throw new ApiError(await readDetail(response));
-  }
-  const usage = readProjectUsage(await readJson(response));
-  if (usage === null) {
-    throw new ApiError(UNREACHABLE_TEXT);
-  }
-  return usage;
 }
 
 /** `GET /api/usage/shifts/{shift_id}` — смена с сессиями; `404` даёт «Смена не найдена». */

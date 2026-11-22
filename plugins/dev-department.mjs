@@ -232,32 +232,6 @@ function intInRange(value, min, max, fallback) {
 
 // ── Общие настройки смены ───────────────────────────────────────────────────
 
-// Необязательный тариф для перевода токенов в деньги. Числа тарифа задаёт человек
-// в `STATE_FILES.config` (`dev-department.json` в каталоге состояния отдела); в коде
-// их нет и быть не должно — валюта и цена
-// зависят от провайдера и меняются без правки отдела. Незаданный тариф значит «цену
-// не показываем», а не «цена ноль»: иначе сводка утверждала бы, что смена бесплатна.
-const USAGE_RATE_KEYS = ['inputUsdPerM', 'cacheReadUsdPerM', 'cacheWriteUsdPerM', 'outputUsdPerM']
-
-function parseUsageRates(raw) {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-    return { rates: null, problems: ['usageRates: нужен объект с полями ' + USAGE_RATE_KEYS.join(', ')] }
-  }
-  const problems = []
-  const rates = {}
-  let given = 0
-  for (const key of USAGE_RATE_KEYS) {
-    if (raw[key] === undefined) continue
-    if (typeof raw[key] === 'number' && Number.isFinite(raw[key]) && raw[key] >= 0) {
-      rates[key] = raw[key]
-      given += 1
-      continue
-    }
-    problems.push('usageRates.' + key + ': нужно неотрицательное число — цена за миллион токенов')
-  }
-  return { rates: given > 0 ? rates : null, problems }
-}
-
 function loadConfig() {
   const file = readStateFile(STATE_FILES.config)
   let raw
@@ -282,11 +256,10 @@ function loadConfig() {
     if (Number.isInteger(raw.stuckAfterMinutes) && raw.stuckAfterMinutes >= 1 && raw.stuckAfterMinutes <= 1440) values.stuckAfterMinutes = raw.stuckAfterMinutes
     else problems.push('stuckAfterMinutes: нужно целое от 1 до 1440')
   }
-  if (raw.usageRates !== undefined) {
-    const parsedRates = parseUsageRates(raw.usageRates)
-    for (const problem of parsedRates.problems) problems.push(problem)
-    if (parsedRates.rates) values.usageRates = parsedRates.rates
-  }
+  // `usageRates` из файла больше не читается: цены — четыре поля проекта в вебе
+  // (`projects.price_*`), а тариф в настройках отдела был вторым прайсом (#72).
+  // Старый ключ молча игнорируется: он остался в файлах у всех, кто обновился, и
+  // отказ заставил бы человека править настройки, чтобы отдел просто запустился.
 
   // Откуда диспетчер забирает документ реестра проектов: `{"apiUrl": "…",
   // "token": "…"}`. Нет блока — значит синхронизации нет вовсе, и `projects.json`
@@ -4237,11 +4210,12 @@ export default {
       return { ok: true, revision: state.presets.revision }
     }
 
-    // ── журнал расхода в вебе (#57) ─────────────────────────────────────────
+    // ── журнал расхода в вебе (#57, #72) ────────────────────────────────────
     //
-    // Смена уезжает в веб снимком: тарифы, сессии и итог одним телом. Цена считается
-    // здесь (`costOf` книги учёта), веб её только складывает и хранит — пересчёт
-    // прошлых смен при смене тарифов недопустим.
+    // Смена уезжает в веб количествами токенов, без денег: сумму считает веб по ценам
+    // проекта (`app/money.py`), формула одна и на сервере. Отдел только печатает
+    // `cost_usd` из ответа, а снимок цены остаётся у строки журнала — смена прайса
+    // прошлых смен не переписывает.
     //
     // Отправка идёт в конце смены, а не по тику: журнал — это отчёт о смене, и
     // промежуточный POST дал бы строки, которых в смене ещё не было. Исключение —
@@ -4287,11 +4261,10 @@ export default {
       return result
     }
 
-    // Отправить закрытую смену проекта и вернуть строку для сводки. Смена без
-    // тарифов не отправляется вовсе: цена — часть снимка, а нули в журнале хуже
-    // честного «не отправлен».
+    // Отправить закрытую смену проекта и вернуть строку для сводки. Денег в теле нет:
+    // сумму каждой сессии и всей смены считает веб по ценам проекта (`app/money.py`),
+    // а строка сводки печатает `cost_usd` из ответа как есть.
     async function pushShiftReport(project, options) {
-      const usageModule = options.usageModule
       const cards = options.cards
       if (cards.length === 0) {
         return { line: REPORT_PREFIX + 'данных о расходе нет', skipped: 'нет сессий' }
@@ -4306,21 +4279,12 @@ export default {
         project.department.windows,
         options.startedAt ? new Date(options.startedAt) : options.endedAt,
       )
-      const rates = (config.values && config.values.usageRates) || null
-      if (!rates) {
-        return {
-          line: REPORT_PREFIX + 'смена ' + key + ' не отправлена — не заданы тарифы расчёта',
-          skipped: 'нет тарифов',
-        }
-      }
       const report = buildShiftReport({
         project,
         shiftKey: key,
         startedAt: options.startedAt,
         endedAt: options.endedAt,
         reason: options.reason,
-        rates,
-        costOf: usageModule.costOf,
         cards,
       })
       state.usageSync.at = new Date().toISOString()
@@ -4497,7 +4461,6 @@ export default {
       if (usageModule !== null) {
         const numbers = []
         for (const entry of inShift) if (!numbers.includes(entry.number)) numbers.push(entry.number)
-        const rates = (config.values && config.values.usageRates) || null
         const shiftTotals = { in: 0, out: 0, cacheRead: 0, cacheWrite: 0 }
         const usageLines = []
         // Карточки, которые вошли в смену: их сессии и уезжают в веб. Одна карточка
@@ -4530,19 +4493,17 @@ export default {
           shiftTotals.out += card.totals.out
           shiftTotals.cacheRead += card.totals.cacheRead
           shiftTotals.cacheWrite += card.totals.cacheWrite
-          const price = usageModule.formatCost(usageModule.costOf(card.totals, rates))
+          // Денег в строке нет: сумму считает веб по ценам проекта и присылает в ответе
+          // на приём смены, а её `cost_usd` печатается ниже строкой журнала.
           usageLines.push('потрачено #' + number + ': ' + usageModule.usageLine(card.totals) +
             ' (' + card.sessions.length + ' ' + sessionWord(card.sessions.length) + ')' +
-            (card.carried > 0 ? ' · в т.ч. продолженный диалог: ' + card.carried : '') +
-            (price === null ? '' : ' · цена ' + price))
+            (card.carried > 0 ? ' · в т.ч. продолженный диалог: ' + card.carried : ''))
           for (const problem of card.problems || []) usageLines.push('  ! ' + problem)
         }
         // Итог печатается только когда есть что складывать: сумма нулей — та же
         // неправда, что строка с нулями по тикету.
         if (counted > 0) {
-          const shiftPrice = usageModule.formatCost(usageModule.costOf(shiftTotals, rates))
-          usageLines.push('Итого за смену: ' + usageModule.usageLine(shiftTotals) +
-            (shiftPrice === null ? '' : ' · цена ' + shiftPrice))
+          usageLines.push('Итого за смену: ' + usageModule.usageLine(shiftTotals))
         }
         // Журнал в веб — после итогов и до сборки текста: строка о нём должна попасть
         // и в журнал смены, и в Telegram. Отправка не бросает: её собственный сбой
@@ -4550,7 +4511,6 @@ export default {
         let pushed = null
         try {
           pushed = await pushShiftReport(project, {
-            usageModule,
             cards,
             startedAt: run ? run.startedAt : null,
             endedAt: now,
