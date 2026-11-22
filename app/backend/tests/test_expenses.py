@@ -365,6 +365,7 @@ def test_post_bad_tokens_refuses(client: TestClient, field: str, value: int) -> 
         ("tokens_input", "1 500", api.TOKENS_INVALID),
         ("tokens_input", "abc", api.TOKENS_INVALID),
         ("tokens_input", None, api.TOKENS_INVALID),
+        ("tokens_input", "1" * 4400, api.TOKENS_INVALID),
         ("spent_on", None, api.SPENT_ON_INVALID),
         ("spent_on", 20261105, api.SPENT_ON_INVALID),
         ("spent_on", 5.5, api.SPENT_ON_INVALID),
@@ -523,9 +524,17 @@ def test_validate_tokens_accepts_whole_number_of_any_type(value: object, expecte
     assert api.validate_tokens(value) == expected
 
 
-@pytest.mark.parametrize("value", [12.5, 1.5, "1 500", "abc", "", None, True, [1], {"a": 1}])
+@pytest.mark.parametrize(
+    "value",
+    [12.5, 1.5, "1 500", "abc", "", None, True, [1], {"a": 1}, "1" * 4400, "9" * 4301],
+)
 def test_validate_tokens_rejects_non_whole(value: object) -> None:
-    """Всё, из чего не выходит целое неотрицательное число, — тот же текст контракта."""
+    """Всё, из чего не выходит целое неотрицательное число, — тот же текст контракта.
+
+    Строка цифр длиннее потолка отсекается до `int()`: Python 3.12 отказывается
+    разбирать строку больше 4300 цифр, и без этой проверки тело с длинной строкой
+    цифр дало бы необработанный `500` вместо отказа контракта.
+    """
     with pytest.raises(HTTPException) as excinfo:
         api.validate_tokens(value)
     assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT

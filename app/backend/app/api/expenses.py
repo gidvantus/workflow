@@ -51,6 +51,12 @@ TOKENS_PATTERN = re.compile(r"^\d+$")
 # ошибка ввода, а не расход.
 TOKENS_MAX = 1_000_000_000_000
 
+# Знаков в потолке: строка цифр длиннее — уже за диапазоном. Разбирать её незачем, и
+# нельзя: Python 3.12 отказывается разбирать строку длиннее 4300 цифр (`ValueError`
+# из-за `sys.set_int_max_str_digits`), поэтому длина проверяется до `int()` — иначе
+# тело с длинной строкой цифр давало бы необработанный `500` вместо отказа контракта.
+TOKENS_MAX_DIGITS = len(str(TOKENS_MAX))
+
 # Цены проекта — рубли за 1 000 000 токенов.
 MILLION_TOKENS = Decimal(1_000_000)
 
@@ -97,8 +103,9 @@ def validate_tokens(value: object) -> int:
     """Количество токенов: `0 ≤ n ≤ 10^12`, иначе отказ `422` текстом про формат.
 
     Схема запроса пропускает свободные типы, поэтому разбор здесь: целое число,
-    дробное только с нулевой дробной частью (иначе это не количество) и строка из цифр.
-    Всё остальное — `12.5`, `"1 500"`, `"abc"`, `null`, `true` — отказ контракта.
+    дробное только с нулевой дробной частью (иначе это не количество) и строка из цифр
+    не длиннее потолка. Всё остальное — `12.5`, `"1 500"`, `"abc"`, `null` — отказ
+    контракта; булево отказывает валидатор (по HTTP pydantic приводит `true` к `1`).
     """
     if isinstance(value, bool) or value is None:
         raise _reject(TOKENS_INVALID)
@@ -110,7 +117,7 @@ def validate_tokens(value: object) -> int:
         number = value
     elif isinstance(value, str):
         text = value.strip()
-        if not TOKENS_PATTERN.match(text):
+        if not TOKENS_PATTERN.match(text) or len(text) > TOKENS_MAX_DIGITS:
             raise _reject(TOKENS_INVALID)
         number = int(text)
     else:
