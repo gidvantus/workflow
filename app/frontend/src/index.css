@@ -922,6 +922,15 @@ body {
   color: var(--danger);
 }
 
+/* Тихая пояснительная строка: текст на месте, где цвет не несёт смысла — подписи,
+   вторая строка шапки, состояние загрузки. */
+.muted {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
 /* ---------- раздел «Отделы» ---------- */
 
 /* Пять колонок вместо четырёх: название, время, роли, дата, действия.
@@ -1199,6 +1208,16 @@ body {
   display: flex;
   justify-content: flex-end;
   gap: 0.5rem;
+}
+
+/* Пояснение в полосе формы: что произойдёт, если нажать «Сохранить». Одна строка на всю
+   ширину, чтобы полоса не превращалась в столбик подписей. */
+.form-foot__note {
+  margin: 0;
+  max-width: 76ch;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--muted);
 }
 
 /* ---------- выбор вида в окне создания отдела ---------- */
@@ -2039,3 +2058,523 @@ body {
     text-align: left;
   }
 }
+
+/* Выпадающий список того же вида, что и поле ввода: в строке таблицы процесса рядом
+   стоят input, select и мультивыбор, и разная высота у них читается как небрежность. */
+.field__select {
+  width: 100%;
+  padding: 0.5rem 0.625rem;
+  font: inherit;
+  font-size: 0.875rem;
+  line-height: 1.4;
+  color: var(--ink);
+  background-color: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+}
+
+/* ---------- вкладки страницы отдела: настройки и процесс ---------- */
+
+.dept-tabs {
+  display: flex;
+  gap: 0.25rem;
+  margin-bottom: 1rem;
+  padding: 0.25rem;
+  background-color: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+}
+
+.dept-tabs__tab {
+  padding: 0.5rem 0.875rem;
+  font: inherit;
+  font-size: 0.875rem;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  border-radius: 0.5rem;
+  cursor: pointer;
+}
+
+.dept-tabs__tab--active {
+  color: var(--ink);
+  background-color: var(--panel-strong, var(--panel));
+  box-shadow: 0 1px 2px rgb(0 0 0 / 8%);
+}
+
+/* ---------- процесс отдела: ступени, справочник лейблов и полоса формы ---------- */
+
+/* Порядок блоков как на странице отдела: шапка карточки, таблица, справочник,
+   полоса формы. Своего отступа у карточки нет — его дают сами блоки, а полоса
+   формы прилипает к нижнему краю и повторяет `.form-foot` остальных форм. */
+.proc {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Отказ стоит над таблицей и держится до следующего сохранения: введённое не сбрасывается. */
+.proc-error {
+  padding: 0.875rem 1.125rem 0;
+}
+
+.proc-saved {
+  margin-right: auto;
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+
+/* Пустой процесс: место, где были ступени, говорит, что конвейер стоит. */
+.proc-empty {
+  padding: 1.75rem 1.125rem 1.5rem;
+  text-align: center;
+  background-color: var(--chrome);
+  border-top: 1px solid var(--line);
+}
+
+.proc-empty__title {
+  margin: 0 0 0.375rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.proc-empty__hint {
+  max-width: 34rem;
+  margin: 0 auto;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.proc-labels__title {
+  margin: 0 0 0.25rem;
+  font-size: 0.9375rem;
+}
+
+.proc-labels__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+/* Таблица шире экрана: четырнадцать ключей меток в строке ступени не сжимаются до
+   читаемого вида, поэтому прокручивается сама таблица, а не страница. */
+.proc-table-wrap {
+  overflow-x: auto;
+}
+
+.proc-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+}
+
+.proc-table th,
+.proc-table td {
+  padding: 0.5rem;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+}
+
+.proc-table th {
+  font-weight: 500;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.proc-row .field__input,
+.proc-row .field__select {
+  min-width: 7rem;
+}
+
+.proc-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.proc-cell__title {
+  font-size: 0.6875rem;
+  color: var(--muted);
+}
+
+.proc-cell__input {
+  max-width: 5rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* id ступени — служебное значение: им же сервер называет ступень в тексте отказа
+   («У ступени «dev-backend»…»), поэтому человек должен видеть его в строке. */
+.proc-row__id {
+  display: block;
+  margin-top: 0.25rem;
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 0.6875rem;
+  color: var(--muted);
+}
+
+/* Ключ метки — служебное значение, поэтому моноширинный; запятая стоит внутри того же
+   токена, чтобы перенос не начинал строку с «,». Каждый ключ — атомарный inline-block:
+   переносится на свою строку целиком, а не рвётся посередине. Запятая — настоящий текст,
+   а не `::after`: иначе имя кнопки для скринридера расходится с видимым текстом
+   (`label-content-name-mismatch`, WCAG 2.5.3). */
+.lbl {
+  display: inline-block;
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 0.6875rem;
+  line-height: 1.5;
+  color: var(--ink);
+  overflow-wrap: normal;
+}
+
+.lbl__sep {
+  color: var(--muted-2);
+}
+
+/* Исключения и снятие — то, что ступень отсекает, а не то, что она делает: тише. */
+.proc-cell--unless .lbl,
+.proc-cell--drop .lbl {
+  color: var(--muted);
+}
+
+.proc-cell--put .lbl {
+  font-weight: 500;
+}
+
+/* Клетка правки: метки в строке — кнопка, открывающая список галочек. В покое она
+   неотличима от текста, наведение и фокус рисуют рамку. */
+.proc-cell__pick {
+  display: block;
+  width: 100%;
+  margin: -0.1875rem -0.3125rem;
+  padding: 0.1875rem 0.3125rem;
+  font: inherit;
+  text-align: left;
+  background-color: transparent;
+  border: 1px solid transparent;
+  border-radius: 0.375rem;
+  cursor: pointer;
+}
+
+.proc-cell__pick:hover {
+  border-color: var(--border);
+}
+
+.proc-cell__pick[aria-expanded='true'] {
+  background-color: var(--panel);
+  border-color: var(--border);
+}
+
+.proc-cell__pick:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 1px;
+}
+
+.proc-cell__none {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+/* Ступень, снятая с конвейера: заголовок читается, остальное тише — строка не ошибка,
+   она просто не берёт тикетов. */
+.proc-row--off {
+  background-color: var(--band);
+}
+
+.proc-row--off .lbl {
+  color: var(--muted);
+}
+
+/* Список галочек под строкой: раскрывается в отдельной строке таблицы на всю её ширину,
+   чтобы четырнадцать ключей не сжимали ячейку ступени. */
+.proc-picker-row td {
+  padding: 0 0.5rem 0.75rem;
+}
+
+.proc-picker {
+  width: min(24rem, 100%);
+  padding: 0.75rem;
+  background-color: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0.625rem;
+}
+
+.proc-picker__title {
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.proc-picker__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.375rem 0.875rem;
+}
+
+.proc-picker__grid .checkbox span {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 0.75rem;
+}
+
+.proc-picker__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 0.625rem;
+}
+
+.proc-picker__hint {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+/* ---------- процесс отдела: ширины экрана ---------- */
+
+/* Макет `mockups/67/notes.md`, «Брейкпоинты»: пока таблица остаётся таблицей (≥901), она
+   стоит в карточке без собственной прокрутки; ≤900 — ступень становится блоком с подписями
+   полей; ≤600 — одна колонка, справочник лейблов строкой «состояние → ключ → поле». */
+
+/* Десять колонок в карточку: ширину столбцов задаёт таблица, а не содержимое. Без этого
+   селекты ролей и стражей распирают таблицу на сотню пикселей и она уезжает в собственный
+   горизонтальный скролл — макет запрещает его ровно на этих ширинах. Ширины подобраны по
+   содержимому: ключи меток переносятся, «Порядок» и «Включена» влезают в шапку. Граница —
+   901, а не 1201: на 1000–1200 таблица тоже обязана влезать, иначе последняя колонка
+   уезжает за край карточки. */
+@media (min-width: 901px) {
+  .proc-table-wrap {
+    overflow-x: visible;
+  }
+
+  .proc-table {
+    table-layout: fixed;
+  }
+
+  /* Шапка может переноситься: иначе слово шире столбца вылезает за правый край таблицы и
+     увозит за собой весь ряд (`scrollWidth` больше `clientWidth`). */
+  .proc-table th {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .proc-table th:nth-child(1) {
+    width: 7%;
+  }
+
+  .proc-table th:nth-child(2) {
+    width: 14%;
+  }
+
+  .proc-table th:nth-child(3) {
+    width: 10%;
+  }
+
+  .proc-table th:nth-child(4) {
+    width: 10%;
+  }
+
+  .proc-table th:nth-child(5) {
+    width: 10%;
+  }
+
+  .proc-table th:nth-child(6) {
+    width: 9%;
+  }
+
+  .proc-table th:nth-child(7) {
+    width: 9%;
+  }
+
+  .proc-table th:nth-child(8) {
+    width: 12%;
+  }
+
+  .proc-table th:nth-child(9) {
+    width: 12%;
+  }
+
+  .proc-table th:nth-child(10) {
+    width: 7%;
+  }
+
+  .proc-row .field__input,
+  .proc-row .field__select {
+    min-width: 0;
+  }
+
+  /* В ячейке горизонтальные отступы поля отнимают у подписи селекта больше, чем видно:
+     «сессия» и «маршрут» перестают обрезаться в столбце «Вид». */
+  .proc-row .field__select {
+    padding-right: 1.125rem;
+    padding-left: 0.375rem;
+  }
+}
+
+/* ≤900: шапки таблицы нет, каждая ступень — блок, а подпись поля стоит в самой ячейке
+   (`data-label`). Иначе десять колонок живут в горизонтальной прокрутке, и последние из них
+   («Роль», «Включена») не достать без прокрутки вбок. */
+@media (max-width: 900px) {
+  .proc-table-wrap {
+    overflow-x: visible;
+  }
+
+  .proc-table,
+  .proc-table tbody,
+  .proc-table tr,
+  .proc-table td {
+    display: block;
+  }
+
+  .proc-table thead {
+    display: none;
+  }
+
+  /* Специфичность важнее порядка: `.proc-table tr` выше делает `display: block`, поэтому
+     сетка строки адресуется двумя классами и перебивает это правило. */
+  .proc-table .proc-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas:
+      'title title'
+      'priority kind'
+      'when when'
+      'unless unless'
+      'put put'
+      'drop drop'
+      'guard role'
+      'enabled enabled';
+    gap: 0.5rem 0.75rem;
+    padding: 0.75rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .proc-row td {
+    display: block;
+    padding: 0;
+    border-bottom: 0;
+  }
+
+  .proc-row td::before {
+    display: block;
+    margin-bottom: 0.25rem;
+    content: attr(data-label);
+    font-size: 0.6875rem;
+    color: var(--muted);
+  }
+
+  .proc-col--title {
+    grid-area: title;
+  }
+
+  .proc-col--priority {
+    grid-area: priority;
+  }
+
+  .proc-col--kind {
+    grid-area: kind;
+  }
+
+  .proc-cell--when {
+    grid-area: when;
+  }
+
+  .proc-cell--unless {
+    grid-area: unless;
+  }
+
+  .proc-cell--put {
+    grid-area: put;
+  }
+
+  .proc-cell--drop {
+    grid-area: drop;
+  }
+
+  .proc-col--guard {
+    grid-area: guard;
+  }
+
+  .proc-col--role {
+    grid-area: role;
+  }
+
+  .proc-col--enabled {
+    grid-area: enabled;
+  }
+
+  .proc-row .field__input,
+  .proc-row .field__select {
+    min-width: 0;
+  }
+
+  .proc-cell__pick {
+    margin: 0;
+  }
+
+  .proc-picker-row td {
+    display: block;
+    padding: 0 0.75rem 0.75rem;
+  }
+
+  .proc-picker {
+    width: 100%;
+  }
+}
+
+/* ≤600: одна колонка в ступени, справочник лейблов строкой «состояние → ключ → поле»,
+   кнопки полосы формы на всю ширину (общий блок ≤600 выше уже растягивает `.form-actions`). */
+@media (max-width: 600px) {
+  .proc-row {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      'title'
+      'priority'
+      'kind'
+      'when'
+      'unless'
+      'put'
+      'drop'
+      'guard'
+      'role'
+      'enabled';
+  }
+
+  .proc-labels__grid {
+    grid-template-columns: 1fr;
+  }
+
+  .proc-labels__grid .proc-cell {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .proc-labels__grid .proc-cell__title {
+    flex: 0 0 auto;
+  }
+
+  /* Поле имени не сжимается до нечитаемого: если подпись «состояние · ключ» съела строку,
+     поле уходит на следующую во всю ширину. */
+  .proc-labels__grid .field__input {
+    flex: 1 1 8rem;
+    min-width: 0;
+  }
+
+  .proc .form-actions {
+    align-items: stretch;
+  }
+
+  .proc-saved {
+    width: 100%;
+    margin-right: 0;
+  }
+}
+
