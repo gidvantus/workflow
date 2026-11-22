@@ -265,21 +265,16 @@ checkText('и назван замечанием', (failedRead.problems || []).jo
 const emptyCard = await ledger.summarizeIssue([], async () => ({}))
 check('пустой тикет — нули и пустые строки', [emptyCard.sessions.length, emptyCard.totals], [0, { in: 0, out: 0, cacheRead: 0, cacheWrite: 0 }])
 
-// ── строка для человека и цена ──────────────────────────────────────────────
+// ── строка для человека ─────────────────────────────────────────────────────
 
-console.log('\n=== строка расхода и цена ===')
+console.log('\n=== строка расхода ===')
 const totals = { in: 1234, out: 56, cacheRead: 7890, cacheWrite: 0 }
 check('строка расхода', ledger.usageLine(totals), 'вход 1 234 · выход 56 · кэш-чтение 7 890')
 check('кэш-запись печатается только при ненулевой', ledger.usageLine({ ...totals, cacheWrite: 4 }),
   'вход 1 234 · выход 56 · кэш-чтение 7 890 · кэш-запись 4')
-check('без тарифа цены нет', ledger.costOf(totals, null), null)
-check('пустой тариф — тоже нет', ledger.costOf(totals, {}), null)
-check('цена по тарифу за миллион токенов', ledger.costOf(
-  { in: 1000000, out: 0, cacheRead: 0, cacheWrite: 0 }, { inputUsdPerM: 3 }), 3)
-check('кэш-чтение считается отдельным тарифом', ledger.costOf(
-  { in: 0, out: 0, cacheRead: 2000000, cacheWrite: 0 }, { cacheReadUsdPerM: 0.3 }), 0.6)
-check('мелкая цена не превращается в ноль', ledger.formatCost(0.0004), '$0.0004')
-check('обычная цена в центах', ledger.formatCost(1.2345), '$1.23')
+// Денег в книге учёта нет: сумма считается в вебе по ценам проекта (#72), а две
+// формулы одного расхода дали бы две разные суммы на экране и в журнале.
+check('цены в книге учёта больше нет', [ledger.costOf, ledger.formatCost], [undefined, undefined])
 
 // ── сессия, в которой родился тикет ─────────────────────────────────────────
 

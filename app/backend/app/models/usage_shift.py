@@ -2,11 +2,11 @@
 
 Журнал расхода — вторая половина учёта токенов. Первая живёт в harness: книга привязок
 `dev-department-usage.json` знает, какая сессия какому тикету принадлежит, а `usageCard`
-считает по стенограммам ходы и токены. Веб ничего не пересчитывает — он **хранит готовую
-смену**: интервал, причину закрытия, тарифы расчёта и суммы. Цена считается на стороне
-harness уже проверенной формулой (`costOf` в `plugins/usage-ledger.mjs`), поэтому смена
-несёт рядом с деньгами и сами тарифы: смена тарифа не переписывает прошлые суммы, и по
-строке видно, по какой цене она считалась.
+считает по стенограммам ходы и токены. Веб хранит **смену** — интервал, причину закрытия,
+токены и суммы — и он же считает деньги: цены приходят из цен проекта
+(`projects.price_*`, доллары США за 1 000 000 токенов), формула одна на веб и на harness
+нет (`app/money.py`). Рядом с деньгами лежит **снимок цен** (`rates`): смена прайса не
+переписывает прошлые суммы, и по строке видно, по какой цене она считалась.
 
 Своих денег у смены нет: `cost_usd` — сумма по принятым сессиям этой смены. Проект
 складывает смены, смена складывает сессии, а сессия входит в суммы проекта ровно один
@@ -44,8 +44,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db import Base
 from app.models.usage_session import UsageSession
 
-# Тарифы расчёта: `{"inputUsdPerM", "cacheReadUsdPerM", "cacheWriteUsdPerM",
-# "outputUsdPerM"}` — та же форма, что `usageRates` в `dev-department.json`. На
+# Снимок цен смены: `{"inputUsdPerM", "cacheReadUsdPerM", "cacheWriteUsdPerM",
+# "outputUsdPerM"}` — те же четыре цены, что у проекта, в момент записи смены. На
 # PostgreSQL — `JSONB`, в тестах (SQLite) — `JSON`: проверка формы живёт в питоне,
 # и поведение диалектов совпадает.
 RATES_JSON = JSON().with_variant(JSONB(), "postgresql")
@@ -87,7 +87,7 @@ class UsageShift(Base):
         nullable=False,
         default=Decimal("0"),
     )
-    # Тарифы, по которым считалась эта смена: пересчёта прошлых смен при их смене нет.
+    # Снимок цен, по которым считалась эта смена: пересчёта прошлых смен при их смене нет.
     rates: Mapped[dict[str, Any]] = mapped_column(RATES_JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

@@ -1,11 +1,12 @@
-// Отправка закрытой смены в веб и очередь недоотправленного (issue #57).
+// Отправка закрытой смены в веб и очередь недоотправленного (issue #57, #72).
 //
 // Первая половина журнала расхода уже жила в harness: книга привязок
 // (`usage-ledger.mjs`) знает, какая сессия к какому тикету относится, а `usageCard`
-// считает по каждой сессии ходы и токены. Цена тоже считается здесь —
-// `costOf(totals, rates)`: веб её не пересчитывает, а только складывает и хранит
-// вместе с тарифами. Поэтому смена уезжает в веб **снимком**: тарифы, сессии и итог
-// в одном теле, и смена тарифа не переписывает прошлые смены.
+// считает по каждой сессии ходы и токены. Деньги в harness **не считаются**: у отдела
+// один прайс — четыре цены проекта в вебе (`projects.price_*`, доллары США за
+// 1 000 000 токенов), — и формула тоже одна, на сервере (`app/money.py`). Поэтому
+// смена уезжает количеством токенов, а сумму считает и хранит веб; строка сводки
+// печатает `cost_usd` из ответа как есть, без своей формулы и без своих знаков.
 //
 // ПОЧЕМУ ОЧЕРЕДЬ. Смена закрывается по часам, в том числе когда веба нет: стенд не
 // поднят, сеть лежит, токен ещё не прописан. Терять посчитанный расход из-за этого
@@ -47,20 +48,11 @@ export const REQUEST_TIMEOUT_MS = 15000
 /** Префикс строки сводки о журнале — один на все исходы. */
 export const REPORT_PREFIX = 'Журнал расхода: '
 
-/** Сколько знаков после точки у денег в контракте веба. */
-const MONEY_PLACES = 6
-
 function messageOf(error) {
   if (error && error.message) return error.message
   return String(error)
 }
 
-/** Деньги в форме контракта: шесть знаков после точки, без отрицательных нулей. */
-export function roundMoney(value) {
-  const number = Number(value)
-  if (!Number.isFinite(number)) return 0
-  return Math.round(number * 10 ** MONEY_PLACES) / 10 ** MONEY_PLACES
-}
 
 /**
  * Адрес приёма смен из адреса ручки реестра.
@@ -89,19 +81,18 @@ export function shiftReportUrl(apiUrl) {
 /**
  * Тело `POST /api/usage/shifts` из карточек смены.
  *
- * `cards` — по одной на тикет смены: `{issue, title, sessions}`. Сессия уже содержит
- * всё, что нужно строке журнала; цена считается той же `costOf(totals, rates)`, что
- * печатает сводку, — второй формулы в отделе нет.
+ * `cards` — по одной на тикет смены: `{issue, title, sessions}`. Сессия уносит только
+ * количества токенов и ходы: **денег в теле нет**, сумму каждой сессии и смены считает
+ * сервер по ценам проекта (`app/money.py`). Своего расчёта здесь не осталось: две
+ * формулы дали бы две суммы одного и того же расхода.
  *
- * Сумма сессий округляется так же, как каждая сессия: веб сверяет итог с
- * детализацией с допуском в последний знак, и расхождение из-за округления дало бы
- * отказ «Расход по сессиям не сходится с итогом».
+ * Старый формат (`rates`, `cost_usd` в сессиях, `totals`) сервер принимает и игнорирует:
+ * в очереди отдела могут лежать смены, собранные до этой правки, и отказ на них терял бы
+ * расход.
  */
 export function buildShiftReport(options) {
   const opts = options || {}
   const project = opts.project || {}
-  const rates = opts.rates || null
-  const costOf = typeof opts.costOf === 'function' ? opts.costOf : null
   const endedAt = opts.endedAt ? new Date(opts.endedAt) : new Date()
   // Начало смены — время её старта. Смена, закрытая без запуска (работа была, а
   // `run` не заведён), получает тот же момент: интервал нулевой длины правдивее
@@ -111,13 +102,6 @@ export function buildShiftReport(options) {
   const sessions = []
   for (const card of opts.cards || []) {
     for (const row of (card && card.sessions) || []) {
-      const tokens = {
-        in: row.in || 0,
-        out: row.out || 0,
-        cacheRead: row.cacheRead || 0,
-        cacheWrite: row.cacheWrite || 0,
-      }
-      const price = costOf === null ? null : costOf(tokens, rates)
       sessions.push({
         issue_number: Number.isInteger(card.issue) ? card.issue : null,
         issue_title: typeof card.title === 'string' && card.title !== '' ? card.title : null,
@@ -125,12 +109,15 @@ export function buildShiftReport(options) {
         session: row.session,
         source: row.source || null,
         turns: row.turns || 0,
-        tokens,
-        cost_usd: roundMoney(price === null ? 0 : price),
+        tokens: {
+          in: row.in || 0,
+          out: row.out || 0,
+          cacheRead: row.cacheRead || 0,
+          cacheWrite: row.cacheWrite || 0,
+        },
       })
     }
   }
-  const total = sessions.reduce((sum, row) => sum + row.cost_usd, 0)
 
   return {
     project_ref: project.id,
@@ -139,9 +126,7 @@ export function buildShiftReport(options) {
     started_at: startedAt.toISOString(),
     ended_at: endedAt.toISOString(),
     reason: opts.reason,
-    rates,
     sessions,
-    totals: { cost_usd: roundMoney(total) },
   }
 }
 
@@ -287,17 +272,21 @@ export async function sendReport(report, options) {
     let changed = null
     let accepted = null
     let skipped = null
+    // Сумма смены — из ответа сервера, строкой как есть: формула и знаки живут в вебе,
+    // и вторая копия здесь не печатается, не округляется и не переформатируется.
+    let costUsd = null
     try {
       const parsed = JSON.parse(response.body || '{}')
       if (parsed && typeof parsed === 'object') {
         if (typeof parsed.changed === 'boolean') changed = parsed.changed
         if (Number.isInteger(parsed.accepted)) accepted = parsed.accepted
         if (Number.isInteger(parsed.skipped)) skipped = parsed.skipped
+        if (typeof parsed.cost_usd === 'string') costUsd = parsed.cost_usd
       }
     } catch (error) {
       // `201` с неразобранным телом — всё равно принято: код ответа главнее тела.
     }
-    return { ok: true, status, error: null, retryable: false, changed, accepted, skipped }
+    return { ok: true, status, error: null, retryable: false, changed, accepted, skipped, costUsd }
   }
   return {
     ok: false,
@@ -323,11 +312,13 @@ export async function deliverShift(report, options) {
     const accepted = result.accepted === null ? count : result.accepted
     const skipped = result.skipped === null ? 0 : result.skipped
     const head = result.changed === false ? 'уже была в журнале' : 'сохранена в вебе'
+    // Деньги печатаются ровно так, как их посчитал и вернул сервер.
+    const money = result.costUsd === null ? '' : ', расход: ' + result.costUsd + ' USD'
     return {
       ok: true,
       queued: queueLength(),
       error: null,
-      line: REPORT_PREFIX + key + head + ' (принято сессий: ' + accepted + ', пропущено: ' + skipped + ')',
+      line: REPORT_PREFIX + key + head + ' (принято сессий: ' + accepted + ', пропущено: ' + skipped + money + ')',
       result,
     }
   }

@@ -44,7 +44,6 @@ PRICE_QUANTUM = Decimal("0.000001")
 
 # Четыре цены проекта. Общий список нужен и ручке правки, и ответу схемы.
 PRICE_FIELDS = ("price_input", "price_output", "price_cache_read", "price_cache_write")
-
 NAME_REQUIRED = "Укажите название проекта"
 NAME_TOO_LONG = "Название длиннее 200 символов"
 REPO_URL_REQUIRED = "Укажите адрес репозитория"
@@ -176,6 +175,54 @@ def _get_alive_project(db: Session, project_id: int) -> Project:
     if project is None or project.deleted_at is not None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, PROJECT_NOT_FOUND)
     return project
+
+
+def project_ref(project: Project) -> str:
+    """Id проекта в реестре отдела: `code`, а если код не задан — `str(id)`.
+
+    Одна формула на весь отдел: по ней строится `id` проекта в документе реестра, по ней
+    же ищется проект, которому принадлежит смена, приехавшая от harness. Вторая копия
+    разошлась бы с первой, и смена нашла бы не тот проект (или не нашла бы никакого).
+    """
+    return project.code or str(project.id)
+
+
+def find_project_by_ref(db: Session, ref: str) -> Project | None:
+    """Живой проект по id из реестра: сначала по коду, потом по числовому `id`.
+
+    Код сравнивается без учёта регистра — так же, как его держит уникальный индекс
+    `uq_projects_code_alive`. Мягко удалённый проект не находится: его журнал отвечает
+    `404`, и деньги ему прибавлять некуда.
+
+    `None` — проекта в вебе нет. Для смены это не отказ: она принимается с нулевой
+    суммой (см. `app.api.usage`).
+    """
+    text = ref.strip()
+    if not text:
+        return None
+    project = db.scalars(
+        select(Project).where(
+            Project.deleted_at.is_(None),
+            func.lower(Project.code) == text.lower(),
+        )
+    ).first()
+    if project is not None:
+        return project
+    # Числовой id — запасной ключ: он же стоит в реестре у проекта без кода. Код из одних
+    # цифр запрещён, поэтому ветки не пересекаются.
+    if text.isdigit():
+        project = db.get(Project, int(text))
+        if project is not None and project.deleted_at is None:
+            return project
+    return None
+
+
+def prices_of(project: Project) -> dict[str, object]:
+    """Четыре цены проекта словарём — вход `app.money.amount_for`.
+
+    Прайс проекта в долларах США за 1 000 000 токенов: другого прайса в отделе нет.
+    """
+    return {field: getattr(project, field) for field in PRICE_FIELDS}
 
 
 def _conflict_detail(error: IntegrityError) -> str:

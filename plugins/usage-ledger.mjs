@@ -633,25 +633,3 @@ export function usageLine(totals, options) {
   if (opts.withCacheWrite === true || num(totals.cacheWrite) !== 0) parts.push('кэш-запись ' + fmtNumber(totals.cacheWrite))
   return parts.join(' · ')
 }
-
-// Цена по тарифу. Числа тарифа приходят из
-// `<DSH_HOME>/profiles/desktop/dsh-dev-department/dev-department.json` (`usageRates`),
-// в коде их нет: валюта и тариф — решение человека, а не отдела.
-// Незаданный тариф — строки с ценой нет вовсе, а не «$0.00» рядом с нулём.
-export function costOf(totals, rates) {
-  if (!rates || typeof rates !== 'object') return null
-  const take = (key) => (typeof rates[key] === 'number' && Number.isFinite(rates[key]) && rates[key] >= 0 ? rates[key] : 0)
-  const input = take('inputUsdPerM')
-  const output = take('outputUsdPerM')
-  const cacheRead = take('cacheReadUsdPerM')
-  const cacheWrite = take('cacheWriteUsdPerM')
-  if (input === 0 && output === 0 && cacheRead === 0 && cacheWrite === 0) return null
-  const usd = (num(totals.in) * input + num(totals.out) * output +
-    num(totals.cacheRead) * cacheRead + num(totals.cacheWrite) * cacheWrite) / 1000000
-  return usd
-}
-
-export function formatCost(usd) {
-  if (usd === null || usd === undefined) return null
-  return '$' + (usd < 0.01 ? usd.toFixed(4) : usd.toFixed(2))
-}

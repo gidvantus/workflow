@@ -40,11 +40,13 @@ class ProjectExpense(Base):
     tokens_output: Mapped[int] = mapped_column(BigInteger, nullable=False)
     tokens_cache_read: Mapped[int] = mapped_column(BigInteger, nullable=False)
     tokens_cache_write: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    # Деньги: `Numeric(20, 2)` — рубли и копейки, округление один раз при записи.
-    # Точность с запасом: разрешённые контрактом цена (10 знаков до разделителя) и
-    # количество (10^12) дают сумму до 4·10^16, то есть `Numeric(14, 2)` её не держит
-    # и PostgreSQL ответил бы `numeric field overflow` на валидном вводе.
-    amount: Mapped[Decimal] = mapped_column(Numeric(20, 2), nullable=False)
+    # Деньги: `Numeric(20, 6)` — доллары США с шестью знаками, как и у смены: сумма
+    # ручной записи и сумма смены печатаются в одной ведомости одним форматом, и
+    # округление до копейки потеряло бы расход мелкой записи. Точность с запасом:
+    # разрешённые контрактом цена (10 знаков до разделителя) и количество (10^12) дают
+    # сумму до 4·10^16, то есть `Numeric(14, 6)` её не держит и PostgreSQL ответил бы
+    # `numeric field overflow` на валидном вводе.
+    amount: Mapped[Decimal] = mapped_column(Numeric(20, 6), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

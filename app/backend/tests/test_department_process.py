@@ -12,6 +12,7 @@
 пересобирает реестр и виден в его документе.
 """
 
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Any
 
@@ -209,7 +210,7 @@ def department_id_fixture(client: TestClient, project_id: int) -> int:
 
 
 @pytest.fixture(name="api_client")
-def api_client_fixture(client: TestClient) -> TestClient:
+def api_client_fixture(client: TestClient) -> Iterator[TestClient]:
     """Клиент с заданным токеном реестра: документ реестра читается только с ним."""
     main.app.dependency_overrides[get_settings] = lambda: Settings(
         database_url="sqlite+pysqlite:///:memory:",

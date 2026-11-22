@@ -10,32 +10,18 @@
   описаны моделями и попадают в OpenAPI: по ним фронт рисует таблицу, не догадываясь о
   форме.
 
-Деньги отдаются строкой ровно с шестью знаками (`"0.420000"`), как и `cost` задачи —
-но с шестью, а не двумя: тариф за миллион токенов даёт доли цента, и округлять их
-до копейки значило бы терять расход мелкой сессии. `Decimal` приводится к строке
-валидатором до проверки типа: `f"{None:.6f}"` падает, поэтому проверка на `None` в нём
-обязательна.
+Деньги отдаются строкой ровно с шестью знаками (`"0.420000"`): формат живёт в
+`app.money` вместе с формулой суммы — своей копии здесь нет, иначе правка вида денег
+касалась бы журнала смен, а строки ручных записей на том же экране остались бы прежними.
+`Decimal` приводится к строке валидатором до проверки типа: `f"{None:.6f}"` падает,
+поэтому проверка на `None` в нём обязательна.
 """
 
 from datetime import datetime
-from decimal import Decimal
 
 from pydantic import BaseModel, Field, field_validator
 
-# Знаков после точки у денег журнала. Шесть, а не два: одна сессия в четверть миллиона
-# входных токенов по тарифу $3 за миллион стоит $0.75, а сессия в сотню токенов —
-# $0.0003, и это разные деньги, а не «ноль».
-MONEY_PLACES = 6
-MONEY_QUANTUM = Decimal("0.000001")
-
-
-def format_money(value: object) -> str:
-    """Деньги журнала строкой: `Decimal("0.42")` → `"0.420000"`.
-
-    Приведение к `Decimal` идёт через `str`, а не через `float`: `float` уже потерял
-    точность до вызова, и `Decimal(0.1)` вернул бы `0.1000000000000000055...`.
-    """
-    return f"{Decimal(str(value)):.{MONEY_PLACES}f}"
+from app.money import format_cost
 
 
 class UsageTokens(BaseModel):
@@ -53,12 +39,17 @@ class UsageTokens(BaseModel):
 
 
 class UsageRates(BaseModel):
-    """Тарифы расчёта, по которым считалась смена (та же форма, что `usageRates`)."""
+    """Цены проекта за 1 000 000 токенов, по которым считалась смена.
 
-    inputUsdPerM: float
-    cacheReadUsdPerM: float
-    cacheWriteUsdPerM: float
-    outputUsdPerM: float
+    Поля с умолчанием нуля: у смены, приехавшей до появления проекта в вебе, цен нет
+    вовсе, и снимок её — пустой объект. Отказывать такому ответу нельзя: смена в журнале
+    есть, а её деньги — ноль.
+    """
+
+    inputUsdPerM: float = 0.0
+    cacheReadUsdPerM: float = 0.0
+    cacheWriteUsdPerM: float = 0.0
+    outputUsdPerM: float = 0.0
 
 
 class UsageShiftStored(BaseModel):
@@ -79,7 +70,7 @@ class UsageShiftStored(BaseModel):
     @field_validator("cost_usd", mode="before")
     @classmethod
     def _format_cost(cls, value: object) -> str:
-        return format_money(value)
+        return format_cost(value)
 
 
 class UsageSessionRow(BaseModel):
@@ -97,7 +88,7 @@ class UsageSessionRow(BaseModel):
     @field_validator("cost_usd", mode="before")
     @classmethod
     def _format_cost(cls, value: object) -> str:
-        return format_money(value)
+        return format_cost(value)
 
 
 class UsageShiftRow(BaseModel):
@@ -117,7 +108,7 @@ class UsageShiftRow(BaseModel):
     @field_validator("cost_usd", mode="before")
     @classmethod
     def _format_cost(cls, value: object) -> str:
-        return format_money(value)
+        return format_cost(value)
 
 
 class UsageShiftDetail(UsageShiftRow):
@@ -140,7 +131,7 @@ class UsageProjectTotals(BaseModel):
     @field_validator("cost_usd", mode="before")
     @classmethod
     def _format_cost(cls, value: object) -> str:
-        return format_money(value)
+        return format_cost(value)
 
 
 class UsageProjectUsage(BaseModel):
@@ -166,4 +157,4 @@ class UsageProjectTotal(BaseModel):
     @field_validator("cost_usd", mode="before")
     @classmethod
     def _format_cost(cls, value: object) -> str:
-        return format_money(value)
+        return format_cost(value)

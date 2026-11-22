@@ -1,9 +1,10 @@
-// Проверка отправки журнала расхода в веб: `plugins/usage-web.mjs` (issue #57).
+// Проверка отправки журнала расхода в веб: `plugins/usage-web.mjs` (issue #57, #72).
 //
 // Набор проверяет ровно контракт половины harness:
 //
-//   - тело `POST /api/usage/shifts` собирается из карточек смены: сессии с токенами,
-//     цена из `costOf`, итог — сумма округлённых цен;
+//   - тело `POST /api/usage/shifts` собирается из карточек смены: сессии с токенами и
+//     ходами, **без денег** — сумму считает веб по ценам проекта (`app/money.py`);
+//   - строка сводки печатает `cost_usd` из ответа как есть, без своей формулы;
 //   - успех (в том числе `200` с `changed: false`) снимает смену с очереди;
 //   - временный отказ (сеть, `401`, `5xx`) оставляет смену в очереди и называет
 //     причину в строке сводки;
@@ -48,26 +49,9 @@ check('подкаталог стенда и ручка реестра', usage.sh
 check('слэш после /api', usage.shiftReportUrl('http://host/dsh/api/'), 'http://host/dsh/api/usage/shifts')
 check('мусор вместо URL не роняет', usage.shiftReportUrl('  '), '')
 
-// ── деньги ──────────────────────────────────────────────────────────────────
-
-console.log('\n=== округление денег ===')
-check('шесть знаков', usage.roundMoney(0.1 + 0.2), 0.3)
-check('ровно знак', usage.roundMoney(1), 1)
-check('вниз', usage.roundMoney(1.0000004), 1)
-check('вверх', usage.roundMoney(1.0000005), 1.000001)
-check('не число — ноль', usage.roundMoney('дорого'), 0)
-
 // ── тело запроса ────────────────────────────────────────────────────────────
 
 console.log('\n=== тело смены ===')
-const RATES = { inputUsdPerM: 3, cacheReadUsdPerM: 0.3, cacheWriteUsdPerM: 3.75, outputUsdPerM: 15 }
-// Та же формула, что `costOf` в книге учёта, но своя: набор не должен проверять
-// чужую функцию её же кодом.
-const costOf = (tokens, rates) => (tokens.in * rates.inputUsdPerM +
-  tokens.out * rates.outputUsdPerM +
-  tokens.cacheRead * rates.cacheReadUsdPerM +
-  tokens.cacheWrite * rates.cacheWriteUsdPerM) / 1e6
-
 const session = (over) => ({
   role: 'dev-backend',
   session: 'abc-123',
@@ -86,8 +70,6 @@ const report = usage.buildShiftReport({
   startedAt: '2024-05-01T10:00:00Z',
   endedAt: '2024-05-01T18:00:00Z',
   reason: 'window',
-  rates: RATES,
-  costOf,
   cards: [
     { issue: 57, title: 'Журнал расхода', sessions: [session({}), session({ session: 'def-456', source: null, in: 0, out: 0, cacheRead: 0, cacheWrite: 0 })] },
     { issue: 42, title: 'Другое', sessions: [session({ role: 'reviewer', session: 'ghi-789', in: 0, out: 100, cacheRead: 0, cacheWrite: 0 })] },
@@ -105,13 +87,10 @@ const stamped = usage.buildShiftReport({
   startedAt: '2026-11-21T13:05:00Z',
   endedAt: '2026-11-22T01:05:00Z',
   reason: 'window',
-  rates: RATES,
-  costOf,
   cards: [{ issue: 57, title: 'Журнал расхода', sessions: [session({})] }],
 })
 check('метка смены доезжает как есть', stamped.shift_key, '2026-11-21T13:00')
 check('интервал — ISO', [report.started_at, report.ended_at], ['2024-05-01T10:00:00.000Z', '2024-05-01T18:00:00.000Z'])
-check('тарифы уехали как есть', report.rates, RATES)
 check('сессий столько же, сколько в карточках', report.sessions.length, 3)
 check('первая сессия', report.sessions[0], {
   issue_number: 57,
@@ -121,11 +100,11 @@ check('первая сессия', report.sessions[0], {
   source: 'issue-created',
   turns: 4,
   tokens: { in: 1000, out: 200, cacheRead: 4000, cacheWrite: 0 },
-  cost_usd: 0.0072,
 })
-check('нулевая сессия остаётся в теле', report.sessions[1].cost_usd, 0)
+// Денег в теле нет ни в одной форме: тарифы, итог и цена сессии уехали в веб (#72).
+check('денег в теле смены нет', [report.rates, report.totals, report.sessions[0].cost_usd], [undefined, undefined, undefined])
+check('нулевая сессия остаётся в теле', report.sessions[1].tokens, { in: 0, out: 0, cacheRead: 0, cacheWrite: 0 })
 check('сессия без источника', report.sessions[1].source, null)
-check('итог — сумма сессий', report.totals.cost_usd, 0.0087)
 
 // Тикет без номера — не повод терять сессию: `issue_number` в контракте nullable.
 const loose = usage.buildShiftReport({
@@ -133,14 +112,12 @@ const loose = usage.buildShiftReport({
   shiftKey: '2024-05-02',
   endedAt: '2024-05-02T18:00:00Z',
   reason: 'manual',
-  rates: RATES,
-  costOf,
   cards: [{ title: null, sessions: [session({ session: 'x' })] }],
 })
 check('без номера тикета и без названия', [loose.sessions[0].issue_number, loose.sessions[0].issue_title], [null, null])
 check('название проекта по умолчанию — id', loose.project_title, 'workflow')
 check('начало без старта смены — конец', loose.started_at, loose.ended_at)
-check('без карточек сессий нет', usage.buildShiftReport({ project: {}, shiftKey: 'k', reason: 'window', rates: RATES, costOf, cards: [] }).sessions.length, 0)
+check('без карточек сессий нет', usage.buildShiftReport({ project: {}, shiftKey: 'k', reason: 'window', cards: [] }).sessions.length, 0)
 
 // ── очередь: файл и место ───────────────────────────────────────────────────
 
@@ -187,6 +164,15 @@ check('адрес и токен дошли', [sent.url, sent.token], [URL_OK, 't
 check('тело — то, что собрано', sent.body.shift_key, '2024-05-01')
 check('успех', [ok.ok, ok.queued], [true, 0])
 check('строка об успехе', ok.line,
+  'Журнал расхода: смена 2024-05-01 сохранена в вебе (принято сессий: 3, пропущено: 0, расход: 0.007680 USD)')
+
+// Ответ сервера без `cost_usd` (старый стенд) — строка без денег, а не с нулём:
+// выдумывать сумму запрещено, её считает только веб.
+const noCost = await usage.deliverShift(report, {
+  url: URL_OK,
+  request: answer(201, { changed: true, accepted: 3, skipped: 0 }),
+})
+check('без суммы в ответе денег не печатаем', noCost.line,
   'Журнал расхода: смена 2024-05-01 сохранена в вебе (принято сессий: 3, пропущено: 0)')
 
 const repeat = await usage.deliverShift(report, { url: URL_OK, request: answer(200, { changed: false, accepted: 0, skipped: 3 }) })
@@ -203,11 +189,11 @@ usage.writeQueue([])
 
 const rejected = await usage.deliverShift(report, {
   url: URL_OK,
-  request: answer(422, { detail: 'Не переданы тарифы расчёта' }),
+  request: answer(422, { detail: 'Количество токенов указывается целым неотрицательным числом' }),
 })
 check('отказ по существу в очередь не ложится', [rejected.ok, rejected.queued], [false, 0])
 check('строка об отказе', rejected.line,
-  'Журнал расхода: смена 2024-05-01 не принята — Не переданы тарифы расчёта')
+  'Журнал расхода: смена 2024-05-01 не принята — Количество токенов указывается целым неотрицательным числом')
 check('очередь пуста после отказа', usage.readQueue().length, 0)
 
 const unprocessable = await usage.deliverShift(report, { url: URL_OK, request: answer(500, '') })

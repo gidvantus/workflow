@@ -40,6 +40,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.api.projects import project_ref
 from app.config import Settings, get_settings
 from app.db import get_db
 from app.models.department import Department
@@ -406,7 +407,9 @@ def build_document(db: Session) -> dict[str, Any]:
         document["projects"].append(
             {
                 # Код проекта, если он задан; иначе — прежний числовой `id` строки.
-                "id": project.code or str(project.id),
+                # Формула живёт в `app.api.projects`: по ней же ищется проект, которому
+                # принадлежит смена от отдела, и вторая копия разошлась бы с первой.
+                "id": project_ref(project),
                 "title": project.name,
                 "departments": [_department_row(department) for department in departments],
             }
