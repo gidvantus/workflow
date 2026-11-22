@@ -316,6 +316,10 @@ def _department_row(department: Department) -> dict[str, Any]:
     Незаполненное поле не попадает в документ вовсе, а не приходит `null`: плагин
     подставляет умолчание только на отсутствующем ключе, а `null` для `repo` или
     `workspace` он читает как значение.
+
+    Исключение — `enabled` и `maxRework`: у них есть значение, отличное от «не задано»,
+    поэтому они попадают в документ всегда. `enabled` — это `bool` из базы, а не
+    отсутствующий ключ: диспетчер необязательный ключ читает как «включён».
     """
     row: dict[str, Any] = {"kind": department.kind.code, "title": department.name}
     for key, value in (
@@ -333,6 +337,11 @@ def _department_row(department: Department) -> dict[str, Any]:
     if windows:
         row["windows"] = windows
     row["maxRework"] = department.max_rework
+    # Флаг работы отдела отдаётся **всегда**, в отличие от незаполненных полей: диспетчер
+    # читает `dept.enabled !== false`, поэтому отсутствующий ключ и `null` для него значат
+    # «включён». Опущенный ключ означал бы «включён» у выключенного отдела — то есть
+    # выключатель не доезжал бы до работы, а только выглядел выключенным в вебе.
+    row["enabled"] = department.enabled
     telegram = _telegram(department)
     if telegram is not None:
         row["telegram"] = telegram
@@ -341,6 +350,12 @@ def _department_row(department: Department) -> dict[str, Any]:
 
 def build_document(db: Session) -> dict[str, Any]:
     """Собрать документ v2 из живых строк `projects` и `departments`.
+
+    **`id` проекта.** Если у проекта задан `code` (`workflow`, `CRMDormitory`), в документ
+    идёт он: `id` в реестре должен быть стабильным человеческим слагом, потому что файл
+    реестра отдела держится на слагах, а склейка `plugins/registry.mjs` сопоставляет
+    проекты по `id`. Проект без кода остаётся под `str(id)` — обратная совместимость:
+    старые документы и ещё не заполненные кодами базы читаются как прежде.
 
     Проект без отделов в реестр не попадает: правило формата — у проекта минимум один
     отдел, а проект, у которого отделов ещё не завели, диспетчеру всё равно нечем
@@ -374,7 +389,8 @@ def build_document(db: Session) -> dict[str, Any]:
             continue
         document["projects"].append(
             {
-                "id": str(project.id),
+                # Код проекта, если он задан; иначе — прежний числовой `id` строки.
+                "id": project.code or str(project.id),
                 "title": project.name,
                 "departments": [_department_row(department) for department in departments],
             }

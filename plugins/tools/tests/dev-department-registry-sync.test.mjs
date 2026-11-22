@@ -194,6 +194,131 @@ check('время изменения файла то же', status.registrySync.
 check('а время удачного ответа новое', status.registrySync.fetchedAt !== fetchedAt, true)
 check('при этом синхронизация снова удачна', status.registrySync.ok, true)
 
+console.log('\n=== документ не совпал по id: локальные ключи не теряются, кеш не переписан ===')
+// Ровно инцидент из постановки #63: в вебе коды проектов не заполнены, и `id`
+// приходит числовым, а файл держится на слагах. Склейка по `id` не совпадёт —
+// писать такой документ поверх файла нельзя, иначе пропадут telegram, порты,
+// areas, `enabled: false` и второе окно смены.
+const beforeLost = fs.readFileSync(projectsFile, 'utf8')
+mode = {
+  kind: 'ok',
+  status: 200,
+  body: {
+    version: 2,
+    projects: [
+      {
+        id: '1',
+        title: 'Вахта',
+        departments: [{ kind: 'development', repo: WORKSPACE, base: 'main', workspace: WORKSPACE, windows: [{ start: '13:00', stop: '04:00' }] }],
+      },
+    ],
+  },
+}
+await app.tick()
+status = await app.status()
+check('успех снят', status.registrySync.ok, false)
+check('файл байт в байт прежний', fs.readFileSync(projectsFile, 'utf8') === beforeLost, true)
+includes('причина названа словами постановки', status.registrySync.error, 'реестр из веба: не совпали проекты — ')
+includes('в причине назван проект', status.registrySync.error, 'vahta')
+includes('в причине названы ключи', status.registrySync.error, 'vahta.title')
+includes('перечень ключей укорочен многоточием', status.registrySync.error, '…; кеш не переписан')
+includes('и сказано, что кеш не переписан', status.registrySync.error, 'кеш не переписан')
+check('lost в статусе — массив', Array.isArray(status.registrySync.lost), true)
+check('lost называет проект', status.registrySync.lost.map((item) => item.id), ['vahta'])
+check('lost называет его ключи', status.registrySync.lost[0].keys.includes('vahta.departments[development].telegram'), true)
+check('и виды отделов', status.registrySync.lost[0].departments, ['development'])
+check('droppedProjects тоже названы', status.registrySync.droppedProjects, ['vahta'])
+check('ревизия прошлой удачи не забыта', /^[0-9a-f]{12}$/.test(status.registrySync.revision), true)
+check('кеш всё равно обслуживается', status.registry.serving, ['vahta'])
+check('порт из кеша на месте', cacheDepartment().frontendPort, 8095)
+
+// Коды заполнили — id совпали, и запись возобновляется: защита блокирует только
+// потерю, а не синхронизацию вообще.
+mode = { kind: 'ok', status: 200, body: webDocument('gidvantus/vahta') }
+await app.tick()
+status = await app.status()
+check('id совпали — синхронизация снова удачна', status.registrySync.ok, true)
+check('lost очищен', status.registrySync.lost, [])
+check('проект снова из веба', cacheDepartment().repo, 'gidvantus/vahta')
+
+console.log('\n=== флаг работы отдела: пришёл из веба и локальным не стал ===')
+// С #65 флаг живёт в базе веба (`departments.enabled`): документ API приносит его и
+// перекрывает файл, а в `localKeys` записи про `enabled` быть не должно — иначе
+// человек решил бы, что флаг по-прежнему правится в файле руками. В `lost` его тоже
+// нет: `lost` — авария «ключу некуда лечь», а перекрытый флаг переписывать не мешает.
+const withEnabled = localDocument()
+withEnabled.projects[0].departments[0].enabled = true
+fs.writeFileSync(projectsFile, JSON.stringify(withEnabled, null, 2))
+mode = {
+  kind: 'ok',
+  status: 200,
+  body: {
+    version: 2,
+    projects: [
+      {
+        id: 'vahta',
+        title: 'Вахта из веба',
+        departments: [
+          {
+            kind: 'development',
+            repo: 'gidvantus/vahta',
+            base: 'main',
+            workspace: WORKSPACE,
+            windows: [{ start: '13:00', stop: '04:00' }],
+            enabled: false,
+          },
+        ],
+      },
+    ],
+  },
+}
+await app.tick()
+status = await app.status()
+check('выключение из веба доехало в кеш', cacheDepartment().enabled, false)
+check(
+  'про `enabled` в локальных ключах не говорят',
+  status.registrySync.localKeys.some((key) => key.endsWith('.enabled')),
+  false,
+)
+check('проект остался в кеше', readCache().projects[0].title, 'Вахта из веба')
+check('локальные ключи всё ещё названы', cacheDepartment().frontendPort, 8095)
+// Перекрытие флага — не потеря: он не попадает ни в `lost`, ни в `localKeys`, и кеш
+// спокойно переписывается. Проверка держит формулировку из докстрок `overlay`.
+check('и в lost его тоже нет', status.registrySync.lost, [])
+// Выключенный отдел диспетчер не обслуживает: проект уходит из `serving`, кеш при этом
+// цел. Смена на прошлом кеше не продолжается — флаг доехал до отбора проектов.
+check('выключенный проект не обслуживается', status.registry.serving, [])
+check('и назван выключенным', status.registry.disabled, ['vahta'])
+// Возврат в норму: включённый отдел снова обслуживается, и снова по документу веба.
+mode = {
+  kind: 'ok',
+  status: 200,
+  body: {
+    version: 2,
+    projects: [
+      {
+        id: 'vahta',
+        title: 'Вахта из веба',
+        departments: [
+          {
+            kind: 'development',
+            repo: 'gidvantus/vahta',
+            base: 'main',
+            workspace: WORKSPACE,
+            windows: [{ start: '13:00', stop: '04:00' }],
+            enabled: true,
+          },
+        ],
+      },
+    ],
+  },
+}
+await app.tick()
+status = await app.status()
+check('включили — проект снова обслуживается', status.registry.serving, ['vahta'])
+check('и выключенных нет', status.registry.disabled, [])
+check('флаг в кеше — из веба', cacheDepartment().enabled, true)
+
 console.log('\n=== 401: кеш не тронут ===')
 mode = { kind: 'status', status: 401 }
 const beforeDenied = fs.readFileSync(projectsFile, 'utf8')

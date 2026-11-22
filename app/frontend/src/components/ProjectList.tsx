@@ -119,6 +119,13 @@ function ProjectRow({ project, onEdit, onDelete, onOpen }: ProjectRowProps): JSX
         <p className="row__desc" data-testid="project-item-description">
           {project.description}
         </p>
+        {/* Код проекта показывается, только когда задан: у проекта без кода в реестре
+            `id` числовой, и пустой подписи в строке быть не должно. */}
+        {project.code !== null && project.code !== '' && (
+          <p className="row__code" data-testid="project-item-code">
+            {project.code}
+          </p>
+        )}
       </div>
       <p className="row__repo" title={project.repo_url}>
         {project.repo_url}

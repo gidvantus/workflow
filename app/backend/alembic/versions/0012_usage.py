@@ -26,8 +26,8 @@
 журнал расхода** — второй копии этих чисел нет, они приезжают только отправкой смен,
 а отправленное заново не приходит: harness не хранит отправленные смены у себя.
 
-Revision ID: 0010_usage
-Revises: 0009_roles_skills
+Revision ID: 0012_usage
+Revises: 0011_department_enabled
 Create Date: 2026-11-21
 
 """
@@ -39,8 +39,8 @@ from sqlalchemy.dialects.postgresql import JSONB
 
 from alembic import op
 
-revision: str = "0010_usage"
-down_revision: str | None = "0009_roles_skills"
+revision: str = "0012_usage"
+down_revision: str | None = "0011_department_enabled"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

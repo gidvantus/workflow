@@ -97,6 +97,9 @@ class DepartmentResponse(BaseModel):
 
     Строковые поля страницы правки отдаются как `null`, когда не заполнены: пустая
     строка в базе не появляется ни после одной правки.
+
+    `enabled` — «работа отдела включена»; отдаётся всегда булевым, а не `null`: у флага
+    нет значения «не заполнено», и выключенный отдел — это `false`, а не отсутствие поля.
     """
 
     model_config = ConfigDict(from_attributes=True)
@@ -116,6 +119,7 @@ class DepartmentResponse(BaseModel):
     telegram_token: str | None
     telegram_chat_id: str | None
     max_rework: int
+    enabled: bool
     notifications_enabled: bool
     created_at: datetime
     updated_at: datetime
@@ -142,11 +146,11 @@ class DepartmentUpdate(BaseModel):
     """Тело `PATCH /api/departments/{id}`: любое непустое подмножество полей страницы.
 
     Поля, которого нет в теле, не меняется. Строковое поле со значением `null` или `""`
-    означает «не заполнено» и стирает значение в базе. `notifications_enabled` — булево
-    поле: `null` для него значит «не менять», потому что значения «пусто» у флажка нет.
-    `role_ids` заменяет набор ролей целиком, пустой список роли стирает. `windows`
-    заменяет набор окон целиком и проверяется ручкой: от одного до шести окон, без
-    пересечений; `[]` и `null` — отказ «Укажите хотя бы одно окно времени работы».
+    означает «не заполнено» и стирает значение в базе. Булевы поля — `enabled` и
+    `notifications_enabled`: `null` для них значит «не менять», потому что значения «пусто»
+    у флажка нет. `role_ids` заменяет набор ролей целиком, пустой список роли стирает.
+    `windows` заменяет набор окон целиком и проверяется ручкой: от одного до шести окон,
+    без пересечений; `[]` и `null` — отказ «Укажите хотя бы одно окно времени работы».
 
     Пустое тело — отказ `422`, его проверяет ручка, а не схема.
 
@@ -164,6 +168,7 @@ class DepartmentUpdate(BaseModel):
     telegram_token: str | None = None
     telegram_chat_id: str | None = None
     max_rework: int | None = None
+    enabled: bool | None = None
     notifications_enabled: bool | None = None
     role_ids: list[int] | None = None
     windows: list[WindowInput] | None = None

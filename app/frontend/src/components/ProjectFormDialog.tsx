@@ -22,10 +22,13 @@ type ProjectFormDialogProps = {
 };
 
 /** Поле, к которому относится текст отказа — нужно только для `aria-invalid`. */
-type InvalidField = 'name' | 'description' | 'repo' | null;
+type InvalidField = 'name' | 'description' | 'repo' | 'code' | null;
 
 function invalidFieldFor(text: string): InvalidField {
   const lower = text.toLowerCase();
+  if (lower.includes('код проекта')) {
+    return 'code';
+  }
   if (lower.includes('назван')) {
     return 'name';
   }
@@ -38,6 +41,10 @@ function invalidFieldFor(text: string): InvalidField {
   return null;
 }
 
+/** Подсказка под полем кода: что это и почему после сохранения не меняется. */
+const CODE_HINT =
+  'Служебный идентификатор в реестре отдела; латиница, цифры, дефис; после сохранения не меняется';
+
 export default function ProjectFormDialog({
   mode,
   project,
@@ -48,8 +55,14 @@ export default function ProjectFormDialog({
   const [name, setName] = useState(project?.name ?? '');
   const [description, setDescription] = useState(project?.description ?? '');
   const [repoUrl, setRepoUrl] = useState(project?.repo_url ?? '');
+  const [code, setCode] = useState(project?.code ?? '');
   const [busy, setBusy] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
+
+  // Заданный код неизменяем: смена кода сменила бы `id` проекта в реестре отдела.
+  // Поэтому в правке у проекта с кодом поле только для чтения, и `code` в тело
+  // запроса не попадает вовсе — иначе `PATCH` вернул бы «Код проекта не меняется».
+  const codeLocked = mode === 'edit' && (project?.code ?? '') !== '';
 
   const invalidField = errorText === null ? null : invalidFieldFor(errorText);
 
@@ -60,7 +73,7 @@ export default function ProjectFormDialog({
     }
     setBusy(true);
     setErrorText(null);
-    const input = { name, description, repo_url: repoUrl };
+    const input = { name, description, repo_url: repoUrl, code: codeLocked ? undefined : code };
     try {
       if (mode === 'edit' && project !== undefined) {
         await updateProject(project.id, input);
@@ -151,6 +164,29 @@ export default function ProjectFormDialog({
             data-testid="project-form-repo"
           />
           <span className="field__hint">Ссылка или вид owner/repo</span>
+        </div>
+
+        {/* Код проекта: при создании необязателен, в правке у заданного кода только
+            для чтения. Пустое значение — «код не задан»: проект остаётся в реестре
+            под числовым `id`, а заполнить код можно один раз. */}
+        <div className="field">
+          <label className="field__label" htmlFor={`${formId}-code`}>
+            Код проекта
+          </label>
+          <input
+            className="field__input"
+            id={`${formId}-code`}
+            type="text"
+            autoComplete="off"
+            value={code}
+            readOnly={codeLocked}
+            aria-invalid={invalidField === 'code'}
+            onChange={(event) => setCode(event.target.value)}
+            data-testid="project-form-code"
+          />
+          <span className="field__hint" data-testid="project-form-code-hint">
+            {codeLocked ? 'Код не меняется' : CODE_HINT}
+          </span>
         </div>
       </form>
 

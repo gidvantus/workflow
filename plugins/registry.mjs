@@ -5,8 +5,10 @@
 // состояния отдела — её кеш. Кеш пишет диспетчер: раз в несколько минут он
 // забирает документ из API и кладёт в файл, сохраняя ключи, которых API не
 // отдаёт. Эти ключи (`default`, `telegram`, `labels`, `areas`, `frontendPort`,
-// `apiPort`, `enabled`) человек правит руками, веб их не знает, и ни GET, ни PUT
+// `apiPort`) человек правит руками, веб их не знает, и ни GET, ни PUT
 // их не трогают — поэтому синхронизация обязана их не потерять (см. `overlay`).
+// Флаг работы отдела (`enabled`) локальным больше не бывает: он приходит из
+// документа API и живёт в базе веба — см. поле `enabled` в форме ниже.
 //
 // Модуль — единственное место, где известна форма v2. Его читают диспетчер, мост
 // Telegram, `sync.mjs` и инструменты `plugins/tools/`: ни один из них не разбирает
@@ -32,8 +34,8 @@
 //             "composeProject": "vahta-agent",
 //             "windows": [{ "start": "13:00", "stop": "04:00" }],
 //             "maxRework": 3,
+//             "enabled": true,                   // из веба: работа отдела включена
 //             "telegram": { "token": "…", "chatId": 1 },
-//             "enabled": true
 //           }
 //         ]
 //       }
@@ -336,16 +338,32 @@ export function projectFields(project) {
  * обеих сторон, из файла добираются недостающие подполя, а присланные вебом
  * остаются как есть.
  *
- * Возвращает `{document, localKeys, droppedProjects}`:
+ * Флаг работы отдела (`enabled`) локальным не бывает: `rebuild` отдаёт его всегда, и
+ * старое значение из файла перекрывается документом API. В `localKeys` его нет — этот
+ * список перечисляет ключи, которые из файла **сохраняются**, — и в `lost` он тоже не
+ * попадает: `lost` — авария «ключу некуда лечь», непустой `lost` запрещает
+ * переписывать кеш, а вытеснённый флаг переписывать не мешает и переписывания не
+ * требует. Поэтому старое значение исчезает молча, без записи в статусе: человек, у
+ * которого после выкатки включился выключенный проект, ищет флаг в вебе, а не в
+ * `registrySync.lost`. Это и есть перенос признака из файла в базу: файл после
+ * синхронизации держит только то, чего веб не знает.
+ *
+ * Возвращает `{document, localKeys, droppedProjects, lost}`:
  * `localKeys` — что сохранено и живёт только в файле (это печатается в статусе),
  * `droppedProjects` — проекты, которых в документе API нет вовсе: их ключи
- * сохранить некуда, и молчать об этом нельзя — человек ищет свой telegram.
+ * сохранить некуда, и молчать об этом нельзя — человек ищет свой telegram,
+ * `lost` — второй канал потери, названный поимённо: `[{id, keys, departments}]`,
+ * где `keys` — локальные ключи, которым некуда лечь, а `departments` — виды
+ * локальных отделов, которых в документе нет. Склейка по-прежнему не бросает
+ * такие ключи в результат, но и не теряет их молча: `droppedProjects` — это
+ * `lost[].id` проектов, отсутствующих в документе целиком.
  */
 export function overlay(apiDocument, localDocument) {
   const document = clone(apiDocument)
   const localKeys = []
   const droppedProjects = []
-  if (!isObject(localDocument)) return { document, localKeys, droppedProjects }
+  const lost = []
+  if (!isObject(localDocument)) return { document, localKeys, droppedProjects, lost }
 
   for (const key of Object.keys(localDocument)) {
     if (key === 'version' || key === 'projects') continue
@@ -363,6 +381,7 @@ export function overlay(apiDocument, localDocument) {
 
   const kept = new Set()
   for (const project of projectsOf(document)) {
+    if (!isObject(project)) continue
     const local = locals.get(project.id)
     if (!local) continue
     kept.add(project.id)
@@ -374,9 +393,11 @@ export function overlay(apiDocument, localDocument) {
     }
     const localDepartments = Array.isArray(local.departments) ? local.departments : []
     const departments = Array.isArray(project.departments) ? project.departments : []
+    const matchedKinds = new Set()
     for (const department of departments) {
       const match = localDepartments.find((candidate) => isObject(candidate) && candidate.kind === department.kind)
       if (!match) continue
+      matchedKinds.add(department.kind)
       for (const key of Object.keys(match)) {
         if (key === 'kind') continue
         // Бот — единственный блок, у которого часть полей приходит из веба
@@ -397,11 +418,52 @@ export function overlay(apiDocument, localDocument) {
         localKeys.push(project.id + '.departments[' + department.kind + '].' + key)
       }
     }
+    // Второй канал потери: отдел, который живёт в файле, а вида в документе нет.
+    // Проект при этом совпал, поэтому `droppedProjects` его не называет — без
+    // этой ветки отдел исчез бы молча вместе со своими ключами.
+    const lostDepartments = []
+    const lostKeys = []
+    for (const candidate of localDepartments) {
+      if (!isObject(candidate) || !nonEmptyString(candidate.kind)) continue
+      if (matchedKinds.has(candidate.kind)) continue
+      lostDepartments.push(candidate.kind)
+      for (const key of Object.keys(candidate)) {
+        if (key === 'kind') continue
+        lostKeys.push(project.id + '.departments[' + candidate.kind + '].' + key)
+      }
+    }
+    if (lostDepartments.length > 0) lost.push({ id: project.id, keys: lostKeys, departments: lostDepartments })
   }
-  for (const id of locals.keys()) {
-    if (!kept.has(id)) droppedProjects.push(id)
+  for (const [id, local] of locals) {
+    if (kept.has(id)) continue
+    droppedProjects.push(id)
+    lost.push(lostProject(id, local))
   }
-  return { document, localKeys, droppedProjects }
+  return { document, localKeys, droppedProjects, lost }
+}
+
+/**
+ * Что именно пропадёт, если проекта нет в документе API: его собственные ключи и
+ * ключи его отделов. Без этого перечня человек видит только имя проекта и идёт
+ * искать глазами, какие поля он потерял.
+ */
+function lostProject(id, local) {
+  const keys = []
+  const departments = []
+  for (const key of Object.keys(local)) {
+    if (key === 'id' || key === 'departments') continue
+    keys.push(id + '.' + key)
+  }
+  const localDepartments = Array.isArray(local.departments) ? local.departments : []
+  for (const department of localDepartments) {
+    if (!isObject(department) || !nonEmptyString(department.kind)) continue
+    departments.push(department.kind)
+    for (const key of Object.keys(department)) {
+      if (key === 'kind') continue
+      keys.push(id + '.departments[' + department.kind + '].' + key)
+    }
+  }
+  return { id, keys, departments }
 }
 
 /**

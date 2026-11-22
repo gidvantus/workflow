@@ -100,6 +100,13 @@ export type Department = {
   telegram_chat_id: string | null;
   /** Лимит возврата задачи: `0` — «возвращать нельзя», умолчание — `3`. */
   max_rework: number;
+  /**
+   * Признак «работа отдела включена» (`0011_department_enabled`). Отдаётся **всегда**
+   * булевым: значения «не заполнено» у флага нет, а выключенный отдел диспетчер не
+   * обслуживает — его настройки и роли остаются на месте. Фронт значение только показывает
+   * и отправляет обратно: умолчание `true` и его смысл принадлежат серверу.
+   */
+  enabled: boolean;
   notifications_enabled: boolean;
   created_at: string;
   updated_at: string;
@@ -126,6 +133,11 @@ export type DepartmentPatch = {
   telegram_token?: string | null;
   telegram_chat_id?: string | null;
   max_rework?: number | string | null;
+  /**
+   * Флаг работы отдела: `false` выключает очередь, `true` включает, `null` — «не менять»
+   * (как у `notifications_enabled`). Ключа нет — значение тоже не меняется.
+   */
+  enabled?: boolean | null;
   notifications_enabled?: boolean | null;
 };
 
@@ -255,6 +267,7 @@ function readDepartment(payload: unknown): Department | null {
   } = payload;
 
   const maxRework = payload.max_rework;
+  const enabled = payload.enabled;
   const notificationsEnabled = payload.notifications_enabled;
   const repoPath = readOptionalText(payload.repo_path);
   const baseBranch = readOptionalText(payload.base_branch);
@@ -272,6 +285,7 @@ function readDepartment(payload: unknown): Department | null {
     typeof created_at !== 'string' ||
     typeof updated_at !== 'string' ||
     typeof maxRework !== 'number' ||
+    typeof enabled !== 'boolean' ||
     typeof notificationsEnabled !== 'boolean' ||
     repoPath === undefined ||
     baseBranch === undefined ||
@@ -315,6 +329,7 @@ function readDepartment(payload: unknown): Department | null {
     telegram_token: telegramToken,
     telegram_chat_id: telegramChatId,
     max_rework: maxRework,
+    enabled,
     notifications_enabled: notificationsEnabled,
     created_at,
     updated_at,
