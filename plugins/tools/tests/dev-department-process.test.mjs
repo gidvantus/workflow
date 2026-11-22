@@ -144,7 +144,7 @@ check('ключей меток — 14', proc.PROCESS_LABEL_KEYS.length, 14)
 check(
   'каталог стражей',
   proc.GUARD_CATALOG.map((guard) => guard.id),
-  ['route', 'mockup-stage', 'dispatch', 'no-code', 'same-head', 'checklist-gate', 'limits', 'merged-already'],
+  ['route', 'mockup-stage', 'dispatch', 'no-code', 'same-head', 'checklist-gate', 'merged-already'],
 )
 check(
   'ступень route — маршрутная и со стражем route',
@@ -227,6 +227,25 @@ check(
   proc.queueOfPlan(windowPlan).map((entry) => entry.item),
   ['dev-1'],
 )
+
+// Вне окна первая ступень плана может оказаться входной — и тогда тик обязан решать
+// по плану без входных ступеней: иначе тикет со `needs-mockup` (приоритет 1) держит
+// впереди себя начатое ревью, и на границе окна оно встаёт до утра. Диспетчер просит
+// это тем же `skip`, что проверяется здесь.
+const mixedItems = [
+  { item: 'review-1', labels: ['review'] },
+  { item: 'mockup-1', labels: ['mockup'] },
+]
+check(
+  'первая ступень смешанного плана — макет',
+  proc.nextOfPlan(proc.planOfProcess(proc.defaultProcess(), mixedItems)).step.id,
+  'mockup',
+)
+const startedPlan = proc.planOfProcess(proc.defaultProcess(), mixedItems, {
+  skip: (step) => proc.isEntryStep(step),
+})
+check('без входных ступеней решается начатое ревью', proc.nextOfPlan(startedPlan).step.id, 'review')
+check('и решается по своему тикету', proc.nextOfPlan(startedPlan).item, 'review-1')
 
 console.log('\n=== половина работы в доработке (by-area) ===')
 // Порядок ветвлений прежнего `implementer()`: метка передачи фронтенду решает раньше

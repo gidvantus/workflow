@@ -88,7 +88,6 @@ GUARDS: tuple[tuple[str, str], ...] = (
     ("no-code", "Есть что ревьюить"),
     ("same-head", "Та же ревизия"),
     ("checklist-gate", "Чеклист прошлого круга"),
-    ("limits", "Лимиты"),
     ("merged-already", "PR уже слит"),
 )
 

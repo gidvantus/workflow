@@ -72,7 +72,6 @@ export const GUARD_CATALOG = [
   { id: 'no-code', title: 'Есть что ревьюить' },
   { id: 'same-head', title: 'Та же ревизия' },
   { id: 'checklist-gate', title: 'Чеклист прошлого круга' },
-  { id: 'limits', title: 'Лимиты' },
   { id: 'merged-already', title: 'PR уже слит' },
 ]
 
@@ -528,9 +527,9 @@ export function isActiveStep(step) {
  * Страж ступени как предикат по меткам: `true` — ступень для этого тикета не работает.
  *
  * Здесь только те стражи, которым не нужен ни GitHub, ни состояние диспетчера. Остальные
- * (`route`, `dispatch`, `no-code`, `same-head`, `checklist-gate`, `limits`,
- * `merged-already`) исполняет `dispatch()`: без запроса к PR или без счётчиков попыток их
- * не решить, и matcher о них знать не обязан.
+ * (`route`, `dispatch`, `no-code`, `same-head`, `checklist-gate`, `merged-already`)
+ * исполняет `dispatch()`: без запроса к PR или без счётчиков попыток их не решить, и
+ * matcher о них знать не обязан.
  *
  * @param {object} step ступень документа
  * @param {string[]|Set<string>} labels ключи стоящих меток

@@ -292,7 +292,7 @@ def test_default_labels_cover_every_key_in_contract_order() -> None:
 
 
 def test_guards_catalogue_is_fixed() -> None:
-    """Каталог стражей — код, а не данные: восемь id с заголовками по-русски."""
+    """Каталог стражей — код, а не данные: семь id с заголовками по-русски."""
     assert [guard_id for guard_id, _ in GUARDS] == [
         "route",
         "mockup-stage",
@@ -300,7 +300,6 @@ def test_guards_catalogue_is_fixed() -> None:
         "no-code",
         "same-head",
         "checklist-gate",
-        "limits",
         "merged-already",
     ]
     assert [title for _, title in GUARDS] == [
@@ -310,7 +309,6 @@ def test_guards_catalogue_is_fixed() -> None:
         "Есть что ревьюить",
         "Та же ревизия",
         "Чеклист прошлого круга",
-        "Лимиты",
         "PR уже слит",
     ]
 
