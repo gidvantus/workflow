@@ -15,6 +15,8 @@ from typing import Any
 import pytest
 from fastapi import HTTPException, status
 from fastapi.testclient import TestClient
+from sqlalchemy import Connection, Engine, event
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.api import expenses as api
 
@@ -356,8 +358,65 @@ def test_post_bad_tokens_refuses(client: TestClient, field: str, value: int) -> 
     assert response.json()["detail"] == api.TOKENS_INVALID
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "detail"),
+    [
+        ("tokens_input", 12.5, api.TOKENS_INVALID),
+        ("tokens_input", "1 500", api.TOKENS_INVALID),
+        ("tokens_input", "abc", api.TOKENS_INVALID),
+        ("tokens_input", None, api.TOKENS_INVALID),
+        ("spent_on", None, api.SPENT_ON_INVALID),
+        ("spent_on", 20261105, api.SPENT_ON_INVALID),
+        ("spent_on", 5.5, api.SPENT_ON_INVALID),
+    ],
+)
+def test_post_bad_field_types_refuse_with_contract_text(
+    client: TestClient, field: str, value: Any, detail: str
+) -> None:
+    """Нечисловое количество и не строка в дате — текст контракта, а не массив pydantic.
+
+    Схема запроса пропускает свободные типы намеренно: проверку делает ручка, поэтому
+    `12.5`, `"1 500"`, `"abc"`, `null` и список получают ровно тот `detail`, который
+    фронт показывает пользователю дословно.
+    """
+    project = _create_project(client, **ACCEPTANCE_PRICES)
+
+    response = client.post(
+        f"/api/projects/{project['id']}/expenses",
+        json=_expense_body(**{field: value}),
+    )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert response.json()["detail"] == detail
+
+
+@pytest.mark.parametrize("value", [1_500_000.0, "1500000"])
+def test_post_accepts_whole_number_in_free_type(client: TestClient, value: Any) -> None:
+    """Свободный тип не мешает нормальному вводу: целое в `float` и строка из цифр."""
+    project = _create_project(client, **ACCEPTANCE_PRICES)
+
+    body = _post(client, project["id"], tokens_input=value)
+
+    assert body["tokens_input"] == 1_500_000
+    assert body["amount"] == "0.41"
+
+
+def test_post_checks_project_before_body_types(client: TestClient) -> None:
+    """`404` остаётся первым и при теле, которое иначе отклонила бы схема."""
+    project = _create_project(client, **ACCEPTANCE_PRICES)
+    client.delete(f"/api/projects/{project['id']}")
+
+    response = client.post(
+        f"/api/projects/{project['id']}/expenses",
+        json=_expense_body(spent_on=None, tokens_input="abc"),
+    )
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert response.json()["detail"] == "Проект не найден"
+
+
 def test_post_without_required_field_is_refused(client: TestClient) -> None:
-    """Все пять полей обязательны: без количества — стандартный отказ валидации `422`."""
+    """Все пять полей обязательны: без количества — текст контракта, а не отказ схемы."""
     project = _create_project(client, **ACCEPTANCE_PRICES)
     body = _expense_body()
     del body["tokens_input"]
@@ -365,6 +424,19 @@ def test_post_without_required_field_is_refused(client: TestClient) -> None:
     response = client.post(f"/api/projects/{project['id']}/expenses", json=body)
 
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert response.json()["detail"] == api.TOKENS_INVALID
+
+
+def test_post_without_date_is_refused(client: TestClient) -> None:
+    """Без `spent_on` ручка отвечает своим текстом про дату, а не отказом схемы."""
+    project = _create_project(client, **ACCEPTANCE_PRICES)
+    body = _expense_body()
+    del body["spent_on"]
+
+    response = client.post(f"/api/projects/{project['id']}/expenses", json=body)
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert response.json()["detail"] == api.SPENT_ON_INVALID
 
 
 def test_two_posts_accumulate_total(client: TestClient) -> None:
@@ -377,6 +449,50 @@ def test_two_posts_accumulate_total(client: TestClient) -> None:
     journal = client.get(f"/api/projects/{project['id']}/expenses").json()
     assert journal["total"] == "0.82"
     assert [item["amount"] for item in journal["items"]] == ["0.41", "0.41"]
+
+
+def test_total_is_incremented_in_sql(
+    client: TestClient,
+    session_factory: sessionmaker[Session],
+) -> None:
+    """Итог прибавляется SQL-инкрементом, а не присваиванием числа, посчитанного в Python.
+
+    Требование п.7 постановки («два одновременных `POST` не теряют сумму») держится
+    ровно на этом выражении: чтение-изменение-запись в Python на последовательных
+    запросах даёт тот же результат и проходит любой тест суммы, а потерю показывает
+    только гонка. Поэтому проверяется сам ушедший `UPDATE`: в нём стоит
+    `total_cost=(projects.total_cost + ?)`, то есть прибавление, а не готовое число.
+    """
+    project = _create_project(client, **ACCEPTANCE_PRICES)
+    engine = session_factory.kw["bind"]
+    assert isinstance(engine, Engine)
+    statements: list[str] = []
+
+    def capture(
+        connection: Connection,
+        cursor: object,
+        statement: str,
+        parameters: object,
+        context: object,
+        executemany: bool,
+    ) -> None:
+        """Запомнить каждый ушедший в базу запрос: текст разбирается после `POST`."""
+        statements.append(statement)
+
+    event.listen(engine, "before_cursor_execute", capture)
+    try:
+        body = _post(client, project["id"], tokens_input=1_500_000)
+    finally:
+        event.remove(engine, "before_cursor_execute", capture)
+
+    updates = [
+        " ".join(statement.split()).lower()
+        for statement in statements
+        if statement.lstrip().upper().startswith("UPDATE") and "total_cost" in statement
+    ]
+    assert len(updates) == 1, updates
+    assert "total_cost=(projects.total_cost + ?)" in updates[0], updates[0]
+    assert body["amount"] == "0.41"
 
 
 def test_validate_spent_on_accepts_calendar_date() -> None:
@@ -397,3 +513,29 @@ def test_validate_tokens_rejects_out_of_range(value: int) -> None:
 def test_validate_tokens_accepts_range(value: int) -> None:
     """Границы диапазона включены: ноль и `10^12` — допустимые количества."""
     assert api.validate_tokens(value) == value
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"), [(1_500_000.0, 1_500_000), (" 1500000 ", 1_500_000), (1.0, 1)]
+)
+def test_validate_tokens_accepts_whole_number_of_any_type(value: object, expected: int) -> None:
+    """Целое в свободном типе разбирается: `float` без дробной части и строка из цифр."""
+    assert api.validate_tokens(value) == expected
+
+
+@pytest.mark.parametrize("value", [12.5, 1.5, "1 500", "abc", "", None, True, [1], {"a": 1}])
+def test_validate_tokens_rejects_non_whole(value: object) -> None:
+    """Всё, из чего не выходит целое неотрицательное число, — тот же текст контракта."""
+    with pytest.raises(HTTPException) as excinfo:
+        api.validate_tokens(value)
+    assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert excinfo.value.detail == api.TOKENS_INVALID
+
+
+@pytest.mark.parametrize("value", [None, 20261105, 5.5, ["2026-11-05"]])
+def test_validate_spent_on_rejects_non_string(value: object) -> None:
+    """Дата — только строка `ГГГГ-ММ-ДД`: число, `null` и список получают текст про дату."""
+    with pytest.raises(HTTPException) as excinfo:
+        api.validate_spent_on(value)
+    assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert excinfo.value.detail == api.SPENT_ON_INVALID

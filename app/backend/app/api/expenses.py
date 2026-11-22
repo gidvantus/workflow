@@ -31,6 +31,7 @@ from app.api.projects import PROJECT_NOT_FOUND, _get_alive_project
 from app.db import get_db
 from app.models.expense import ProjectExpense
 from app.models.project import Project
+from app.money import format_money
 from app.schemas.expense import ExpenseCreate, ExpenseListResponse, ExpenseResponse
 
 router = APIRouter(prefix="/api/projects/{project_id}/expenses", tags=["expenses"])
@@ -41,6 +42,10 @@ DbSession = Annotated[Session, Depends(get_db)]
 # Дата приходит строкой `ГГГГ-ММ-ДД`: формат проверяется шаблоном, календарная
 # существующая дата — разбором (`2026-02-30` шаблон пропускает, разбор — нет).
 DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+# Количество — целое без знака. Схема запроса пропускает свободные типы, поэтому
+# строку вида `"1500000"` разбирает ручка, а `"1 500"` и `"abc"` — тот же отказ.
+TOKENS_PATTERN = re.compile(r"^\d+$")
 
 # Потолок одного количества: `BIGINT` больше, но 10^12 токенов за день — уже заведомо
 # ошибка ввода, а не расход.
@@ -71,12 +76,14 @@ def _reject(detail: str) -> HTTPException:
     return HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail)
 
 
-def validate_spent_on(value: str) -> date:
+def validate_spent_on(value: object) -> date:
     """Дата расхода: вернуть `date` или отказать `422` текстом про формат.
 
-    Принимается строго `ГГГГ-ММ-ДД`: `05.11.2026` и `2026-11-5` — тот же отказ, что и
-    несуществующее `2026-02-30`.
+    Принимается строго строка `ГГГГ-ММ-ДД`: `05.11.2026`, `2026-11-5` и не строка
+    (`20261105`, `null`) — тот же отказ, что и несуществующее `2026-02-30`.
     """
+    if not isinstance(value, str):
+        raise _reject(SPENT_ON_INVALID)
     text = value.strip()
     if not DATE_PATTERN.match(text):
         raise _reject(SPENT_ON_INVALID)
@@ -86,16 +93,31 @@ def validate_spent_on(value: str) -> date:
         raise _reject(SPENT_ON_INVALID) from error
 
 
-def validate_tokens(value: int) -> int:
-    """Количество токенов: `0 ≤ n ≤ 10^12`, иначе отказ `422` текстом про формат."""
-    if value < 0 or value > TOKENS_MAX:
+def validate_tokens(value: object) -> int:
+    """Количество токенов: `0 ≤ n ≤ 10^12`, иначе отказ `422` текстом про формат.
+
+    Схема запроса пропускает свободные типы, поэтому разбор здесь: целое число,
+    дробное только с нулевой дробной частью (иначе это не количество) и строка из цифр.
+    Всё остальное — `12.5`, `"1 500"`, `"abc"`, `null`, `true` — отказ контракта.
+    """
+    if isinstance(value, bool) or value is None:
         raise _reject(TOKENS_INVALID)
-    return value
-
-
-def format_money(value: Decimal) -> str:
-    """`Decimal("0.4")` из базы → `"0.40"`: деньги наружу уходят строкой с копейками."""
-    return f"{Decimal(str(value)):.2f}"
+    if isinstance(value, float):
+        if not value.is_integer():
+            raise _reject(TOKENS_INVALID)
+        number = int(value)
+    elif isinstance(value, int):
+        number = value
+    elif isinstance(value, str):
+        text = value.strip()
+        if not TOKENS_PATTERN.match(text):
+            raise _reject(TOKENS_INVALID)
+        number = int(text)
+    else:
+        raise _reject(TOKENS_INVALID)
+    if number < 0 or number > TOKENS_MAX:
+        raise _reject(TOKENS_INVALID)
+    return number
 
 
 def calculate_amount(project: Project, tokens: dict[str, int]) -> Decimal:

@@ -2,6 +2,10 @@
 
 Ограничения и форматы проверяются **не** здесь, а валидаторами из `app.api.expenses`:
 так текст отказа ровно тот, что записан в контракте, и одинаков для всех случаев.
+Поэтому тело запроса описано свободными типами, а не `int`/`str`: `422` схемы отдаётся
+до ручки, и с жёстким типом нечисловое количество получило бы массив pydantic вместо
+текста контракта, а мягко удалённый проект — `422` вместо `404`. Ручка разбирает
+значение сама и отвечает по контракту.
 
 Деньги в ответе — строки: `amount` ровно с двумя знаками (`"0.41"`), `total` — тоже
 ровно с двумя (`"0.51"`). Клиент не считает копейки сам и не округляет: сумму считает
@@ -9,9 +13,10 @@
 """
 
 from datetime import date, datetime
-from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, field_validator
+
+from app.money import format_money
 
 
 class ExpenseResponse(BaseModel):
@@ -34,7 +39,7 @@ class ExpenseResponse(BaseModel):
     @classmethod
     def _format_amount(cls, value: object) -> str:
         """`Decimal("0.4")` из базы → `"0.40"`; сумма у записи есть всегда."""
-        return f"{Decimal(str(value)):.2f}"
+        return format_money(value)
 
 
 class ExpenseCreate(BaseModel):
@@ -42,14 +47,34 @@ class ExpenseCreate(BaseModel):
 
     Суммы в теле нет: её считает сервер по ценам проекта. `spent_on` приходит строкой
     `ГГГГ-ММ-ДД` (поле `<input type="date">` на фронте), количества — целыми числами.
-    Проверку формата, диапазона и «хотя бы одно количество» делает ручка.
+
+    Типы намеренно свободные (`int | float | str | None`), а не `int` и `str`: проверку
+    делает ручка, после того как убедилась, что проект жив. Жёсткий тип отдал бы
+    `12.5` и `"1 500"` стандартным `422` схемы с массивом в `detail`, а в мягко удалённый
+    проект — `422` вместо `404`. Поэтому же у полей есть умолчание `None`: пропущенное
+    поле доходит до ручки и получает её текст, а не отказ pydantic.
     """
 
-    spent_on: str
-    tokens_input: int
-    tokens_output: int
-    tokens_cache_read: int
-    tokens_cache_write: int
+    model_config = ConfigDict(
+        # Схема для фронта: поля обязательны по контракту, и OpenAPI говорит это же.
+        # Pydantic при этом пропущенное поле пропускает — чтобы оно получило текст
+        # ручки, а не массив ошибок валидации до проверки живого проекта.
+        json_schema_extra={
+            "required": [
+                "spent_on",
+                "tokens_input",
+                "tokens_output",
+                "tokens_cache_read",
+                "tokens_cache_write",
+            ]
+        },
+    )
+
+    spent_on: str | int | float | None = None
+    tokens_input: int | float | str | None = None
+    tokens_output: int | float | str | None = None
+    tokens_cache_read: int | float | str | None = None
+    tokens_cache_write: int | float | str | None = None
 
 
 class ExpenseListResponse(BaseModel):
