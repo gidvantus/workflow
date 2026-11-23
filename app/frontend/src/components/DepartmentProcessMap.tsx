@@ -23,6 +23,7 @@ import { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import { ApiError, UNREACHABLE_TEXT } from '../api/http';
 import { getProcess } from '../api/process';
 import {
+  EDGE_TITLES,
   PROCESS_MAP_GEOMETRY,
   buildProcessGraph,
   layoutProcessGraph,
@@ -166,13 +167,7 @@ function MapCanvas({
   const edgeTitle = (edge: PlacedEdge['edge']): string => {
     const label = labelNames.get(edge.key) ?? edge.key;
     const step = stepNames.get(edge.kind === 'trigger' ? edge.to : edge.from) ?? edge.from;
-    if (edge.kind === 'trigger') {
-      return `Метка «${label}» включает ступень «${step}»`;
-    }
-    if (edge.kind === 'put') {
-      return `Ступень «${step}» ставит метку «${label}»`;
-    }
-    return `Ступень «${step}» снимает метку «${label}»`;
+    return EDGE_TITLES[edge.kind].arrow(label, step);
   };
 
   return (
@@ -275,21 +270,21 @@ function MapLegend(): JSX.Element {
             <path d="M0 4h9" className="proc-map__legend-line" />
             <path d="M9 1 15 4 9 7Z" className="proc-map__legend-arrow-filled" />
           </svg>
-          метка включает ступень (when)
+          {EDGE_TITLES.trigger.legend} (when)
         </span>
         <span className="proc-map__legend-item">
           <svg width="16" height="8" viewBox="0 0 16 8" aria-hidden="true">
             <path d="M0 4h9" className="proc-map__legend-line" />
             <path d="M9 1 15 4 9 7Z" className="proc-map__legend-arrow-open" />
           </svg>
-          ступень ставит метку (put)
+          {EDGE_TITLES.put.legend} (put)
         </span>
         <span className="proc-map__legend-item">
           <svg width="16" height="8" viewBox="0 0 16 8" aria-hidden="true">
             <path d="M0 4h9" className="proc-map__legend-line proc-map__legend-line--drop" />
             <path d="M9 1 15 4 9 7Z" className="proc-map__legend-arrow-open" />
           </svg>
-          ступень снимает метку (drop)
+          {EDGE_TITLES.drop.legend} (drop)
         </span>
       </p>
     </div>

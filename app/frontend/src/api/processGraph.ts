@@ -45,11 +45,30 @@ export const RESOLVER_TITLES: Record<string, string> = {
 /** Вид ребра карты: что именно связывает метку и ступень. */
 export type ProcessGraphEdgeKind = 'trigger' | 'put' | 'drop';
 
-/** Подписи видов рёбер: ими карта объясняет стрелки, не полагаясь на цвет. */
-export const EDGE_TITLES: Record<ProcessGraphEdgeKind, string> = {
-  trigger: 'метка включает ступень',
-  put: 'ступень ставит метку',
-  drop: 'ступень снимает метку',
+/**
+ * Подписи видов рёбер: ими карта объясняет стрелки, не полагаясь на цвет. Оба текста одного
+ * вида живут здесь, а не в разметке: легенда и `<title>` стрелки не расходятся молча.
+ */
+export type ProcessGraphEdgeTitle = {
+  /** Строка легенды: чем этот вид ребра отличается от двух других. */
+  legend: string;
+  /** Полная фраза для `<title>`: кто, кого и что делает. */
+  arrow: (label: string, step: string) => string;
+};
+
+export const EDGE_TITLES: Record<ProcessGraphEdgeKind, ProcessGraphEdgeTitle> = {
+  trigger: {
+    legend: 'метка включает ступень',
+    arrow: (label, step) => `Метка «${label}» включает ступень «${step}»`,
+  },
+  put: {
+    legend: 'ступень ставит метку',
+    arrow: (label, step) => `Ступень «${step}» ставит метку «${label}»`,
+  },
+  drop: {
+    legend: 'ступень снимает метку',
+    arrow: (label, step) => `Ступень «${step}» снимает метку «${label}»`,
+  },
 };
 
 /** Почему метка не попала в схему. */
@@ -246,6 +265,12 @@ const PORTS = {
 /** Шаг между стрелками, приходящими в один блок: гребёнка вместо одной точки. */
 const ARROW_SPREAD = 5;
 
+/**
+ * Просвет между блоками меток по вертикали. Метки не привязаны к ступеням шагом: ступеней
+ * может быть одна, а меток у неё три, и тогда шаг полотна задают именно метки.
+ */
+const LABEL_GAP = 12;
+
 /** Узел-метка на полотне: сам узел и его верхняя граница. */
 export type PlacedState = { state: ProcessGraphState; top: number };
 
@@ -282,6 +307,10 @@ function curvePath(from: { x: number; y: number }, to: { x: number; y: number })
  * Раскладка графа: метки — вдоль полотна слева, ступени — столбцом справа, в порядке
  * проверки диспетчером. Своих порядков раскладка не вводит: ступени идут в порядке
  * документа, метки — в порядке ключей.
+ *
+ * Высоту задаёт более высокая колонка, а не одни ступени: у документа с одной ступенью и
+ * тремя метками шаг задают метки, иначе они встают в одну точку друг на друга. Пока
+ * ступени выше, метки идут против них — первая против первой, последняя против последней.
  */
 export function layoutProcessGraph(graph: ProcessGraph): ProcessGraphLayout {
   const { padY, labelX, labelW, labelH, stepX, stepH, stepPitch, width } = PROCESS_MAP_GEOMETRY;
@@ -289,17 +318,29 @@ export function layoutProcessGraph(graph: ProcessGraph): ProcessGraphLayout {
   const stepsCount = graph.steps.length;
   const labelsCount = graph.states.length;
   const stepSpan = stepsCount === 0 ? 0 : (stepsCount - 1) * stepPitch + stepH;
-  const height = Math.max(padY * 2 + stepSpan, padY * 2 + labelH);
+  // Высота, которая нужна меткам, чтобы стоять вплотную друг к другу и не наезжать.
+  const labelSpan = labelsCount === 0 ? 0 : labelsCount * (labelH + LABEL_GAP) - LABEL_GAP;
+  const span = Math.max(stepSpan, labelSpan, labelH);
+  const height = padY * 2 + span;
 
   const stepTops = new Map<string, number>();
+  // Столбец ступеней стоит по центру полотна: когда высоту задали метки, ступень не липнет
+  // к верхнему краю, а метки читаются против неё.
+  const stepOffset = padY + (span - stepSpan) / 2;
   graph.steps.forEach((node, index) => {
-    stepTops.set(node.nodeId, padY + index * stepPitch);
+    stepTops.set(node.nodeId, stepOffset + index * stepPitch);
   });
 
-  // Первая и последняя метки стоят против первой и последней ступени: карта читается как
-  // «какая метка включает какую ступень», а не как ход тикета.
-  const first = padY + (stepH - labelH) / 2;
-  const last = stepsCount === 0 ? first : padY + stepSpan - stepH + (stepH - labelH) / 2;
+  // Метки выше ступеней — они и задают полотно: первая метка у верхнего края, последняя у
+  // нижнего. Иначе первая метка стоит против первой ступени, последняя — против последней:
+  // карта читается как «какая метка включает какую ступень», а не как ход тикета.
+  const labelsOwnHeight = labelSpan > stepSpan;
+  const first = labelsOwnHeight ? padY : padY + (stepH - labelH) / 2;
+  const last = labelsOwnHeight
+    ? padY + labelSpan - labelH
+    : stepsCount === 0
+      ? first
+      : padY + stepSpan - stepH + (stepH - labelH) / 2;
   const states: PlacedState[] = graph.states.map((state, index) => ({
     state,
     top:
