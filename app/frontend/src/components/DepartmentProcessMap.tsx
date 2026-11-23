@@ -739,8 +739,8 @@ export default function DepartmentProcessMap({
   const [viewport, setViewport] = useState(0);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const overlayRef = useRef<HTMLDivElement | null>(null);
-  /** Ступень, на блок которой вернуть фокус после сохранения из панели. */
-  const focusAfterSave = useRef<string | null>(null);
+  /** Ступень, на блок которой вернуть фокус после сохранения или закрытия панели. */
+  const focusAfterPanel = useRef<string | null>(null);
 
   const baseId = useId();
   const arrowId = `pm-arrow-${baseId.replace(/[^a-zA-Z0-9_-]/g, '')}`;
@@ -860,19 +860,25 @@ export default function DepartmentProcessMap({
       setDiscard('panel');
       return;
     }
+    if (editing !== null) {
+      focusAfterPanel.current = editing.id;
+    }
     setEditing(null);
     setDiscard(null);
-  }, [dirty]);
+  }, [dirty, editing]);
 
   const confirmDiscard = useCallback(() => {
     const target = discard;
     setDiscard(null);
+    if (editing !== null) {
+      focusAfterPanel.current = editing.id;
+    }
     setEditing(null);
     setPanelError(null);
     if (target === 'map') {
       finishClose();
     }
-  }, [discard, finishClose]);
+  }, [discard, editing, finishClose]);
 
   useEffect(() => {
     if (!open) {
@@ -914,17 +920,18 @@ export default function DepartmentProcessMap({
     };
   }, [open]);
 
-  // Фокус после «Сохранить». Блока правленой ступени может уже не быть на полотне: выключенную
-  // ступень `buildProcessGraph` убирает, а `StepBlock` ключуется по `step.id`, поэтому `focus()`
-  // по такому узлу вернул бы фокус в `body` — вне `aria-modal`-окна, и Tab ушёл бы в карточки под
-  // полотном. Запасная цель — само окно: у него есть `ref` и `tabIndex={-1}`. Эффект, а не прямой
-  // вызов в обработчике: к этому моменту DOM уже перерисован.
+  // Фокус после закрытия панели — по «Сохранить», по «×», по «Отмена» и по Esc. Блока правленой
+  // ступени может уже не быть на полотне: выключенную ступень `buildProcessGraph` убирает, а
+  // `StepBlock` ключуется по `step.id`, поэтому `focus()` по такому узлу вернул бы фокус в `body` —
+  // вне `aria-modal`-окна, и Tab ушёл бы в карточки под полотном. Запасная цель — само окно: у него
+  // есть `ref` и `tabIndex={-1}`. Эффект, а не прямой вызов в обработчике: к этому моменту DOM уже
+  // перерисован, а кнопка «×» вместе с панелью исчезла.
   useEffect(() => {
-    const stepId = focusAfterSave.current;
+    const stepId = focusAfterPanel.current;
     if (stepId === null || editing !== null) {
       return;
     }
-    focusAfterSave.current = null;
+    focusAfterPanel.current = null;
     const block = overlayRef.current?.querySelector<HTMLElement>(
       `[data-testid="process-map-step-open"][data-step-id="${stepId}"]`,
     );
@@ -959,7 +966,7 @@ export default function DepartmentProcessMap({
       // Фокус переносим эффектом по новому DOM, а не здесь: панель закрывается, и кнопка
       // «Сохранить» исчезает — `focus()` в этом же тике упал бы в `body`, то есть вне
       // `aria-modal`-окна, и Tab из окна ушёл бы в карточки под полотном.
-      focusAfterSave.current = savedStepId;
+      focusAfterPanel.current = savedStepId;
       setEditing(null);
       setDiscard(null);
       onProcessSaved?.();
@@ -1052,9 +1059,7 @@ export default function DepartmentProcessMap({
               >
                 Открыть картой
               </button>
-              <span className="muted">
-                {`${graph.wires.length} ${plural(graph.wires.length, 'провод', 'провода', 'проводов')} между ступенями`}
-              </span>
+              <span className="muted">на весь экран, со связями и стражами</span>
             </div>
           </div>
           <UnusedLine graph={graph} />
@@ -1086,7 +1091,7 @@ export default function DepartmentProcessMap({
               </p>
               <p className="proc-map__bar-sub">
                 {editing === null
-                  ? `Ступени в порядке проверки. ${WIRE_RULE}`
+                  ? 'Какая метка включает ступень и что ступень ставит или снимает. Порядок ступеней — порядок проверки диспетчером: по нему карта и разложена.'
                   : 'Ступень выбрана: справа её поля, слева — место ступени в карте.'}
               </p>
             </div>
