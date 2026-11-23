@@ -36,6 +36,16 @@ export const KIND_TITLES: Record<ProcessStepKind, string> = {
   auto: 'авто',
 };
 
+/**
+ * Вид ступени с пояснением: чем вид отличается для человека. Текст один на легенду карточки
+ * (`mockups/75`, кадр 1) — второй копии этих пояснений в разметке нет.
+ */
+export const KIND_HINTS: Record<ProcessStepKind, string> = {
+  session: '— запускает агента в роли',
+  route: '— решает роль по работе',
+  auto: '— переносит метки, без агента',
+};
+
 /** Резолверы роли: их выбирает диспетчер, а не документ, но подпись нужна человеку. */
 export const RESOLVER_TITLES: Record<string, string> = {
   'by-area': 'по половине работы',

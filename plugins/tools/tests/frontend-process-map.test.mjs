@@ -65,6 +65,7 @@ const code = bundled.outputFiles[0].text
 const graphApi = await import('data:text/javascript;base64,' + Buffer.from(code).toString('base64'))
 
 const {
+  KIND_HINTS,
   KIND_TITLES,
   PROCESS_MAP_GEOMETRY,
   RESOLVER_TITLES,
@@ -695,6 +696,13 @@ assert('пустой документ: ширина положительная',
 
 check('подписи видов: три вида', Object.keys(KIND_TITLES).sort(), ['auto', 'route', 'session'])
 check('подписи видов: разные строки', new Set(Object.values(KIND_TITLES)).size, 3)
+check('пояснения видов: три вида', Object.keys(KIND_HINTS).sort(), ['auto', 'route', 'session'])
+check('пояснения видов: разные строки', new Set(Object.values(KIND_HINTS)).size, 3)
+assert(
+  'пояснения видов: у каждого вида пояснение словами',
+  Object.values(KIND_HINTS).every((hint) => typeof hint === 'string' && hint.length > 10),
+  JSON.stringify(KIND_HINTS),
+)
 check('подписи резолверов: два правила', Object.keys(RESOLVER_TITLES).sort(), ['by-area', 'by-findings'])
 check('подписи причин: две разные строки', new Set(Object.values(UNUSED_REASON_TITLES)).size, 2)
 assert('правило провода описано словами', typeof WIRE_RULE === 'string' && WIRE_RULE.length > 20, WIRE_RULE)

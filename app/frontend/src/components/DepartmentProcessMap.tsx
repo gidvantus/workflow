@@ -45,6 +45,7 @@ import {
   type ProcessStepKind,
 } from '../api/process';
 import {
+  KIND_HINTS,
   KIND_TITLES,
   RESOLVER_TITLES,
   UNUSED_REASON_TITLES,
@@ -953,7 +954,10 @@ export default function DepartmentProcessMap({
           <h2 className="card__title" id={cardTitleId}>
             Карта процесса
           </h2>
-          <p className="card__meta">Ступени документа и метки, которыми они связаны.</p>
+          <p className="card__meta">
+            Полотно ступеней: что каждая ступень берёт на входе, что ставит на выходе и кто на ней
+            работает. Порядок ступеней — порядок проверки диспетчером, а не ход тикета.
+          </p>
         </div>
         <div className="card__tools proc-map__tools">
           {ready !== null && (
@@ -1001,7 +1005,8 @@ export default function DepartmentProcessMap({
                   <span className={`proc-map__tile proc-map__tile--${kind}`} aria-hidden="true">
                     <KindIcon kind={kind} />
                   </span>
-                  {KIND_TITLES[kind]}
+                  <b>{KIND_TITLES[kind]}</b>{' '}
+                  <span>{KIND_HINTS[kind]}</span>
                 </span>
               ))}
             </p>

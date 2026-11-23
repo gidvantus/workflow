@@ -2688,10 +2688,17 @@ body {
   color: var(--muted);
 }
 
+/* Вид — словом, пояснение вида — тем же цветом, что и слово: в макете (`mockups/75`,
+   кадр 1) легенда видов набрана `--ink` целиком, второй цвет для пояснения не вводится. */
 .proc-map__kind {
   display: inline-flex;
   align-items: center;
   gap: 0.375rem;
+  color: var(--ink);
+}
+
+.proc-map__kind b {
+  font-weight: 600;
 }
 
 .proc-map__cta {
@@ -2966,12 +2973,14 @@ body {
   font-size: 0.5625rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--muted-2);
+  /* `--muted`, а не `--muted-2`: на белом при 9 px `--muted-2` даёт 2,82:1, и axe
+     `color-contrast` роняет подписи «Вход / Выход / Снимает» (тот же случай, что `.prices__unit`). */
+  color: var(--muted);
 }
 
 .proc-map__row-empty {
   font-size: 0.6563rem;
-  color: var(--muted-2);
+  color: var(--muted);
 }
 
 .proc-map__label {
