@@ -745,9 +745,18 @@ export default function DepartmentProcessMap({
   const cardTitleId = `${baseId}-title`;
   const overlayTitleId = `${baseId}-overlay`;
 
+  // Скелет показываем только когда сменился отдел: это чужой документ. Перечитывание того же
+  // документа после сохранения (`refreshKey`) скелетом не оборачиваем — `ready` стал бы `null`,
+  // окно карты размонтировалось бы вместе с прокруткой полотна и фокусом, и человек после
+  // «Сохранить» оказывался бы в начале полотна и вне `aria-modal`-окна.
+  const loadedDepartment = useRef(departmentId);
+
   useEffect(() => {
     let cancelled = false;
-    setState({ status: 'loading' });
+    if (loadedDepartment.current !== departmentId) {
+      loadedDepartment.current = departmentId;
+      setState({ status: 'loading' });
+    }
     void (async () => {
       try {
         const body = await getProcess(departmentId);
@@ -917,6 +926,7 @@ export default function DepartmentProcessMap({
       setPanelError(refusal);
       return;
     }
+    const savedStepId = editing.draft.id;
     const next = withDraft(state.document, editing.draft.id, editing.draft);
     setSaving(true);
     setPanelError(null);
@@ -929,6 +939,14 @@ export default function DepartmentProcessMap({
       );
       setEditing(null);
       setDiscard(null);
+      // Панель закрылась вместе с кнопкой «Сохранить», и фокус остался бы в `body`, то есть вне
+      // `aria-modal`-окна: Tab из окна ушёл бы в карточки под полотном. Возвращаем фокус на блок
+      // той ступени, которую правили, — человек продолжает с того места, где работал.
+      overlayRef.current
+        ?.querySelector<HTMLElement>(
+          `[data-testid="process-map-step-open"][data-step-id="${savedStepId}"]`,
+        )
+        ?.focus();
       onProcessSaved?.();
     } catch (error) {
       setPanelError(error instanceof ApiError ? error.message : UNREACHABLE_TEXT);

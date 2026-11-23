@@ -3203,12 +3203,14 @@ body {
   border-bottom: 1px solid var(--line);
 }
 
+/* `--muted`, а не `--muted-2`: подпись панели стоит на белом при 10 и 11 px, а `--muted-2`
+   даёт там 2,82:1 — та же находка axe `color-contrast`, что и у строк полотна (`:2976`). */
 .proc-map__panel-eyebrow {
   margin: 0;
   font-size: 0.625rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--muted-2);
+  color: var(--muted);
 }
 
 .proc-map__panel-title {
@@ -3293,7 +3295,7 @@ body {
 .proc-map__field-hint {
   margin: 0;
   font-size: 0.6875rem;
-  color: var(--muted-2);
+  color: var(--muted);
 }
 
 /* Строка «на карте» считается по черновику: человек видит, что даст сохранение, ещё до него. */
