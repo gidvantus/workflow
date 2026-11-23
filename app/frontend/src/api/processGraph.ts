@@ -73,8 +73,6 @@ export type ProcessGraphLabel = {
 /** Узел-ступень: ступень документа и её подписи, уже готовые к показу. */
 export type ProcessGraphStepNode = {
   step: ProcessStep;
-  /** Идентификатор узла на полотне: `step:<id>`. */
-  nodeId: string;
   kindTitle: string;
   /** Роль строкой: «роль design», «роль: по замечаниям», «роли нет». */
   roleTitle: string;
@@ -134,11 +132,6 @@ export type ProcessGraph = {
   unused: ProcessGraphUnused[];
   links: ProcessGraphLinks;
 };
-
-/** Идентификатор узла-ступени. */
-export function stepNodeId(stepId: string): string {
-  return `step:${stepId}`;
-}
 
 /**
  * Роль ступени словами: у маршрута и авто роли нет, и это сказано, а не оставлено пустым.
@@ -244,7 +237,6 @@ export function buildProcessGraph(
 
   const nodes: ProcessGraphStepNode[] = enabled.map((step) => ({
     step,
-    nodeId: stepNodeId(step.id),
     kindTitle: KIND_TITLES[step.kind],
     roleTitle: roleTitle(step),
     guardTitle: step.guard === null ? null : (guardTitles.get(step.guard) ?? step.guard),
@@ -436,9 +428,13 @@ export function layoutProcessGraph(graph: ProcessGraph): ProcessGraphLayout {
       continue;
     }
 
-    // Колонка цели не правее источника (ступень возвращает работу назад в документе).
-    // Такой провод обходит блоки по левому полю полотна: контрольные точки прижаты к краю,
-    // чтобы линия не ушла за полотно и не разрезала соседние ступени.
+    // Колонка цели не правее источника: ступень возвращает работу назад (метку ставит
+    // ступень ниже по `priority`, а берёт её ступень выше). Провод выходит из левого края
+    // источника и входит в левый порт цели, контрольные точки прижаты к краю полотна, чтобы
+    // линия не ушла за него. Блоки промежуточных колонок такой провод не обходит: слой
+    // проводов лежит под блоками, и на длинном возврате середина линии скрыта блоками —
+    // случай редкий (в умолчаниях возвратов нет), но он намеренно остаётся видимым в
+    // данных и в подписи, а не молча пропадает с полотна.
     const start = { x: from.x, y: from.y + G.outRow };
     const bend = Math.max(2, Math.min(MIN_BEND, Math.min(start.x, end.x) - 1));
     const d =

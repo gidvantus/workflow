@@ -31,6 +31,7 @@ import {
   useState,
   type CSSProperties,
 } from 'react';
+import { createPortal } from 'react-dom';
 
 import { ApiError, UNREACHABLE_TEXT } from '../api/http';
 import {
@@ -50,6 +51,7 @@ import {
   WIRE_RULE,
   buildProcessGraph,
   layoutProcessGraph,
+  wireTitle,
   type PlacedStep,
   type ProcessGraph,
   type ProcessGraphLabel,
@@ -735,6 +737,7 @@ export default function DepartmentProcessMap({
   const [fit, setFit] = useState(false);
   const [viewport, setViewport] = useState(0);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const overlayRef = useRef<HTMLDivElement | null>(null);
 
   const baseId = useId();
   const arrowId = `pm-arrow-${baseId.replace(/[^a-zA-Z0-9_-]/g, '')}`;
@@ -881,6 +884,24 @@ export default function DepartmentProcessMap({
     return () => window.removeEventListener('keydown', onKey);
   }, [open, discard, editing, closePanel, finishClose]);
 
+  // Фокус уходит в окно и возвращается на «Открыть картой». Окно живёт порталом в
+  // `document.body`, но `aria-modal="true"` обещает, что страница под ним инертна: без
+  // переноса фокуса Tab из шапки окна уходил бы в карточку под полотном.
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const previous =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const screen = overlayRef.current;
+    (screen?.querySelector<HTMLElement>('button') ?? screen)?.focus();
+    return () => {
+      if (previous !== null) {
+        previous.focus();
+      }
+    };
+  }, [open]);
+
   const updateDraft = (patch: Partial<ProcessStep>) => {
     setEditing((current) => (current === null ? current : { ...current, draft: { ...current.draft, ...patch } }));
     setPanelError(null);
@@ -995,8 +1016,18 @@ export default function DepartmentProcessMap({
         </>
       )}
 
-      {open && ready !== null && graph !== null && layout !== null && (
+      {/* Окно рисовано порталом в `document.body`. Внутри карточки его держать нельзя:
+          `.proc-map` — `container-type: inline-size`, а контейнер по спецификации становится
+          containing block'ом для `position: fixed` потомков, и `.card` режет их своим
+          `overflow: hidden`. Портал снимает обоих: окно занимает окно браузера целиком. */}
+      {open &&
+        ready !== null &&
+        graph !== null &&
+        layout !== null &&
+        createPortal(
         <div
+          ref={overlayRef}
+          tabIndex={-1}
           className="proc-map__screen"
           role="dialog"
           aria-modal="true"
@@ -1015,7 +1046,9 @@ export default function DepartmentProcessMap({
               </p>
             </div>
             <div className="proc-map__bar-tools">
-              <p className="proc-map__source" data-testid="process-map-source">
+              {/* У источника два места — карточка и шапка окна, и это два элемента, а не
+                  один: у каждого свой testid, иначе `getByTestId` падает на strict mode. */}
+              <p className="proc-map__source" data-testid="process-map-overlay-source">
                 {sourceText(ready.fromDefaults)}
               </p>
               <button
@@ -1066,7 +1099,9 @@ export default function DepartmentProcessMap({
                           data-from={placed.wire.from}
                           data-to={placed.wire.to}
                         >
-                          <title>{`«${placed.wire.fromTitle}» ставит метку «${placed.wire.labelName}», её берёт «${placed.wire.toTitle}»`}</title>
+                          {/* Фраза провода — из модуля, а не своя копия: подпись в `<title>`
+                              обязана меняться вместе с `wireTitle`. */}
+                          <title>{wireTitle(placed.wire)}</title>
                           <path className="proc-map__wire" d={placed.d} markerEnd={`url(#${arrowId})`} />
                           <circle className="proc-map__wire-dot" cx={placed.to.x} cy={placed.to.y} r={2.2} />
                         </g>
@@ -1128,8 +1163,9 @@ export default function DepartmentProcessMap({
               </div>
             </div>
           )}
-        </div>
-      )}
+        </div>,
+          document.body,
+        )}
     </section>
   );
 }

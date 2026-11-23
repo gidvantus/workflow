@@ -73,7 +73,6 @@ const {
   buildProcessGraph,
   layoutProcessGraph,
   roleTitle,
-  stepNodeId,
   wireTitle,
 } = graphApi
 
@@ -615,6 +614,77 @@ const twoSteps = buildProcessGraph(onlyEnabled('handoff-frontend', 'dev-fullstac
 check('две ступени: проводов', twoSteps.wires.length, 1)
 checkLayout('две ступени', twoSteps)
 
+// Провод «назад»: метку ставит ступень ниже по `priority`, а берёт её ступень выше, поэтому
+// колонка цели левее колонки источника и обычная ветка раскладки не срабатывает. В умолчаниях
+// таких пар нет, но документ их допускает (правка порядка на вкладке «Процесс»), и провод
+// обязан остаться внутри полотна, а не уехать за край. Замечание ревью Ф3: ветка без проверки.
+const backwardBase = {
+  kind: 'session',
+  role: null,
+  when: [],
+  unless: [],
+  put: [],
+  drop: [],
+  guard: null,
+  enabled: true,
+}
+const backwardDocument = {
+  version: 1,
+  labels: defaults.labels,
+  steps: [
+    { ...backwardBase, id: 'early', title: 'Ранняя', when: ['progress'], priority: 10 },
+    { ...backwardBase, id: 'fill-a', title: 'Наполнение А', priority: 20 },
+    { ...backwardBase, id: 'fill-b', title: 'Наполнение Б', priority: 30 },
+    { ...backwardBase, id: 'fill-c', title: 'Наполнение В', priority: 40 },
+    { ...backwardBase, id: 'fill-d', title: 'Наполнение Г', priority: 50 },
+    { ...backwardBase, id: 'late', title: 'Поздняя', put: ['progress'], priority: 60 },
+  ],
+}
+const backwardGraph = buildProcessGraph(backwardDocument, defaultGuards)
+check('провод назад: проводов', backwardGraph.wires.length, 1)
+check(
+  'провод назад: пара «ставит ∩ когда»',
+  backwardGraph.wires.map((wire) => [wire.from, wire.to, wire.key]),
+  [['late', 'early', 'progress']],
+)
+check(
+  'провод назад: ступени считают его на карте',
+  [
+    backwardGraph.steps.find((node) => node.step.id === 'late').wiresOut,
+    backwardGraph.steps.find((node) => node.step.id === 'early').wiresIn,
+  ],
+  [1, 1],
+)
+// checkLayout проверяет размеры, неслипание, попадание всех точек пути в полотно и концы на
+// блоках; для провода назад он ждёт выход из левого края источника, а не из правого.
+const backwardLayout = checkLayout('провод назад', backwardGraph)
+const backwardWire = backwardLayout.wires[0]
+const earlyPlaced = backwardLayout.steps.find((placed) => placed.node.step.id === 'early')
+const latePlaced = backwardLayout.steps.find((placed) => placed.node.step.id === 'late')
+check('провод назад: колонки', [latePlaced.column, earlyPlaced.column], [1, 0])
+check(
+  'провод назад: из левого края источника в левый порт цели',
+  [
+    backwardWire.from.x,
+    backwardWire.from.y,
+    backwardWire.to.x,
+    backwardWire.to.y,
+  ],
+  [
+    latePlaced.x,
+    latePlaced.y + PROCESS_MAP_GEOMETRY.outRow,
+    earlyPlaced.x - PROCESS_MAP_GEOMETRY.portInset,
+    earlyPlaced.y + PROCESS_MAP_GEOMETRY.inRow,
+  ],
+)
+check(
+  'провод назад: линия целиком внутри полотна',
+  pathPoints(backwardWire.d).points.every(
+    ([x, y]) => x >= 0 && x <= backwardLayout.width && y >= 0 && y <= backwardLayout.height,
+  ),
+  true,
+)
+
 const emptyLayout = layoutProcessGraph(noSteps)
 check('пустой документ: блоков', emptyLayout.steps.length, 0)
 assert('пустой документ: высота положительная', emptyLayout.height > 0, 'высота ' + emptyLayout.height)
@@ -628,7 +698,6 @@ check('подписи видов: разные строки', new Set(Object.val
 check('подписи резолверов: два правила', Object.keys(RESOLVER_TITLES).sort(), ['by-area', 'by-findings'])
 check('подписи причин: две разные строки', new Set(Object.values(UNUSED_REASON_TITLES)).size, 2)
 assert('правило провода описано словами', typeof WIRE_RULE === 'string' && WIRE_RULE.length > 20, WIRE_RULE)
-check('идентификатор узла — step:<id>', stepNodeId('review'), 'step:review')
 
 console.log(failures === 0 ? '\nВСЕ ПРОВЕРКИ ПРОШЛИ' : '\nПРОВАЛОВ: ' + failures)
 process.exit(failures === 0 ? 0 : 1)
