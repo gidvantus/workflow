@@ -940,7 +940,14 @@ export default function DepartmentProcessMap({
   const scale = fit && layout !== null && viewport > 0 ? Math.min(1, viewport / layout.width) : 1;
 
   return (
-    <section className="card proc-map" data-testid="department-process-map" aria-labelledby={cardTitleId}>
+    <section
+      className="card proc-map"
+      data-testid="department-process-map"
+      // Пока окно открыто, карточка перестаёт быть контейнером (`index.css`, `.proc-map`):
+      // containment делал её containing block'ом для окна, и `.card` режет окно своей коробкой.
+      data-overlay={open ? 'open' : undefined}
+      aria-labelledby={cardTitleId}
+    >
       <div className="card__head proc-map__head">
         <div className="proc-map__intro">
           <h2 className="card__title" id={cardTitleId}>
