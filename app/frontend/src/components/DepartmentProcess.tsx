@@ -36,24 +36,12 @@ import {
   type ProcessStepKind,
   type ProcessStepRole,
 } from '../api/process';
+import { KIND_TITLES, RESOLVER_TITLES } from '../api/processGraph';
 
 type ProcessState =
   | { status: 'loading' }
   | { status: 'ready'; document: ProcessDocument; defaults: ProcessDocument; roles: string[]; guards: ProcessGuard[] }
   | { status: 'error'; text: string };
-
-/** Вид ступени в подписи выпадающего списка: срок в контракте — `session`/`route`/`auto`. */
-const KIND_TITLES: Record<ProcessStepKind, string> = {
-  session: 'сессия',
-  route: 'маршрут',
-  auto: 'метки',
-};
-
-/** Резолверы роли: их выбирает диспетчер, а не документ, но подпись нужна человеку. */
-const RESOLVER_TITLES: Record<string, string> = {
-  'by-area': 'по половине работы',
-  'by-findings': 'по замечаниям',
-};
 
 /** Подписи ключей меток: ключ контракта — `dev`, подпись — по-русски. */
 const LABEL_TITLES: Record<ProcessLabelKey, string> = {
@@ -251,7 +239,14 @@ function LabelCell({
   );
 }
 
-export default function DepartmentProcess({ departmentId }: { departmentId: number }): JSX.Element {
+export default function DepartmentProcess({
+  departmentId,
+  onProcessSaved,
+}: {
+  departmentId: number;
+  /** Сохранение прошло: карта процесса над вкладками пересобирается по новому документу. */
+  onProcessSaved?: () => void;
+}): JSX.Element {
   const [state, setState] = useState<ProcessState>({ status: 'loading' });
   const [document, setDocument] = useState<ProcessDocument | null>(null);
   const [saved, setSaved] = useState<SavedState>({ kind: 'defaults' });
@@ -303,6 +298,7 @@ export default function DepartmentProcess({ departmentId }: { departmentId: numb
       const body = await saveProcess(departmentId, document);
       setDocument(sortSteps(body.document));
       setSaved({ kind: 'saved', revision: body.revision > 0 ? body.revision : null });
+      onProcessSaved?.();
     } catch (failure) {
       // Отказ висит до следующего сохранения, введённое не сбрасывается.
       setError(failure instanceof ApiError ? failure.message : UNREACHABLE_TEXT);
