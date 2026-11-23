@@ -787,7 +787,11 @@ export default function DepartmentPage({
           </div>
         </div>
 
-        <DepartmentProcessMap departmentId={department.id} refreshKey={processVersion} />
+        <DepartmentProcessMap
+          departmentId={department.id}
+          refreshKey={processVersion}
+          onProcessSaved={() => setProcessVersion((current) => current + 1)}
+        />
 
         <div className="dept-tabs" role="tablist" aria-label="Разделы отдела">
           <button

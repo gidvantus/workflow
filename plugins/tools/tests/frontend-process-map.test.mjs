@@ -1,4 +1,4 @@
-// Карта процесса на странице отдела: разбор документа в граф и раскладка полотна.
+// Карта процесса на странице отдела: разбор документа в граф ступеней и раскладка полотна.
 // Набор берёт **боевой** модуль `app/frontend/src/api/processGraph.ts` — сборка через
 // `esbuild` из `app/frontend/node_modules` в память, копий исходника здесь нет. Документ
 // тоже не копия: он разбирается из `app/backend/app/process_defaults.py`, того самого
@@ -7,19 +7,23 @@
 // уезжает молча на экран.
 //
 // Что проверяется:
-//   1. числа приёмки на документе умолчаний: 13 ступеней, 12 меток, 33 ребра (17/9/7) и
-//      «вне схемы» — `mockupsReady` (только в `unless`) и `merged` (нигде);
-//   2. рёбра — ровно по полям ступеней, ни одного лишнего и ни одного пропущенного;
-//   3. выключенная ступень уходит с полотна вместе со своими рёбрами;
-//   4. раскладка не слипается: у документа из одной ступени метки встают друг под другом,
-//      а не в одну точку (возврат код-ревью Ф1), и блоки не выходят за полотно.
+//   1. числа приёмки на документе умолчаний: 13 ступеней, 33 связи в полях (17/9/7) и
+//      8 проводов между ступенями — только пары `put` ∩ `when`;
+//   2. узлы карты — только ступени: меток-узлов нет, метки живут строками блока
+//      (вход / выход / снимает / кроме) с подписями из документа;
+//   3. провода — ровно по парам «одна ступень ставит, другая берёт», ни одного лишнего;
+//   4. выключенная ступень уходит с полотна вместе со своими проводами, а её метки, если
+//      брать их больше некому, честно попадают в «Вне схемы» с причиной;
+//   5. раскладка: колонки по четыре в порядке `priority`, блоки не слипаются и не выходят
+//      за полотно, провода идут слева направо и приходят в гребёнку разных портов;
+//   6. подписи видов, ролей и провода живут в одном месте модуля.
 //
 // Запуск: node plugins/tools/tests/frontend-process-map.test.mjs
 
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const repo = path.resolve(here, '..', '..', '..')
@@ -61,12 +65,16 @@ const code = bundled.outputFiles[0].text
 const graphApi = await import('data:text/javascript;base64,' + Buffer.from(code).toString('base64'))
 
 const {
-  EDGE_TITLES,
+  KIND_TITLES,
   PROCESS_MAP_GEOMETRY,
+  RESOLVER_TITLES,
+  UNUSED_REASON_TITLES,
+  WIRE_RULE,
   buildProcessGraph,
   layoutProcessGraph,
-  labelNodeId,
+  roleTitle,
   stepNodeId,
+  wireTitle,
 } = graphApi
 
 // ---------------------------------------------------------------------------
@@ -237,19 +245,26 @@ function onlyEnabled(...ids) {
   }
 }
 
+const enabledSteps = defaults.steps.filter((step) => step.enabled)
+
 // ---------------------------------------------------------------------------
-// 1. Числа приёмки на документе умолчаний.
+// 0. Узлов-меток больше нет: на полотне только ступени (замечание тестировщика «слева
+//    отображается справочник лейблов»). Старые имена экспортов тоже не должны вернуться.
+
+check('модуль: узлов-меток нет', graphApi.labelNodeId, undefined)
+check('модуль: вида ребра нет', graphApi.EDGE_TITLES, undefined)
+
+// ---------------------------------------------------------------------------
+// 1. Числа на документе умолчаний.
 
 const graph = buildProcessGraph(defaults, defaultGuards)
 
 check('умолчания: ступеней на полотне', graph.steps.length, 13)
-check('умолчания: меток на полотне', graph.states.length, 12)
-check('умолчания: рёбер всего', graph.edges.length, 33)
-
-const byKind = (kind) => graph.edges.filter((edge) => edge.kind === kind).length
-check('умолчания: рёбер trigger', byKind('trigger'), 17)
-check('умолчания: рёбер put', byKind('put'), 9)
-check('умолчания: рёбер drop', byKind('drop'), 7)
+check('умолчания: связей «когда»', graph.links.when, 17)
+check('умолчания: связей «ставит»', graph.links.put, 9)
+check('умолчания: связей «снимает»', graph.links.drop, 7)
+check('умолчания: связей всего', graph.links.total, 33)
+check('умолчания: проводов между ступенями', graph.wires.length, 8)
 
 check(
   'умолчания: вне схемы',
@@ -259,111 +274,166 @@ check(
     ['merged', 'unused'],
   ],
 )
+check(
+  'умолчания: причина «вне схемы» словами',
+  graph.unused.map((item) => item.reasonTitle),
+  [UNUSED_REASON_TITLES.unless, UNUSED_REASON_TITLES.unused],
+)
 
 check(
   'умолчания: ступени на полотне идут в порядке документа',
   graph.steps.map((node) => node.step.id),
-  defaults.steps.filter((step) => step.enabled).map((step) => step.id),
+  enabledSteps.map((step) => step.id),
 )
 
 check(
-  'умолчания: название ступени и вид — из документа',
-  graph.steps.slice(0, 2).map((node) => [node.step.title, node.kindTitle]),
-  [
-    ['Макет постановки', 'сессия'],
-    ['Маршрут по постановке', 'маршрут'],
-  ],
+  'умолчания: вид и роль первой ступени',
+  [graph.steps[0].kindTitle, graph.steps[0].roleTitle],
+  [KIND_TITLES.session, 'роль design'],
 )
-
+check(
+  'умолчания: у маршрута роли нет — это сказано словами',
+  graph.steps[1].roleTitle,
+  'роли нет · решает маршрут',
+)
+check(
+  'умолчания: резолвер роли подписан правилом, а не кодом',
+  graph.steps.find((node) => node.step.id === 'rework-test').roleTitle,
+  'роль: ' + RESOLVER_TITLES['by-findings'],
+)
 check(
   'умолчания: страж подписан словами каталога',
   graph.steps[0].guardTitle,
   defaultGuards.find((guard) => guard.id === 'mockup-stage').title,
 )
-
 check(
-  'умолчания: «кроме» ступени',
-  graph.steps[1].unlessKeys,
+  'умолчания: страж «Выдача» подписан каталогом',
+  graph.steps.find((node) => node.step.id === 'dev-backend').guardTitle,
+  defaultGuards.find((guard) => guard.id === 'dispatch').title,
+)
+check('умолчания: у «Тестирования» стража нет', graph.steps.find((node) => node.step.id === 'test').guardTitle, null)
+
+// ---------------------------------------------------------------------------
+// 2. Метки живут строками блока: подписи из документа, источник точки входа — `put`.
+
+const mockupNode = graph.steps[0]
+check(
+  'умолчания: «вход» первой ступени',
+  mockupNode.whenLabels.map((item) => [item.key, item.name, item.fromStep]),
+  [['mockup', defaults.labels.mockup, false]],
+)
+check(
+  'умолчания: «выход» первой ступени',
+  mockupNode.putLabels.map((item) => [item.key, item.name, item.fromStep]),
+  [['progress', defaults.labels.progress, true]],
+)
+check(
+  'умолчания: «снимает» ступени передачи фронтенду',
+  graph.steps.find((node) => node.step.id === 'handoff-frontend').dropLabels.map((item) => item.key),
+  ['test'],
+)
+check(
+  'умолчания: «кроме» маршрута',
+  graph.steps[1].unlessLabels.map((item) => item.key),
   ['progress', 'review', 'test', 'ok', 'failed', 'areaBackend', 'areaFrontend', 'areaFullstack'],
+)
+check(
+  'умолчания: метку, которую ставит другая ступень, видно по заливке точки',
+  graph.steps
+    .find((node) => node.step.id === 'dev-fullstack-frontend')
+    .whenLabels.map((item) => [item.key, item.fromStep]),
+  [['frontend', true]],
+)
+check(
+  'умолчания: у авто роли в документе нет',
+  graph.steps.find((node) => node.step.id === 'handoff-frontend').step.role,
+  null,
+)
+check(
+  'умолчания: роль ступени — из документа',
+  roleTitle({ ...defaults.steps[0] }),
+  'роль design',
 )
 
 // ---------------------------------------------------------------------------
-// 2. Рёбра — ровно по полям ступеней: ни одного лишнего, ни одного пропущенного.
+// 3. Провода — ровно пары «одна ступень ставит, другая берёт»: ни лишних, ни пропущенных.
 
-const signature = (edges) =>
-  edges
-    .map(
-      (edge) =>
-        `${edge.kind}|${edge.key}|${edge.kind === 'trigger' ? edge.to : edge.from}`,
-    )
-    .sort()
-
-const expectedEdges = []
-for (const step of defaults.steps.filter((node) => node.enabled)) {
-  const nodeId = stepNodeId(step.id)
-  for (const key of step.when) expectedEdges.push(`trigger|${key}|${nodeId}`)
-  for (const key of step.put) expectedEdges.push(`put|${key}|${nodeId}`)
-  for (const key of step.drop) expectedEdges.push(`drop|${key}|${nodeId}`)
+const expectedWires = []
+for (const source of enabledSteps) {
+  for (const target of enabledSteps) {
+    if (source.id === target.id) continue
+    for (const key of source.put) {
+      if (target.when.includes(key)) {
+        expectedWires.push(`${source.id}->${target.id}:${key}`)
+      }
+    }
+  }
 }
 
-check('умолчания: набор рёбер совпадает с полями ступеней', signature(graph.edges), expectedEdges.sort())
-
-const stateKeys = new Set(graph.states.map((state) => state.key))
-const stepIds = new Set(graph.steps.map((node) => node.nodeId))
 check(
-  'умолчания: метка каждого ребра — узел полотна',
-  graph.edges.every((edge) => stateKeys.has(edge.key)),
+  'умолчания: набор проводов совпадает с парами ставит ∩ когда',
+  graph.wires.map((wire) => `${wire.from}->${wire.to}:${wire.key}`).sort(),
+  expectedWires.sort(),
+)
+check(
+  'умолчания: концы проводов — ступени полотна',
+  graph.wires.every((wire) => graph.steps.some((node) => node.step.id === wire.from) && graph.steps.some((node) => node.step.id === wire.to)),
   true,
 )
 check(
-  'умолчания: концы рёбер — узлы полотна',
-  graph.edges.every((edge) =>
-    edge.kind === 'trigger'
-      ? edge.from === labelNodeId(edge.key) && stepIds.has(edge.to)
-      : stepIds.has(edge.from) && edge.to === labelNodeId(edge.key),
-  ),
-  true,
+  'умолчания: провода идут в «Продолжение взятой работы»',
+  graph.wires.map((wire) => wire.to).sort(),
+  ['continue', 'continue', 'continue', 'continue', 'continue', 'continue', 'continue', 'dev-fullstack-frontend'].sort(),
 )
-
 check(
-  'умолчания: узлы-ступени адресуются как step:<id>',
-  graph.steps.every((node) => node.nodeId === `step:${node.step.id}`),
+  'умолчания: подпись провода — имя метки из документа',
+  graph.wires.every((wire) => wire.labelName === defaults.labels[wire.key]),
   true,
 )
 check(
-  'умолчания: узлы-метки адресуются как label:<key>',
-  graph.states.every((state) => labelNodeId(state.key) === `label:${state.key}`),
-  true,
+  'умолчания: подпись провода называет обе ступени и метку',
+  (() => {
+    const wire = graph.wires[0]
+    const phrase = wireTitle(wire)
+    return [
+      phrase.includes(wire.fromTitle),
+      phrase.includes(wire.toTitle),
+      phrase.includes(wire.labelName),
+    ]
+  })(),
+  [true, true, true],
 )
-
 check(
-  'умолчания: подписи меток — из документа, порядок — порядок ключей',
-  graph.states.slice(0, 3).map((state) => [state.key, state.name]),
+  'умолчания: ступень считает свои провода',
+  graph.steps
+    .filter((node) => node.wiresOut > 0 || node.wiresIn > 0)
+    .map((node) => [node.step.id, node.wiresIn, node.wiresOut]),
   [
-    ['dev', defaults.labels.dev],
-    ['frontend', defaults.labels.frontend],
-    ['areaBackend', defaults.labels.areaBackend],
+    ['mockup', 0, 1],
+    ['handoff-frontend', 0, 1],
+    ['rework-test', 0, 1],
+    ['dev-backend', 0, 1],
+    ['dev-frontend', 0, 1],
+    ['dev-fullstack-backend', 0, 1],
+    ['dev-fullstack-frontend', 1, 1],
+    ['dev-fullstack-default', 0, 1],
+    ['continue', 7, 0],
   ],
 )
 
 // ---------------------------------------------------------------------------
-// 3. Выключенная ступень уходит с полотна вместе со своими рёбрами:
-//    сценарий приёмки «снять „включена“ у „Слияние“».
+// 4. Выключенная ступень уходит с полотна вместе со своими проводами: сценарий приёмки
+//    «снять „включена“ у „Слияние“» и у «Передачи фронтенду», которая ставит `frontend`.
 
 const withoutMerge = buildProcessGraph(
   onlyEnabled(...defaults.steps.filter((step) => step.id !== 'merge').map((step) => step.id)),
   defaultGuards,
 )
 check('без «Слияния»: ступеней', withoutMerge.steps.length, 12)
-check('без «Слияния»: рёбер', withoutMerge.edges.length, 32)
+check('без «Слияния»: проводов', withoutMerge.wires.length, 8)
 check('без «Слияния»: узла нет', withoutMerge.steps.some((node) => node.step.id === 'merge'), false)
-// `ok` включает только «Слияние»: снятая ступень уносит свою метку с полотна, и метка
-// не пропадает молча — она уходит в «Вне схемы» (кадр 5 макета рисует ровно это).
-check(
-  'без «Слияния»: `ok` ушла с полотна',
-  withoutMerge.states.some((state) => state.key === 'ok'),
-  false,
-)
+// `ok` включает только «Слияние»; снятая ступень уносит свою метку с полотна, и метка не
+// пропадает молча — она уходит в «Вне схемы» с причиной (кадр 5 макета рисует ровно это).
 check(
   'без «Слияния»: `ok` во «Вне схемы»',
   withoutMerge.unused.map((item) => [item.key, item.reason]),
@@ -374,18 +444,28 @@ check(
   ],
 )
 
+const withoutHandoff = buildProcessGraph(
+  onlyEnabled(...defaults.steps.filter((step) => step.id !== 'handoff-frontend').map((step) => step.id)),
+  defaultGuards,
+)
+check('без «Передачи фронтенду»: проводов', withoutHandoff.wires.length, 7)
+check(
+  'без «Передачи фронтенду»: пропал ровно её провод',
+  withoutHandoff.wires.some((wire) => wire.from === 'handoff-frontend'),
+  false,
+)
+
 const nothingEnabled = buildProcessGraph(onlyEnabled(), defaultGuards)
 check('все ступени выключены: ступеней', nothingEnabled.steps.length, 0)
-check('все ступени выключены: меток', nothingEnabled.states.length, 0)
-check('все ступени выключены: рёбер', nothingEnabled.edges.length, 0)
+check('все ступени выключены: проводов', nothingEnabled.wires.length, 0)
 check('все ступени выключены: все метки вне схемы', nothingEnabled.unused.length, 14)
 
 const noSteps = buildProcessGraph({ version: 1, labels: defaults.labels, steps: [] }, defaultGuards)
 check('пустой документ: ступеней', noSteps.steps.length, 0)
-check('пустой документ: рёбер', noSteps.edges.length, 0)
+check('пустой документ: проводов', noSteps.wires.length, 0)
 
 // ---------------------------------------------------------------------------
-// 4. Раскладка: блоки не слипаются и не выходят за полотно.
+// 5. Раскладка: колонки по четыре, блоки не слипаются, провода идут слева направо.
 
 /** Пары координат из `d`: `M x y C x1 y1 x2 y2 x y`. */
 function pathPoints(d) {
@@ -395,93 +475,160 @@ function pathPoints(d) {
   return { count: numbers.length, points }
 }
 
-/** Проверка одного полотна: рамки, просветы меток, координаты рёбер. */
-function checkLayout(name, layout) {
-  const { padY, labelH, stepH } = PROCESS_MAP_GEOMETRY
-
-  check(`${name}: ширина полотна`, layout.width, PROCESS_MAP_GEOMETRY.width)
-
-  const labelTops = layout.states.map((placed) => placed.top)
-  const stepTops = layout.steps.map((placed) => placed.top)
-  const gaps = labelTops.slice(1).map((top, index) => top - labelTops[index])
-
-  assert(`${name}: метки не слиплись`, gaps.every((gap) => gap >= labelH), 'минимальный просвет ' + (gaps.length === 0 ? '—' : Math.min(...gaps)))
-  assert(
-    `${name}: ступени не слиплись`,
-    stepTops.slice(1).every((top, index) => top - stepTops[index] >= stepH),
-  )
-  assert(
-    `${name}: все блоки внутри полотна`,
-    [...labelTops.map((top) => [top, labelH]), ...stepTops.map((top) => [top, stepH])].every(
-      ([top, height]) => top >= 0 && top + height <= layout.height,
-    ),
-    'высота ' + layout.height,
-  )
-  assert(
-    `${name}: над полотном и под ним есть отступ`,
-    labelTops.every((top) => top >= padY - 0.001) &&
-      stepTops.every((top) => top >= padY - 0.001) &&
-      layout.height - Math.max(0, ...labelTops.map((top) => top + labelH), ...stepTops.map((top) => top + stepH)) >= padY - 0.001,
-  )
-
-  const points = layout.edges.flatMap((placed) => pathPoints(placed.d).points)
-  const numbersOk = layout.edges.every((placed) => pathPoints(placed.d).count === 8)
-  assert(`${name}: путь каждого ребра — M + одна кривая`, numbersOk)
-  assert(
-    `${name}: рёбра внутри полотна`,
-    points.every(([x, y]) => x >= 0 && x <= layout.width && y >= 0 && y <= layout.height),
-    'точек ' + points.length,
+/** Пересечение двух блоков: по ней видно, что раскладка не наехала сама на себя. */
+function overlaps(left, right) {
+  return (
+    left.x < right.x + PROCESS_MAP_GEOMETRY.blockW &&
+    right.x < left.x + PROCESS_MAP_GEOMETRY.blockW &&
+    left.y < right.y + PROCESS_MAP_GEOMETRY.blockH &&
+    right.y < left.y + PROCESS_MAP_GEOMETRY.blockH
   )
 }
 
-checkLayout('умолчания', layoutProcessGraph(graph))
+/** Проверка одного полотна: размеры, рамки блоков, координаты проводов. */
+function checkLayout(name, processGraph) {
+  const { pad, blockW, blockH, perColumn } = PROCESS_MAP_GEOMETRY
+  const layout = layoutProcessGraph(processGraph)
+  const count = processGraph.steps.length
+  const columns = Math.max(1, Math.ceil(count / perColumn))
 
-// Сценарий возврата Ф1: у документа одна ступень, а меток у неё три. До правки все три
-// метки получали один и тот же `top` и рисовались друг на друге.
+  check(`${name}: ширина полотна`, layout.width, pad * 2 + columns * blockW + (columns - 1) * (PROCESS_MAP_GEOMETRY.colGap))
+  assert(`${name}: высота положительная`, layout.height > 0, 'высота ' + layout.height)
+
+  const overlapsFound = []
+  for (let i = 0; i < layout.steps.length; i += 1) {
+    for (let j = i + 1; j < layout.steps.length; j += 1) {
+      if (overlaps(layout.steps[i], layout.steps[j])) {
+        overlapsFound.push(`${layout.steps[i].node.step.id}/${layout.steps[j].node.step.id}`)
+      }
+    }
+  }
+  check(`${name}: блоки не наезжают друг на друга`, overlapsFound, [])
+
+  assert(
+    `${name}: все блоки внутри полотна`,
+    layout.steps.every(
+      (placed) =>
+        placed.x >= pad &&
+        placed.y >= pad &&
+        placed.x + blockW <= layout.width - pad &&
+        placed.y + blockH <= layout.height - pad,
+    ),
+    `блоков ${layout.steps.length}`,
+  )
+
+  check(
+    `${name}: блоков столько же, сколько ступеней`,
+    layout.steps.length,
+    processGraph.steps.length,
+  )
+  check(
+    `${name}: порядок блоков — порядок документа`,
+    layout.steps.map((placed) => placed.node.step.id),
+    processGraph.steps.map((node) => node.step.id),
+  )
+  check(
+    `${name}: колонки по ${perColumn}`,
+    layout.steps.map((placed) => placed.column),
+    processGraph.steps.map((_, index) => Math.floor(index / perColumn)),
+  )
+
+  const points = []
+  for (const placed of layout.wires) {
+    const parsed = pathPoints(placed.d)
+    assert(
+      `${name}: путь провода ${placed.wire.from}→${placed.wire.to} — M + одна кривая`,
+      parsed.count === 8,
+      'чисел ' + parsed.count,
+    )
+    points.push(...parsed.points)
+  }
+  assert(
+    `${name}: провода внутри полотна`,
+    points.every(([x, y]) => x >= 0 && x <= layout.width && y >= 0 && y <= layout.height),
+    'точек ' + points.length,
+  )
+
+  const byId = new Map(layout.steps.map((placed) => [placed.node.step.id, placed]))
+  const endpointsOk = layout.wires.every((placed) => {
+    const from = byId.get(placed.wire.from)
+    const to = byId.get(placed.wire.to)
+    if (from === undefined || to === undefined) return false
+    const endOk =
+      placed.to.x === to.x - PROCESS_MAP_GEOMETRY.portInset &&
+      placed.to.y >= to.y &&
+      placed.to.y <= to.y + blockH
+    // Провод между колонками выходит из правого края источника, провод внутри колонки —
+    // из её левого поля: там же, где вход цели.
+    const startOk =
+      to.column > from.column
+        ? placed.from.x === from.x + blockW && placed.from.y === from.y + PROCESS_MAP_GEOMETRY.outRow
+        : placed.from.x === from.x
+    return endOk && startOk
+  })
+  check(`${name}: концы проводов стоят на своих блоках`, endpointsOk, true)
+
+  const forwardWires = layout.wires.filter((placed) => {
+    const from = byId.get(placed.wire.from)
+    const to = byId.get(placed.wire.to)
+    return from !== undefined && to !== undefined && to.column > from.column
+  })
+  check(
+    `${name}: провода между колонками идут слева направо`,
+    forwardWires.every((placed) => placed.to.x > placed.from.x),
+    true,
+  )
+
+  return layout
+}
+
+const defaultsLayout = checkLayout('умолчания', graph)
+check('умолчания: размеры полотна как в макете', [defaultsLayout.width, defaultsLayout.height], [1520, 724])
+
+const continueLayout = defaultsLayout.steps.find((placed) => placed.node.step.id === 'continue')
+check('умолчания: одинокая ступень последней колонки — по центру', [continueLayout.x, continueLayout.y], [1212, 282])
+
+// Гребёнка портов: семь проводов в одну точку слиплись бы, и карта показывала бы одну связь.
+const continuePorts = defaultsLayout.wires
+  .filter((placed) => placed.to.x === 1212 - PROCESS_MAP_GEOMETRY.portInset)
+  .map((placed) => placed.to.y)
+check('умолчания: в «Продолжение» приходит семь проводов', continuePorts.length, 7)
+check('умолчания: порты входа не слиплись', new Set(continuePorts).size, 7)
+check(
+  'умолчания: порты входа раздвинуты шагом гребёнки',
+  continuePorts
+    .slice(1)
+    .map((port, index) => Math.round((port - continuePorts[index]) * 100) / 100),
+  [6.5, 6.5, 6.5, 6.5, 6.5, 6.5],
+)
+
+// Сценарий приёмки Ф1 прошлого круга: у документа одна ступень. Полотно обязано остаться
+// читаемым — один блок, положительные размеры, ни одного провода.
 const singleStep = buildProcessGraph(onlyEnabled('dev-backend'), defaultGuards)
 check('одна ступень: ступеней', singleStep.steps.length, 1)
-check('одна ступень: меток', singleStep.states.length, 3)
-const singleLayout = layoutProcessGraph(singleStep)
-check(
-  'одна ступень: у меток разные `top`',
-  new Set(singleLayout.states.map((placed) => placed.top)).size,
-  3,
-)
-checkLayout('одна ступень', singleLayout)
+check('одна ступень: проводов', singleStep.wires.length, 0)
+const singleLayout = checkLayout('одна ступень', singleStep)
+check('одна ступень: полотно не схлопнулось', [singleLayout.width, singleLayout.height], [320, 184])
 
-// Две ступени и пять меток: шаг ступеней (78) меньше, чем нужен пяти меткам (5 × 56).
-const twoSteps = buildProcessGraph(onlyEnabled('dev-backend', 'dev-fullstack-frontend'), defaultGuards)
-check('две ступени: ступеней', twoSteps.steps.length, 2)
-check('две ступени: меток', twoSteps.states.length, 5)
-checkLayout('две ступени', layoutProcessGraph(twoSteps))
+// Две ступени с проводом между ними: концы провода на своих блоках.
+const twoSteps = buildProcessGraph(onlyEnabled('handoff-frontend', 'dev-fullstack-frontend'), defaultGuards)
+check('две ступени: проводов', twoSteps.wires.length, 1)
+checkLayout('две ступени', twoSteps)
 
-// Пустой документ тоже рисуется: высота положительная, узлов и рёбер нет.
 const emptyLayout = layoutProcessGraph(noSteps)
-check('пустой документ: узлов', emptyLayout.states.length + emptyLayout.steps.length, 0)
+check('пустой документ: блоков', emptyLayout.steps.length, 0)
 assert('пустой документ: высота положительная', emptyLayout.height > 0, 'высота ' + emptyLayout.height)
+assert('пустой документ: ширина положительная', emptyLayout.width > 0, 'ширина ' + emptyLayout.width)
 
 // ---------------------------------------------------------------------------
-// 5. Подписи видов рёбер живут в одном месте: легенда карты и `<title>` стрелки берут их
-//    из `EDGE_TITLES`, второго набора текстов в разметке нет.
+// 6. Подписи видов, ролей, причин и правило провода живут в одном месте модуля.
 
-check('подписи рёбер: три вида', Object.keys(EDGE_TITLES).sort(), ['drop', 'put', 'trigger'])
-check(
-  'подписи рёбер: в легенде разные строки',
-  new Set(['trigger', 'put', 'drop'].map((kind) => EDGE_TITLES[kind].legend)).size,
-  3,
-)
-check(
-  'подписи рёбер: фраза стрелки называет метку и ступень',
-  ['trigger', 'put', 'drop'].map((kind) => {
-    const phrase = EDGE_TITLES[kind].arrow('метка-x', 'ступень-y')
-    return phrase.includes('метка-x') && phrase.includes('ступень-y')
-  }),
-  [true, true, true],
-)
-assert(
-  'подписи рёбер: фраза стрелки не пустая и не шаблон',
-  ['trigger', 'put', 'drop'].every((kind) => !EDGE_TITLES[kind].arrow('a', 'b').includes('{')),
-)
+check('подписи видов: три вида', Object.keys(KIND_TITLES).sort(), ['auto', 'route', 'session'])
+check('подписи видов: разные строки', new Set(Object.values(KIND_TITLES)).size, 3)
+check('подписи резолверов: два правила', Object.keys(RESOLVER_TITLES).sort(), ['by-area', 'by-findings'])
+check('подписи причин: две разные строки', new Set(Object.values(UNUSED_REASON_TITLES)).size, 2)
+assert('правило провода описано словами', typeof WIRE_RULE === 'string' && WIRE_RULE.length > 20, WIRE_RULE)
+check('идентификатор узла — step:<id>', stepNodeId('review'), 'step:review')
 
 console.log(failures === 0 ? '\nВСЕ ПРОВЕРКИ ПРОШЛИ' : '\nПРОВАЛОВ: ' + failures)
 process.exit(failures === 0 ? 0 : 1)
