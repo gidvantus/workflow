@@ -48,6 +48,7 @@ import {
 import { ApiError, UNREACHABLE_TEXT } from '../api/http';
 import type { Project } from '../api/projects';
 import DepartmentProcess from './DepartmentProcess';
+import DepartmentProcessMap from './DepartmentProcessMap';
 
 /** Предел окон: тот же `WINDOWS_MAX`, что у сервера. Фронт лишь не даёт добавить седьмое. */
 const WINDOWS_MAX = 6;
@@ -276,6 +277,12 @@ export default function DepartmentPage({
    * форма с двумя «Сохранить» сохраняла бы половину того, что человек видит на экране.
    */
   const [tab, setTab] = useState<'settings' | 'process'>('settings');
+  /**
+   * Поколение документа процесса. Карта над вкладками читает документ своим `GET` и после
+   * сохранения на вкладке «Процесс» перечитывает его: счётчик меняется — карта
+   * перезапрашивает документ, страница при этом не перезагружается.
+   */
+  const [processVersion, setProcessVersion] = useState(0);
 
   const needsRoles = department.fields.includes('roles');
   /**
@@ -780,6 +787,8 @@ export default function DepartmentPage({
           </div>
         </div>
 
+        <DepartmentProcessMap departmentId={department.id} refreshKey={processVersion} />
+
         <div className="dept-tabs" role="tablist" aria-label="Разделы отдела">
           <button
             className={tab === 'settings' ? 'dept-tabs__tab dept-tabs__tab--active' : 'dept-tabs__tab'}
@@ -804,7 +813,10 @@ export default function DepartmentPage({
         </div>
 
         {tab === 'process' ? (
-          <DepartmentProcess departmentId={department.id} />
+          <DepartmentProcess
+            departmentId={department.id}
+            onProcessSaved={() => setProcessVersion((current) => current + 1)}
+          />
         ) : (
         <form
           className="card"
