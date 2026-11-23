@@ -739,6 +739,8 @@ export default function DepartmentProcessMap({
   const [viewport, setViewport] = useState(0);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const overlayRef = useRef<HTMLDivElement | null>(null);
+  /** Ступень, на блок которой вернуть фокус после сохранения из панели. */
+  const focusAfterSave = useRef<string | null>(null);
 
   const baseId = useId();
   const arrowId = `pm-arrow-${baseId.replace(/[^a-zA-Z0-9_-]/g, '')}`;
@@ -912,6 +914,23 @@ export default function DepartmentProcessMap({
     };
   }, [open]);
 
+  // Фокус после «Сохранить». Блока правленой ступени может уже не быть на полотне: выключенную
+  // ступень `buildProcessGraph` убирает, а `StepBlock` ключуется по `step.id`, поэтому `focus()`
+  // по такому узлу вернул бы фокус в `body` — вне `aria-modal`-окна, и Tab ушёл бы в карточки под
+  // полотном. Запасная цель — само окно: у него есть `ref` и `tabIndex={-1}`. Эффект, а не прямой
+  // вызов в обработчике: к этому моменту DOM уже перерисован.
+  useEffect(() => {
+    const stepId = focusAfterSave.current;
+    if (stepId === null || editing !== null) {
+      return;
+    }
+    focusAfterSave.current = null;
+    const block = overlayRef.current?.querySelector<HTMLElement>(
+      `[data-testid="process-map-step-open"][data-step-id="${stepId}"]`,
+    );
+    (block ?? overlayRef.current)?.focus();
+  }, [editing, state, open]);
+
   const updateDraft = (patch: Partial<ProcessStep>) => {
     setEditing((current) => (current === null ? current : { ...current, draft: { ...current.draft, ...patch } }));
     setPanelError(null);
@@ -937,16 +956,12 @@ export default function DepartmentProcessMap({
           ? { ...current, document: saved.document, fromDefaults: false }
           : current,
       );
+      // Фокус переносим эффектом по новому DOM, а не здесь: панель закрывается, и кнопка
+      // «Сохранить» исчезает — `focus()` в этом же тике упал бы в `body`, то есть вне
+      // `aria-modal`-окна, и Tab из окна ушёл бы в карточки под полотном.
+      focusAfterSave.current = savedStepId;
       setEditing(null);
       setDiscard(null);
-      // Панель закрылась вместе с кнопкой «Сохранить», и фокус остался бы в `body`, то есть вне
-      // `aria-modal`-окна: Tab из окна ушёл бы в карточки под полотном. Возвращаем фокус на блок
-      // той ступени, которую правили, — человек продолжает с того места, где работал.
-      overlayRef.current
-        ?.querySelector<HTMLElement>(
-          `[data-testid="process-map-step-open"][data-step-id="${savedStepId}"]`,
-        )
-        ?.focus();
       onProcessSaved?.();
     } catch (error) {
       setPanelError(error instanceof ApiError ? error.message : UNREACHABLE_TEXT);
