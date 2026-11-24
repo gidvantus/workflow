@@ -2580,12 +2580,32 @@ body {
   }
 }
 
+/* ---------- карта процесса: ступени, провода и панель ступени над вкладками отдела ---------- */
 
+/* Карта — такая же карточка, как списки страницы: та же шапка, та же рамка. Полотно в
+   карточку не влезает, поэтому оно открывается поверх страницы и прокручивается само:
+   страница под ним не едет. */
+.proc-map {
+  container-type: inline-size;
+}
 
-/* ---------- карта процесса: полотно меток и ступеней над вкладками отдела ---------- */
+/* Пока окно карты открыто, карточка контейнером быть перестаёт. `container-type` — это
+   containment: layout, и по спецификации он делает элемент containing block'ом для
+   `position: fixed` потомков. С ним `.proc-map__screen` считал бы `inset: 0` от коробки
+   карточки, а `.card` (`overflow: hidden`, `:381-388`) резал бы его по этой коробке: окно
+   получало ширину карточки вместо экрана, а `.proc-map__scroll` в такой коробке сжимался в
+   полоску. Сейчас окно и так рисуется порталом в `document.body`, но правило ниже снимает
+   саму причину: даже отрисованное внутри карточки окно встанет на экран. Запросы по ширине
+   карточки (`@container`, `:3344`) на время открытого окна не срабатывают — их элементы
+   всё равно закрыты окном, а после «Закрыть» карточка снова контейнер. */
+.proc-map[data-overlay='open'] {
+  container-type: normal;
+}
 
-/* Карта — такая же карточка, как списки страницы: та же шапка, та же рамка. Полотно живёт
-   внутри и не тянет страницу: прокручивается только оно. */
+.proc-map__head {
+  align-items: flex-start;
+}
+
 .proc-map__intro {
   min-width: 0;
 }
@@ -2605,285 +2625,746 @@ body {
   color: var(--muted);
 }
 
+.proc-map__counts {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
 .proc-map__loading {
   margin: 0;
-  padding: 1.75rem 1.125rem;
-  font-size: 0.875rem;
+  padding: 1.5rem 1.125rem;
+  font-size: 0.8125rem;
   color: var(--muted);
 }
 
 .proc-map__error {
-  padding: 1.5rem 1.125rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 1.25rem 1.125rem;
 }
 
-.proc-map__error .error {
-  margin: 0 0 0.375rem;
-}
-
-.proc-map__error .muted {
+.proc-map__error p {
   margin: 0;
-  font-size: 0.8125rem;
 }
 
 .proc-map__empty {
-  padding: 1.75rem 1.125rem 1.5rem;
-  text-align: center;
-  background-color: var(--chrome);
-  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 1.25rem 1.125rem;
 }
 
 .proc-map__empty-title {
-  margin: 0 0 0.375rem;
-  font-size: 0.9375rem;
+  margin: 0;
+  font-size: 0.8125rem;
   font-weight: 600;
-  color: var(--ink);
 }
 
 .proc-map__empty-hint {
-  max-width: 34rem;
-  margin: 0 auto;
-  font-size: 0.8125rem;
-  line-height: 1.5;
+  margin: 0;
+  max-width: 38rem;
+  font-size: 0.75rem;
   color: var(--muted);
 }
 
-/* Карточка — контейнер для своих правил: прокрутка включается по её ширине, а не по ширине
-   окна. При одном и том же окне карточка уже, когда рядом стоит боковая полоса, — считать
-   по окну значило бы включать прокрутку там, где полотно ещё влезает. */
-.proc-map {
-  container-type: inline-size;
+/* Вход в карту: виды ступеней пиктограммами и кнопка полотна. Числа документа стоят в
+   шапке карточки, здесь — только то, что человек увидит, нажав кнопку. */
+.proc-map__teaser {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.875rem 1.125rem 1rem;
 }
 
-/* Полотно шире карточки на узком экране: прокрутка идёт здесь, а не у страницы, поэтому
-   страница остаётся без горизонтальной полосы на любой ширине. */
-.proc-map__scroll {
-  overflow-x: auto;
-  background-color: var(--shell);
-  background-image: radial-gradient(circle, var(--border) 1px, transparent 1.2px);
-  background-size: 16px 16px;
+.proc-map__kinds {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.875rem;
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+/* Вид — словом, пояснение вида — тем же цветом, что и слово: в макете (`mockups/75`,
+   кадр 1) легенда видов набрана `--ink` целиком, второй цвет для пояснения не вводится. */
+.proc-map__kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  color: var(--ink);
+}
+
+.proc-map__kind b {
+  font-weight: 600;
+}
+
+.proc-map__cta {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.proc-map__cta .muted {
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+/* «Вне схемы» — не отказ, а честность: метка есть в документе, но ни узла, ни провода у
+   неё нет. Строка живёт и в карточке, и в подвале полотна. */
+.proc-map__unused {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.75rem;
+  margin: 0;
+  padding: 0.625rem 1.125rem;
+  background-color: var(--band);
   border-top: 1px solid var(--line);
+  font-size: 0.6875rem;
+  color: var(--muted);
 }
 
-.proc-map__canvas {
-  display: block;
-  width: 100%;
-  max-width: 62.5rem;
-  height: auto;
+.proc-map__unused-title {
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.proc-map__unused-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.25rem;
+}
+
+.proc-map__unused-item code {
+  font-size: 0.625rem;
+}
+
+/* ---------- пиктограммы вида ступени ---------- */
+
+/* Плитка вокруг пиктограммы различается не только цветом: сессия — заливка, маршрут —
+   обводка, авто — пунктир. Вид не держится на одном цвете. */
+.proc-map__tile {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+}
+
+.proc-map__tile--session {
+  color: var(--chrome);
+  background-color: var(--ink);
+}
+
+.proc-map__tile--route {
+  color: var(--ink);
+  background-color: var(--panel);
+  border: 1px solid var(--border);
+}
+
+.proc-map__tile--auto {
+  color: var(--ink);
+  background-color: var(--panel);
+  border: 1px dashed var(--muted-2);
+}
+
+/* ---------- полотно ---------- */
+
+/* Окно карты во весь экран: шапка с источником и кнопками, полотно, подвал с легендой. */
+.proc-map__screen {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--chrome);
+}
+
+.proc-map__bar {
+  display: flex;
+  flex: none;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.875rem 1.125rem;
+  background-color: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.proc-map__bar-head {
+  min-width: 0;
+}
+
+.proc-map__bar-title {
+  margin: 0;
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+.proc-map__bar-sub {
+  margin: 0.125rem 0 0;
+  max-width: 60ch;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.proc-map__bar-tools {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.proc-map__work {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.proc-map__main {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.proc-map__scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 1rem 1.125rem;
+  overflow: auto;
+  background-color: var(--canvas);
+}
+
+/* Обёртка нужна кнопке «Вписать»: масштаб меняет полотно, а место на экране занимает
+   ровно уменьшенный размер, иначе прокрутка осталась бы на полную ширину. */
+.proc-map__frame {
+  position: relative;
   margin: 0 auto;
 }
 
-/* Подпись о прокрутке нужна только тогда, когда прокрутка есть. */
-.proc-map__scroll-hint {
-  display: none;
+.proc-map__canvas {
+  position: relative;
+  background-color: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  transform-origin: top left;
+}
+
+/* Провода — слой под блоками: он не ловит клики, блок остаётся кнопкой. */
+.proc-map__wires {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.proc-map__wire {
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.3;
+}
+
+.proc-map__wire-dot {
+  fill: var(--muted);
+}
+
+/* ---------- блок ступени ---------- */
+
+/* Координаты блока приходят из раскладки переменными, а не голыми `left`/`top`: на узком
+   экране те же правила отменяют их, и полотно становится списком. */
+.proc-map__step {
+  position: absolute;
+  left: var(--pm-x);
+  top: var(--pm-y);
+  display: flex;
+  flex-direction: column;
+  width: 296px;
+  height: 160px;
+  color: var(--ink);
+  background-color: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  font-size: 0.6875rem;
+}
+
+.proc-map__step:hover {
+  border-color: var(--muted-2);
+}
+
+.proc-map__step-open {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0.375rem;
+  min-height: 0;
+  padding: 0.75rem 0.875rem 0.25rem;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  overflow: hidden;
+  background: none;
+  border: 0;
+  border-radius: 0.75rem 0.75rem 0 0;
+  cursor: pointer;
+}
+
+.proc-map__step-open:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: -2px;
+}
+
+.proc-map__step-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.proc-map__step-names {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-width: 0;
+}
+
+.proc-map__step-title {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.15;
+}
+
+.proc-map__step-meta {
+  overflow: hidden;
+  font-size: 0.5938rem;
+  color: var(--muted);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.proc-map__step-meta code {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: inherit;
+}
+
+.proc-map__step-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1875rem;
+  padding-top: 0.375rem;
+  border-top: 1px solid var(--line);
+}
+
+.proc-map__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.125rem 0.375rem;
+  min-height: 1rem;
+}
+
+.proc-map__row-title {
+  flex: none;
+  width: 3.5rem;
+  font-size: 0.5625rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  /* `--muted`, а не `--muted-2`: на белом при 9 px `--muted-2` даёт 2,82:1, и axe
+     `color-contrast` роняет подписи «Вход / Выход / Снимает» (тот же случай, что `.prices__unit`). */
+  color: var(--muted);
+}
+
+.proc-map__row-empty {
+  font-size: 0.6563rem;
+  color: var(--muted);
+}
+
+.proc-map__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.6563rem;
+}
+
+.proc-map__label--struck {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+/* Точка входа: заливка — метку ставит ступень на этой карте; кольцо — метка приходит
+   извне. Цвет единственным различием не остаётся, заливка и обводка читаются и без него. */
+.proc-map__dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.proc-map__dot--step {
+  background-color: var(--ink);
+}
+
+.proc-map__dot--outside {
+  background-color: var(--panel);
+  border: 1.4px solid var(--ink);
+}
+
+.proc-map__step-foot {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0 0.875rem 0.5rem;
+}
+
+.proc-map__exceptions {
+  padding: 0;
+  font: inherit;
+  font-size: 0.6563rem;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.proc-map__exceptions:hover {
+  color: var(--ink);
+}
+
+.proc-map__guard {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  max-width: 55%;
+  padding: 0.125rem 0.4375rem;
+  overflow: hidden;
+  font-size: 0.625rem;
+  color: var(--muted);
+  white-space: nowrap;
+  background-color: var(--shell);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  text-overflow: ellipsis;
+}
+
+/* Раскрытые исключения ложатся поверх самого блока: у блока фиксированная высота из
+   раскладки, а растущий блок сдвинул бы соседей вместе с проводами. За пределы полотна
+   раскрывать нельзя — там обрезает прокрутка. */
+.proc-map__pop {
+  position: absolute;
+  inset: 0.375rem;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding: 0.5rem 0.625rem;
+  overflow: auto;
+  background-color: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  box-shadow: 0 8px 24px rgb(23 23 15 / 12%);
+}
+
+.proc-map__pop-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.proc-map__pop-title {
   margin: 0;
-  padding: 0.5rem 1.125rem 0;
-  font-size: 0.75rem;
-  color: var(--muted-2);
+  font-size: 0.625rem;
+  color: var(--muted);
+}
+
+.proc-map__pop-x {
+  padding: 0 0.125rem;
+  font: inherit;
+  font-size: 0.8125rem;
+  line-height: 1;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+/* ---------- метки в панели ---------- */
+
+.proc-map__chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.proc-map__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.1875rem 0.4375rem;
+  font-size: 0.6875rem;
+  background-color: var(--band);
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+}
+
+.proc-map__chip-x {
+  padding: 0;
+  font: inherit;
+  font-size: 0.8125rem;
+  line-height: 1;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.proc-map__chip-x:hover {
+  color: var(--danger);
+}
+
+.proc-map__chip-add {
+  padding: 0.1875rem 0.25rem;
+  font: inherit;
+  font-size: 0.6875rem;
+  color: var(--muted);
+  background-color: transparent;
+  border: 1px dashed var(--border);
+  border-radius: 0.5rem;
+}
+
+/* ---------- подвал полотна ---------- */
+
+.proc-map__foot {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  background-color: var(--panel);
+  border-top: 1px solid var(--border);
 }
 
 .proc-map__legend {
   display: flex;
   flex-direction: column;
   gap: 0.375rem;
-  padding: 0.75rem 1.125rem 0.875rem;
-  border-top: 1px solid var(--line);
+  padding: 0.625rem 1.125rem;
 }
 
 .proc-map__legend-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.375rem 1.25rem;
+  align-items: center;
+  gap: 0.25rem 1rem;
   margin: 0;
-  font-size: 0.75rem;
+  font-size: 0.6875rem;
   color: var(--muted);
 }
 
-.proc-map__legend-kind,
+.proc-map__legend-wire,
 .proc-map__legend-item {
   display: inline-flex;
   align-items: center;
   gap: 0.375rem;
 }
 
-.proc-map__legend-kind b {
-  color: var(--ink);
-}
-
-.proc-map__legend-item svg {
-  display: block;
-}
-
-/* Вид ступени: сессия — тёмная плитка, маршрут — обводка, авто — пунктир. Слово в легенде
-   дублирует плитку, поэтому цвет единственным различием не остаётся. */
-.proc-map__tile {
+.proc-map__legend-wire svg {
   flex: none;
-  width: 0.75rem;
-  height: 0.75rem;
-  border-radius: 0.25rem;
 }
 
-.proc-map__tile--session {
-  background-color: var(--dark);
+.proc-map__legend-struck {
+  text-decoration: line-through;
 }
 
-.proc-map__tile--route {
-  background-color: var(--panel);
-  border: 1px solid var(--muted);
-}
+/* ---------- панель ступени ---------- */
 
-.proc-map__tile--auto {
-  background-color: var(--panel);
-  border: 1px dashed var(--muted-2);
-}
-
-.proc-map__tile-svg--session {
-  fill: var(--dark);
-}
-
-.proc-map__tile-svg--route {
-  fill: var(--panel);
-  stroke: var(--muted);
-}
-
-.proc-map__tile-svg--auto {
-  fill: var(--panel);
-  stroke: var(--muted-2);
-  stroke-dasharray: 2 1.6;
-}
-
-/* Блок ступени: сессия — плотный белый, маршрут — тон подложки, авто — пунктирная рамка. */
-.proc-map__step-box {
-  fill: var(--panel);
-  stroke: var(--border);
-}
-
-.proc-map__step-box--route {
-  fill: var(--chrome);
-}
-
-.proc-map__step-box--auto {
-  stroke: var(--muted-2);
-  stroke-dasharray: 4 3;
-}
-
-.proc-map__state-box {
-  fill: var(--band);
-  stroke: var(--border);
-}
-
-.proc-map__state-name {
-  font-size: 0.75rem;
-  font-weight: 600;
-  fill: var(--ink);
-}
-
-.proc-map__mono,
-.proc-map__state-key {
-  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
-  font-size: 0.6875rem;
-  fill: var(--muted);
-}
-
-.proc-map__step-title {
-  font-size: 0.8125rem;
-  font-weight: 600;
-  fill: var(--ink);
-}
-
-.proc-map__step-meta {
-  font-size: 0.6875rem;
-  fill: var(--muted);
-}
-
-.proc-map__step-note {
-  font-size: 0.625rem;
-  fill: var(--muted-2);
-}
-
-/* Рёбра: вид различается стрелкой и штрихом, цвет — один и тот же токен. */
-.proc-map__edge {
-  fill: none;
-  stroke: var(--muted);
-  stroke-width: 1.3;
-}
-
-.proc-map__edge--drop {
-  stroke: var(--muted-2);
-  stroke-dasharray: 4 3;
-}
-
-.proc-map__arrow--filled {
-  fill: var(--muted);
-}
-
-.proc-map__arrow--open {
-  fill: var(--panel);
-  stroke: var(--muted);
-  stroke-width: 1.1;
-}
-
-.proc-map__legend-line {
-  fill: none;
-  stroke: var(--muted);
-  stroke-width: 1.3;
-}
-
-.proc-map__legend-line--drop {
-  stroke-dasharray: 4 3;
-}
-
-.proc-map__legend-arrow-filled {
-  fill: var(--muted);
-}
-
-.proc-map__legend-arrow-open {
-  fill: var(--panel);
-  stroke: var(--muted);
-  stroke-width: 1.1;
-}
-
-/* «Вне схемы»: метки, которых на полотне нет, с причиной. Список идёт строкой и
-   переносится, потому что причин ровно столько, сколько ключей не занято документом. */
-.proc-map__unused {
+.proc-map__panel {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem 0.875rem;
+  flex: none;
+  flex-direction: column;
+  width: 22rem;
+  min-height: 0;
+  background-color: var(--panel);
+  border-left: 1px solid var(--border);
+}
+
+.proc-map__panel-head {
+  display: flex;
+  flex: none;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.875rem 1.125rem;
+  border-bottom: 1px solid var(--line);
+}
+
+/* `--muted`, а не `--muted-2`: подпись панели стоит на белом при 10 и 11 px, а `--muted-2`
+   даёт там 2,82:1 — та же находка axe `color-contrast`, что и у строк полотна (`:2976`). */
+.proc-map__panel-eyebrow {
   margin: 0;
-  padding: 0 1.125rem 1.125rem;
-  font-size: 0.75rem;
+  font-size: 0.625rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   color: var(--muted);
 }
 
-.proc-map__unused-item b {
-  font-weight: 500;
-  color: var(--ink);
+.proc-map__panel-title {
+  margin: 0.125rem 0 0;
+  font-size: 0.9375rem;
+  font-weight: 600;
 }
 
-.proc-map__unused-item code {
-  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+.proc-map__panel-id {
+  margin: 0.125rem 0 0;
   font-size: 0.6875rem;
+  color: var(--muted);
 }
 
-/* Карточка уже полотна — блоки не сжимаются до нечитаемого, едет прокрутка. Порог в 52rem,
-   а не в 62.5rem полотна: между ними полотно ещё читаемо в масштабе ~0.83, и прокрутка
-   включается только там, где текст правда начал бы мельчать. */
-@container (max-width: 52rem) {
-  .proc-map__canvas {
-    width: 62.5rem;
-    max-width: none;
-    margin: 0;
-  }
-
-  .proc-map__scroll-hint {
-    display: block;
-  }
-
-  .proc-map__tools {
-    align-items: flex-start;
-  }
+.proc-map__panel-id code {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: inherit;
 }
 
-/* Узкая карточка: шапка складывается в столбик, как в остальных карточках страницы. */
+.proc-map__panel-x {
+  padding: 0 0.125rem;
+  font: inherit;
+  font-size: 1.125rem;
+  line-height: 1;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.proc-map__panel-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-height: 0;
+  padding: 0.875rem 1.125rem;
+  overflow: auto;
+}
+
+.proc-map__panel-foot {
+  display: flex;
+  flex: none;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 0.75rem 1.125rem;
+  border-top: 1px solid var(--line);
+}
+
+.proc-map__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.proc-map__field--row {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.proc-map__field-pair {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.proc-map__field-pair > .proc-map__field {
+  flex: 1 1 0;
+}
+
+.proc-map__field--narrow {
+  flex: 0 0 5.5rem;
+}
+
+.proc-map__field-label {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.proc-map__field-hint {
+  margin: 0;
+  font-size: 0.6875rem;
+  color: var(--muted);
+}
+
+/* Строка «на карте» считается по черновику: человек видит, что даст сохранение, ещё до него. */
+.proc-map__panel-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  margin: 0;
+  padding: 0.5rem 0.625rem;
+  font-size: 0.6875rem;
+  color: var(--muted);
+  background-color: var(--band);
+  border-radius: 0.5rem;
+}
+
+.proc-map__seg {
+  display: inline-flex;
+  padding: 2px;
+  background-color: var(--shell);
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+}
+
+.proc-map__seg-btn {
+  padding: 0.25rem 0.5rem;
+  font: inherit;
+  font-size: 0.75rem;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  border-radius: 0.375rem;
+  cursor: pointer;
+}
+
+.proc-map__seg-btn--on {
+  color: var(--ink);
+  background-color: var(--panel);
+  box-shadow: 0 1px 2px rgb(23 23 15 / 8%);
+}
+
+/* Подтверждение перед потерей правок: строка снизу, а не второй диалог поверх карты. */
+.proc-map__confirm {
+  position: fixed;
+  bottom: 1.5rem;
+  left: 50%;
+  z-index: 70;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  font-size: 0.8125rem;
+  background-color: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  box-shadow: 0 12px 32px rgb(23 23 15 / 16%);
+  transform: translateX(-50%);
+}
+
+.proc-map__confirm p {
+  margin: 0;
+}
+
+.proc-map__confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+/* Узкая карточка: шапка и вход складываются в столбик, как в остальных карточках страницы. */
 @container (max-width: 44rem) {
   .proc-map__head {
     flex-direction: column;
@@ -2891,7 +3372,84 @@ body {
     gap: 0.5rem;
   }
 
-  .proc-map__source {
-    text-align: left;
+  .proc-map__tools {
+    align-items: flex-start;
+  }
+
+  .proc-map__teaser {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .proc-map__cta {
+    justify-content: space-between;
+    width: 100%;
+  }
+}
+
+/* Узкий экран: полотно в 1520 px не читается, поэтому окно отдаёт те же ступени списком в
+   порядке проверки — провода при этом скрыты, а порядок остаётся порядком документа. */
+@media (max-width: 44rem) {
+  .proc-map__frame {
+    width: auto !important;
+    height: auto !important;
+    margin: 0;
+  }
+
+  .proc-map__canvas {
+    position: static;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    width: auto !important;
+    height: auto !important;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    transform: none !important;
+  }
+
+  .proc-map__wires {
+    display: none;
+  }
+
+  .proc-map__step {
+    position: static;
+    left: auto;
+    top: auto;
+    width: auto;
+    height: auto;
+  }
+
+  .proc-map__step-rows {
+    border-top: 0;
+  }
+
+  .proc-map__pop {
+    position: static;
+    inset: auto;
+    margin: 0 0.875rem 0.625rem;
+    box-shadow: none;
+  }
+
+  .proc-map__bar {
+    flex-direction: column;
+  }
+
+  .proc-map__bar-tools {
+    flex-wrap: wrap;
+  }
+
+  .proc-map__legend-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .proc-map__panel {
+    position: fixed;
+    inset: 0;
+    z-index: 70;
+    width: auto;
+    border-left: 0;
   }
 }
