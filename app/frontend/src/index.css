@@ -3453,3 +3453,169 @@ body {
     border-left: 0;
   }
 }
+
+/* ── Агенты: таблица раздела и владелец ступени на вкладке «Процесс» ───────── */
+
+.table__head--agent,
+.row--agent {
+  grid-template-columns: minmax(0, 2.4fr) 7rem minmax(0, 1.6fr) 10.5rem;
+}
+
+.row--agent.row--off {
+  background-color: var(--band);
+}
+
+.row__code {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 0.75rem;
+}
+
+.agent-status {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--ink);
+}
+
+.agent-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background-color: var(--muted-2);
+}
+
+.agent-dot--busy {
+  background-color: var(--accent, #2f6fed);
+}
+
+.agent-dot--idle {
+  background-color: var(--ok, #2f9e44);
+}
+
+.agent-off {
+  color: var(--muted);
+}
+
+.checkbox--field {
+  align-items: flex-start;
+}
+
+.checkbox--field .field__hint {
+  display: block;
+  margin-top: 0.125rem;
+}
+
+.proc-agent {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  color: var(--ink);
+}
+
+.proc-agent--conflict {
+  color: var(--danger, #c92a2a);
+  font-weight: 600;
+}
+
+/* Ступень с входящими тегами двух агентов: сервер такую не сохранит, и экран обязан
+   подсветить это до нажатия «Сохранить», а не после отказа. */
+.proc-row--conflict {
+  background-color: color-mix(in srgb, var(--danger, #c92a2a) 8%, transparent);
+}
+
+.proc-tags__grid {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+.proc-tags__row {
+  display: grid;
+  grid-template-columns: 6rem minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0.5rem 0.75rem;
+  align-items: start;
+  padding: 0.625rem 0;
+  border-top: 1px solid var(--border);
+}
+
+.proc-tags__row:first-child {
+  border-top: 0;
+}
+
+.proc-tags__row .field {
+  margin: 0;
+}
+
+.proc-tags__row .field__label {
+  font-size: 0.6875rem;
+}
+
+.proc-tags__dispatcher {
+  display: none;
+}
+
+@media (min-width: 901px) {
+  .proc-table th:nth-child(1) { width: 6%; }
+  .proc-table th:nth-child(2) { width: 13%; }
+  .proc-table th:nth-child(3) { width: 8%; }
+  .proc-table th:nth-child(4) { width: 9%; }
+  .proc-table th:nth-child(5) { width: 9%; }
+  .proc-table th:nth-child(6) { width: 9%; }
+  .proc-table th:nth-child(7) { width: 9%; }
+  .proc-table th:nth-child(8) { width: 11%; }
+  .proc-table th:nth-child(9) { width: 10%; }
+  .proc-table th:nth-child(10) { width: 8%; }
+  .proc-table th:nth-child(11) { width: 8%; }
+}
+
+@media (max-width: 900px) {
+  .table__head--agent,
+  .row--agent {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .proc-table .proc-row {
+    grid-template-areas:
+      'title title'
+      'priority kind'
+      'when when'
+      'unless unless'
+      'put put'
+      'drop drop'
+      'guard role'
+      'agent agent'
+      'enabled enabled';
+  }
+
+  .proc-col--agent {
+    grid-area: agent;
+  }
+
+  .proc-tags__row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 600px) {
+  .proc-table .proc-row {
+    grid-template-areas:
+      'title'
+      'priority'
+      'kind'
+      'when'
+      'unless'
+      'put'
+      'drop'
+      'guard'
+      'role'
+      'agent'
+      'enabled';
+  }
+
+  .proc-tags__row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
