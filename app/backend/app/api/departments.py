@@ -62,6 +62,7 @@ from app.api.registry import (
     publish_registry,
 )
 from app.db import get_db
+from app.models.agent import Agent
 from app.models.department import DEFAULT_MAX_REWORK, Department
 from app.models.department_kind import DepartmentKind
 from app.models.role import Role
@@ -354,6 +355,16 @@ def _role_codes(db: Session) -> list[str]:
     return [code for code in db.scalars(statement) if code]
 
 
+def _agent_codes(db: Session) -> list[str]:
+    """Коды живых агентов: ими ограничен `agent` тега процесса.
+
+    Тег с удалённым или несуществующим агентом не принимается: ступень молча ждала бы
+    гостя, которого нет. Порядок — по `id`, как у `GET /api/agents`.
+    """
+    statement = select(Agent.code).where(Agent.deleted_at.is_(None)).order_by(Agent.id)
+    return [code for code in db.scalars(statement) if code]
+
+
 @router.get(
     "",
     response_model=list[DepartmentResponse],
@@ -562,7 +573,7 @@ def save_process(
     """
     department = _get_alive_department(db, department_id)
     try:
-        document = validate_process_document(payload, _role_codes(db))
+        document = validate_process_document(payload, _role_codes(db), _agent_codes(db))
     except ProcessError as error:
         raise _reject(str(error)) from None
     department.process = document

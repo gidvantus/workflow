@@ -385,6 +385,53 @@ const again = run('--write')
 check('повторный запуск — успех', again.status, 0)
 includes('и «уже вторая версия»', again.stdout, 'уже вторая версия')
 
+console.log('\n=== агенты на верхнем уровне документа ===')
+const withAgents = good()
+withAgents.agents = [
+  {
+    code: 'verify-ci',
+    title: 'Verify CI',
+    runtime: 'http',
+    enabled: false,
+    status: { state: 'busy', issue_number: 81, seen_at: '2026-11-24T18:00:00Z' },
+  },
+  { code: 'opencode', title: 'OpenCode', runtime: 'opencode', enabled: true },
+  { code: '', title: 'Без кода' },
+]
+const parsedAgents = registry.parseRegistry(withAgents)
+check(
+  'агенты нормализованы, отсортированы по code и без пустых',
+  parsedAgents.document.agents,
+  [
+    {
+      code: 'opencode',
+      title: 'OpenCode',
+      runtime: 'opencode',
+      enabled: true,
+      status: { state: null, issue_number: null, seen_at: null },
+    },
+    {
+      code: 'verify-ci',
+      title: 'Verify CI',
+      runtime: 'http',
+      enabled: false,
+      status: { state: 'busy', issue_number: 81, seen_at: '2026-11-24T18:00:00Z' },
+    },
+  ],
+)
+check('старый документ без ключа — агентов нет', registry.parseRegistry(good()).document.agents, [])
+const projectAgents = registry.projectFields(parsedAgents.document.projects[0], parsedAgents.document.agents)
+check(
+  'projectFields пробрасывает агентов документа в проект',
+  projectAgents.agents.map((agent) => agent.code),
+  ['opencode', 'verify-ci'],
+)
+check(
+  'overlay не теряет агентов при склейке с кешем',
+  registry.overlay(parsedAgents.document, good()).document.agents.length,
+  2,
+)
+
 fs.rmSync(sandbox, { recursive: true, force: true })
 console.log('')
 console.log(failures === 0 ? 'ВСЕ ПРОВЕРКИ ПРОШЛИ' : 'ПРОВАЛЕНО ПРОВЕРОК: ' + failures)

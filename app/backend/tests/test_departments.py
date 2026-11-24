@@ -1222,7 +1222,7 @@ def test_delete_publishes_registry_revision(
     assert response.status_code == status.HTTP_204_NO_CONTENT
     rows = _revisions(session_factory)
     assert [row.revision for row in rows] == [1, 2]
-    assert json.loads(rows[-1].body) == {"version": 2, "projects": []}
+    assert json.loads(rows[-1].body) == {"version": 2, "agents": [], "projects": []}
 
 
 @pytest.mark.parametrize(

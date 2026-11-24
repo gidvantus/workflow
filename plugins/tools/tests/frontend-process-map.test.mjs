@@ -178,14 +178,22 @@ function stepCalls(source) {
 
 function readDefaults() {
   const stepsBlock = python.slice(python.indexOf('DEFAULT_STEPS'), python.indexOf('def default_process'))
-  const labelsBlock = python.slice(python.indexOf('DEFAULT_LABELS'), python.indexOf('ROLE_BY_AREA'))
+  const keysBlock = python.slice(python.indexOf('LABEL_KEYS:'), python.indexOf('DEFAULT_LABELS'))
+  const labelsBlock = python.slice(python.indexOf('DEFAULT_LABELS'), python.indexOf('DEFAULT_LABEL_TITLES'))
+  const titlesBlock = python.slice(python.indexOf('DEFAULT_LABEL_TITLES'), python.indexOf('GUARDS:'))
   const guardsBlock = python.slice(python.indexOf('GUARDS:'), python.indexOf('GUARD_IDS'))
   const version = Number(/PROCESS_VERSION\s*=\s*(\d+)/.exec(python)[1])
 
+  const keys = [...keysBlock.matchAll(/"([A-Za-z]+)"/g)].map((match) => match[1])
   const labels = {}
   for (const match of labelsBlock.matchAll(/"([A-Za-z]+)":\s*"([^"]+)"/g)) {
     labels[match[1]] = match[2]
   }
+  const titles = {}
+  for (const match of titlesBlock.matchAll(/"([A-Za-z]+)":\s*"([^"]+)"/g)) {
+    titles[match[1]] = match[2]
+  }
+  const tags = keys.map((key) => ({ key, name: labels[key], title: titles[key], agent: null }))
 
   const guards = [...guardsBlock.matchAll(/\(\s*"([A-Za-z-]+)",\s*"([^"]+)"\s*\)/g)].map((match) => ({
     id: match[1],
@@ -220,15 +228,17 @@ function readDefaults() {
     }
   })
 
-  return { document: { version, labels, steps }, guards }
-}
+  return { document: { version, tags, steps }, guards }}
 
 const { document: defaults, guards: defaultGuards } = readDefaults()
 
+/** Имя тега на GitHub по ключу — то, что рисует карта. */
+const tagName = (key) => defaults.tags.find((tag) => tag.key === key)?.name ?? ''
+
 // Шапка разбора: если разбор исходника сломался, дальше проверять нечего.
-check('документ умолчаний: версия формата', defaults.version, 1)
+check('документ умолчаний: версия формата', defaults.version, 2)
 check('документ умолчаний: ступеней', defaults.steps.length, 13)
-check('документ умолчаний: ключей меток', Object.keys(defaults.labels).length, 14)
+check('документ умолчаний: ключей тегов', defaults.tags.length, 14)
 check('документ умолчаний: стражей', defaultGuards.length, 7)
 check(
   'документ умолчаний: порядок ступеней по priority',
@@ -320,12 +330,12 @@ const mockupNode = graph.steps[0]
 check(
   'умолчания: «вход» первой ступени',
   mockupNode.whenLabels.map((item) => [item.key, item.name, item.fromStep]),
-  [['mockup', defaults.labels.mockup, false]],
+  [['mockup', tagName('mockup'), false]],
 )
 check(
   'умолчания: «выход» первой ступени',
   mockupNode.putLabels.map((item) => [item.key, item.name, item.fromStep]),
-  [['progress', defaults.labels.progress, true]],
+  [['progress', tagName('progress'), true]],
 )
 check(
   'умолчания: «снимает» ступени передачи фронтенду',
@@ -387,7 +397,7 @@ check(
 )
 check(
   'умолчания: подпись провода — имя метки из документа',
-  graph.wires.every((wire) => wire.labelName === defaults.labels[wire.key]),
+  graph.wires.every((wire) => wire.labelName === tagName(wire.key)),
   true,
 )
 check(
@@ -460,7 +470,7 @@ check('все ступени выключены: ступеней', nothingEnabl
 check('все ступени выключены: проводов', nothingEnabled.wires.length, 0)
 check('все ступени выключены: все метки вне схемы', nothingEnabled.unused.length, 14)
 
-const noSteps = buildProcessGraph({ version: 1, labels: defaults.labels, steps: [] }, defaultGuards)
+const noSteps = buildProcessGraph({ version: 2, tags: defaults.tags, steps: [] }, defaultGuards)
 check('пустой документ: ступеней', noSteps.steps.length, 0)
 check('пустой документ: проводов', noSteps.wires.length, 0)
 
@@ -630,8 +640,8 @@ const backwardBase = {
   enabled: true,
 }
 const backwardDocument = {
-  version: 1,
-  labels: defaults.labels,
+  version: 2,
+  tags: defaults.tags,
   steps: [
     { ...backwardBase, id: 'early', title: 'Ранняя', when: ['progress'], priority: 10 },
     { ...backwardBase, id: 'fill-a', title: 'Наполнение А', priority: 20 },

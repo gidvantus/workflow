@@ -58,6 +58,7 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
 from app.db import get_db
+from app.models.agent import Agent
 from app.models.department import Department
 from app.models.project import Project
 from app.models.registry import RegistryDocument
@@ -503,8 +504,51 @@ def _department_row(department: Department) -> dict[str, Any]:
     return row
 
 
+def _agent_row(agent: Agent) -> dict[str, Any]:
+    """Агент в документе реестра: справочник плюс последний heartbeat.
+
+    `seen_at` — строка ISO или `null`: документ уходит в JSON-файл, и `datetime` там
+    пришлось бы сериализовать уже в плагине. Форма ровно как в контракте:
+    `{code, title, runtime, enabled, status: {state, issue_number, seen_at}}`.
+    """
+    return {
+        "code": agent.code,
+        "title": agent.title,
+        "runtime": agent.runtime,
+        "enabled": agent.enabled,
+        "status": {
+            "state": agent.last_state,
+            "issue_number": agent.last_issue,
+            "seen_at": agent.last_seen_at.isoformat() if agent.last_seen_at is not None else None,
+        },
+    }
+
+
+def _agents(db: Session) -> list[dict[str, Any]]:
+    """Живые агенты в порядке `code`: ключ `agents` документа реестра."""
+    rows = db.scalars(select(Agent).where(Agent.deleted_at.is_(None)).order_by(Agent.code)).all()
+    return [_agent_row(agent) for agent in rows]
+
+
+def _with_live_agents(db: Session, document: dict[str, Any]) -> dict[str, Any]:
+    """Документ ревизии плюс **текущий** справочник агентов.
+
+    Ревизия хранит состояние на момент записи, а heartbeat агента — живое: он меняется
+    между ревизиями и новой ревизии не создаёт (иначе каждый ход диспетчера писал бы
+    строку истории). Поэтому `GET /api/registry` подставляет актуальный `agents` в
+    документ последней ревизии. Ключ есть всегда, даже у старых ревизий без него.
+    """
+    return {**document, "agents": _agents(db)}
+
+
 def build_document(db: Session) -> dict[str, Any]:
-    """Собрать документ v2 из живых строк `projects` и `departments`.
+    """Собрать документ v2 из живых строк `projects`, `departments` и `agents`.
+
+    **`agents` на верхнем уровне.** Ключ отдаётся всегда, даже пустым массивом —
+    «агентов нет». Агент не принадлежит отделу: он стоит на теге внутри `process`
+    каждого отдела, а справочник общий на приложение, поэтому он живёт сверху рядом с
+    `projects`. Порядок — по `code`, чтобы диффы ревизий не зависели от порядка вставки
+    строк. Состояние — последний heartbeat агента; `state: null` — «не сообщал».
 
     **`id` проекта.** Если у проекта задан `code` (`workflow`, `CRMDormitory`), в документ
     идёт он: `id` в реестре должен быть стабильным человеческим слагом, потому что файл
@@ -526,6 +570,7 @@ def build_document(db: Session) -> dict[str, Any]:
     через веб нельзя, поэтому публикация в `department_kinds.py` не нужна. Появится
     ручка записи вида — понадобится и публикация, как у отделов и проектов.
     """
+    agents = db.scalars(select(Agent).where(Agent.deleted_at.is_(None)).order_by(Agent.code)).all()
     projects = db.scalars(
         select(Project).where(Project.deleted_at.is_(None)).order_by(Project.id)
     ).all()
@@ -542,7 +587,11 @@ def build_document(db: Session) -> dict[str, Any]:
                 continue
             departments_by_project.setdefault(department.project_id, []).append(department)
 
-    document: dict[str, Any] = {"version": SUPPORTED_VERSION, "projects": []}
+    document: dict[str, Any] = {
+        "version": SUPPORTED_VERSION,
+        "agents": [_agent_row(agent) for agent in agents],
+        "projects": [],
+    }
     for project in projects:
         departments = departments_by_project.get(project.id, [])
         if not departments:
@@ -571,8 +620,13 @@ def build_document(db: Session) -> dict[str, Any]:
     },
 )
 def read_registry(db: DbSession) -> dict[str, Any]:
-    """Документ v2 последней ревизии — ровно в том виде, в каком он сохранён."""
-    return _document_of(_latest(db))
+    """Документ v2 последней ревизии с **живым** справочником агентов.
+
+    Остальное возвращается ровно как сохранено; `agents` — единственный ключ, который
+    подставляется из базы: heartbeat меняется между ревизиями, и держать его в истории
+    ревизий значило бы писать строку на каждый ход диспетчера.
+    """
+    return _with_live_agents(db, _document_of(_latest(db)))
 
 
 @router.put(

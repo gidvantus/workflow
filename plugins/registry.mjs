@@ -75,6 +75,39 @@ export function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
+/**
+ * Агенты документа верхнего уровня: `[{code, title, runtime, enabled, status}]`.
+ *
+ * Ключ `agents` появился в версии 2 вместе с тегами: агент стоит на теге отдела, а
+ * справочник общий, поэтому живёт рядом с `projects`. Старый кеш без ключа читается как
+ * «агентов нет»: ступень, у которой тег называет код, тогда остаётся за диспетчером, а не
+ * ждёт несуществующего гостя. Негодные записи отбрасываются, а не роняют документ: без
+ * агента конвейер работает, без проектов — нет.
+ *
+ * @param {unknown} raw
+ * @returns {Array<{code: string, title: string, runtime: string, enabled: boolean, status: {state: string|null, issue_number: number|null, seen_at: string|null}}>}
+ */
+export function agentsOf(raw) {
+  if (!Array.isArray(raw)) return []
+  const agents = []
+  for (const entry of raw) {
+    if (!isObject(entry) || !nonEmptyString(entry.code)) continue
+    const status = isObject(entry.status) ? entry.status : {}
+    agents.push({
+      code: entry.code.trim(),
+      title: nonEmptyString(entry.title) ? entry.title.trim() : entry.code.trim(),
+      runtime: nonEmptyString(entry.runtime) ? entry.runtime.trim() : 'http',
+      enabled: entry.enabled !== false,
+      status: {
+        state: status.state === 'idle' || status.state === 'busy' ? status.state : null,
+        issue_number: Number.isInteger(status.issue_number) ? status.issue_number : null,
+        seen_at: nonEmptyString(status.seen_at) ? status.seen_at : null,
+      },
+    })
+  }
+  return agents.sort((left, right) => (left.code < right.code ? -1 : left.code > right.code ? 1 : 0))
+}
+
 // Копия документа: реестр — обычный JSON, а склейка не должна править ни
 // прочитанный файл, ни ответ API.
 function clone(value) {
@@ -185,6 +218,10 @@ export function parseRegistry(raw, at = 'projects.json') {
   }
 
   const document = Object.assign(clone(raw), { version: REGISTRY_VERSION, projects })
+  // Справочник агентов живёт на верхнем уровне документа и переживает overlay-склейку:
+  // он есть в документе API, поэтому локальные ключи его не вытесняют. Старый кеш без
+  // ключа читается как «агентов нет».
+  document.agents = agentsOf(raw.agents)
   if (!nonEmptyString(document.default)) delete document.default
   else document.default = document.default.trim()
 
@@ -305,7 +342,7 @@ export const DEFAULT_API_PORT = 8001
  * Расписание, лимиты и `enabled` сюда не входят: их разбирает диспетчер, потому
  * что «ЧЧ:ММ» → минуты и запасные значения из общего конфига — его дело.
  */
-export function projectFields(project) {
+export function projectFields(project, documentAgents) {
   const department = developmentOf(project).department || {}
   const workspace = String(department.workspace || '')
   return {
@@ -331,6 +368,10 @@ export function projectFields(project) {
     // исполняются умолчания (`plugins/process.mjs`). Проверка документа — дело диспетчера:
     // реестр отдаёт то, что лежит в базе.
     process: isObject(department.process) ? department.process : undefined,
+    // Справочник агентов — верхний уровень документа, а не отдела: агент стоит на теге
+    // внутри процесса, но сам справочник общий. Копия на проект нужна, чтобы матчер
+    // ступеней видел включённость агента и последний heartbeat.
+    agents: Array.isArray(documentAgents) ? clone(documentAgents) : [],
   }
 }
 

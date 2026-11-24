@@ -15,13 +15,14 @@
  *   «только в „кроме“»;
  * - ключ, не встречающийся нигде, — «Вне схемы» с причиной «не используется».
  *
- * Подписи меток карта берёт из `document.labels`, подписи стражей — из каталога `guards`
- * того же `GET`, подписи ролей-резолверов и видов ступеней живут здесь и импортируются
- * экраном «Процесс»: двух копий этих подписей в продукте нет.
+ * Подписи меток карта берёт из `document.tags` (`name` — метка на GitHub), подписи стражей —
+ * из каталога `guards` того же `GET`, подписи ролей-резолверов и видов ступеней живут
+ * здесь и импортируются экраном «Процесс»: двух копий этих подписей в продукте нет.
  */
 
 import {
   PROCESS_LABEL_KEYS,
+  tagNameOf,
   type ProcessDocument,
   type ProcessGuard,
   type ProcessLabelKey,
@@ -71,7 +72,7 @@ export const UNUSED_REASON_TITLES: Record<ProcessGraphUnusedReason, string> = {
 /** Метка в узле ступени: ключ контракта, имя лейбла из документа и откуда метка берётся. */
 export type ProcessGraphLabel = {
   key: ProcessLabelKey;
-  /** Имя лейбла из `document.labels`; пустая строка — имени в документе нет. */
+  /** Имя тега из `document.tags`; пустая строка — имени в документе нет. */
   name: string;
   /**
    * `true` — метку ставит включённая ступень, то есть на карте у неё есть источник;
@@ -190,7 +191,7 @@ export function buildProcessGraph(
 
   const label = (key: ProcessLabelKey): ProcessGraphLabel => ({
     key,
-    name: document.labels[key] ?? '',
+    name: tagNameOf(document, key),
     fromStep: putByStep.has(key),
   });
 
@@ -228,7 +229,7 @@ export function buildProcessGraph(
         wires.push({
           id,
           key,
-          labelName: document.labels[key] ?? '',
+          labelName: tagNameOf(document, key),
           from: source.id,
           to: target.id,
           fromTitle: source.title,
@@ -282,7 +283,7 @@ export function buildProcessGraph(
       const reason: ProcessGraphUnusedReason = unlessOnly.has(key) ? 'unless' : 'unused';
       return {
         key,
-        name: document.labels[key] ?? '',
+        name: tagNameOf(document, key),
         reason,
         reasonTitle: UNUSED_REASON_TITLES[reason],
       };

@@ -16,20 +16,26 @@
 
 import { useCallback, useState } from 'react';
 
+import AgentsPage from './components/AgentsPage';
 import ProjectsPage from './components/ProjectsPage';
 import RolesPage from './components/RolesPage';
 
 /** Раздел оболочки; порядок в меню совпадает с порядком объявления. */
-type Section = 'projects' | 'roles';
+type Section = 'projects' | 'roles' | 'agents';
 
 export default function App(): JSX.Element {
   const [section, setSection] = useState<Section>('projects');
   const [projectsCount, setProjectsCount] = useState<number | null>(null);
+  const [agentsCount, setAgentsCount] = useState<number | null>(null);
 
   // Обработчик стабилен: раздел зовёт его из эффекта, и новая ссылка на каждой
   // отрисовке запускала бы эффект заново.
   const handleProjectsCount = useCallback((count: number | null): void => {
     setProjectsCount(count);
+  }, []);
+
+  const handleAgentsCount = useCallback((count: number | null): void => {
+    setAgentsCount(count);
   }, []);
 
   return (
@@ -105,6 +111,31 @@ export default function App(): JSX.Element {
             </svg>
             Роли
           </a>
+          <a
+            className="nav__item"
+            href="#"
+            aria-current={section === 'agents' ? 'page' : undefined}
+            data-testid="nav-agents"
+            onClick={(event) => {
+              event.preventDefault();
+              setSection('agents');
+            }}
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.4"
+              aria-hidden="true"
+            >
+              <rect x="2.5" y="3.5" width="11" height="8" rx="1.5" />
+              <path d="M5.5 6.5h5M5.5 9h3M8 2v1.5M8 11.5V13" />
+            </svg>
+            Агенты
+            {agentsCount !== null && <span className="nav__count">{agentsCount}</span>}
+          </a>
         </nav>
       </aside>
 
@@ -114,6 +145,9 @@ export default function App(): JSX.Element {
         </div>
         <div className="view" hidden={section !== 'roles'}>
           <RolesPage />
+        </div>
+        <div className="view" hidden={section !== 'agents'}>
+          <AgentsPage onCountChange={handleAgentsCount} />
         </div>
 
         <footer className="footbar">
