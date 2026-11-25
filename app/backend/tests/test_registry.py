@@ -314,7 +314,10 @@ def test_get_returns_saved_document_unchanged(api_client: TestClient) -> None:
     response = api_client.get("/api/registry", headers=HEADERS)
 
     assert response.status_code == 200
-    assert response.json() == document
+    body = response.json()
+    # `agents` — живой ключ, которого в присланном теле нет: документ остаётся как прислан.
+    body.pop("agents", None)
+    assert body == document
 
 
 def test_revisions_are_append_only_and_get_returns_latest(
@@ -406,6 +409,7 @@ def test_rebuild_builds_document_from_database(
     assert body["revision"] == 1
     document = body["document"]
     assert document["version"] == 2
+    assert document["agents"] == []
     assert "default" not in document
     first, second = document["projects"]
     # `id` — строка из `projects.id`, `title` — название проекта.
@@ -490,7 +494,10 @@ def test_stored_document_keeps_non_boolean_enabled(
     document = _with_department(enabled="да")
 
     assert _put(api_client, document).status_code == 200
-    assert api_client.get("/api/registry", headers=HEADERS).json() == document
+    body = api_client.get("/api/registry", headers=HEADERS).json()
+    # `agents` — живой ключ, которого в присланном теле нет: остальное должно совпасть.
+    body.pop("agents", None)
+    assert body == document
 
 
 def test_rebuild_bot_requires_both_fields(
@@ -717,21 +724,25 @@ def test_edit_publishes_first_revision(
     assert [row.revision for row in rows] == [1]
     assert rows[0].note == api.NOTE_EDIT
     document = api_client.get("/api/registry", headers=HEADERS).json()
-    assert document["projects"] == [
-        {
-            "id": str(project["id"]),
-            "title": project["name"],
-            "departments": [
-                {
-                    "kind": "development",
-                    "title": department["name"],
-                    "maxRework": department["max_rework"],
-                    "enabled": True,
-                    "process": None,
-                }
-            ],
-        }
-    ]
+    assert document == {
+        "version": 2,
+        "agents": [],
+        "projects": [
+            {
+                "id": str(project["id"]),
+                "title": project["name"],
+                "departments": [
+                    {
+                        "kind": "development",
+                        "title": department["name"],
+                        "maxRework": department["max_rework"],
+                        "enabled": True,
+                        "process": None,
+                    }
+                ],
+            }
+        ],
+    }
     with session_factory() as session:
         assert document == api.build_document(session)
 
@@ -850,9 +861,10 @@ def test_edit_that_empties_the_registry_publishes_empty_document(
     response = api_client.delete(f"/api/departments/{department['id']}")
 
     assert response.status_code == 204
-    assert _published(session_factory) == {"version": 2, "projects": []}
+    assert _published(session_factory) == {"version": 2, "agents": [], "projects": []}
     assert api_client.get("/api/registry", headers=HEADERS).json() == {
         "version": 2,
+        "agents": [],
         "projects": [],
     }
 

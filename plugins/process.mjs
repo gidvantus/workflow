@@ -5,10 +5,15 @@
 // GitHub. Вторая — источник правды: таблица ступеней и имена меток живут в одном месте,
 // а диспетчер только исполняет то, что вернул матчер.
 //
-// Документ процесса: `{version, labels, steps}`. Ступень: `{id, title, kind, role, when,
-// unless, put, drop, guard, priority, enabled}`. Метка в ступени — **ключ** из
-// `PROCESS_LABEL_KEYS`, а имя метки на GitHub — значение в `labels`. Поэтому
-// переименование метки в вебе не меняет таблицу ступеней.
+// Документ процесса: `{version, tags, steps}`. Тег: `{key, name, title, agent}`. Ступень:
+// `{id, title, kind, role, when, unless, put, drop, guard, priority, enabled}`. Тег в
+// ступени — **ключ** из `PROCESS_LABEL_KEYS`, имя тега на GitHub — `tag.name`, подпись для
+// глаза — `tag.title`, агент ступени — `tag.agent`. Поэтому переименование тега в вебе не
+// меняет таблицу ступеней.
+//
+// Версия 2 пришла на смену `labels`: диспетчер обязан читать и версию 1 (стенды с
+// сохранённым старым процессом), но внутренняя форма у обеих одна — `tags`. Версия 1
+// переводится так: имя из `labels`, подпись — ключ, агент — `null`.
 //
 // Копия таблицы умолчаний есть и в Python (`app/backend/app/process_defaults.py`):
 // `api` собирается из `app/backend`, диспетчер — из `plugins`, и файл репозитория не
@@ -18,8 +23,14 @@
 
 import crypto from 'node:crypto'
 
-/** Версия формата. Единственная поддерживаемая: вторая — правка постановки. */
-export const PROCESS_VERSION = 1
+/** Версия формата, которую пишет веб. Диспетчер читает ещё и версию 1. */
+export const PROCESS_VERSION = 2
+
+/** Версия 1 с `labels`: только для чтения стендов, веб её больше не сохраняет. */
+export const LEGACY_PROCESS_VERSION = 1
+
+/** Код диспетчера: тег, отданный ему, владельцем ступени не считается. */
+export const DISPATCHER_AGENT_CODE = 'dsh'
 
 /** Ключи меток: порядок фиксирован и совпадает с порядком блока имён на экране. */
 export const PROCESS_LABEL_KEYS = [
@@ -59,6 +70,30 @@ export const DEFAULT_PROCESS_LABELS = {
   areaFrontend: 'area:frontend',
   areaFullstack: 'area:fullstack',
 }
+
+/**
+ * Подписи тегов для глаза: приходят из документа процесса, а не из констант фронта.
+ * Здесь — последний источник для стенда без сохранённого процесса.
+ */
+export const DEFAULT_PROCESS_LABEL_TITLES = {
+  dev: 'К разработке',
+  frontend: 'Фронтенд',
+  areaBackend: 'Половина: бэкенд',
+  areaFrontend: 'Половина: фронтенд',
+  areaFullstack: 'Половина: полный стек',
+  phaseFrontend: 'Фаза фронтенда',
+  mockup: 'Нужен макет',
+  mockupsReady: 'Макет готов',
+  progress: 'В работе',
+  review: 'На код-ревью',
+  test: 'На тестирование',
+  ok: 'Проверено',
+  failed: 'Тест не прошёл',
+  merged: 'Слито',
+}
+
+/** Предел подписи тега: тот же, что у проверки веба. */
+export const TAG_TITLE_MAX_LENGTH = 100
 
 /**
  * Каталог стражей: id и заголовок. Страж — код, а не данные: документ выбирает страж по
@@ -225,7 +260,12 @@ export const DEFAULT_PROCESS_STEPS = [
 export function defaultProcess() {
   return {
     version: PROCESS_VERSION,
-    labels: { ...DEFAULT_PROCESS_LABELS },
+    tags: PROCESS_LABEL_KEYS.map((key) => ({
+      key,
+      name: DEFAULT_PROCESS_LABELS[key],
+      title: DEFAULT_PROCESS_LABEL_TITLES[key],
+      agent: null,
+    })),
     steps: DEFAULT_PROCESS_STEPS.map((row) => ({
       ...row,
       when: [...row.when],
@@ -295,7 +335,102 @@ function priorityOf(raw, stepId, problems) {
 }
 
 /**
- * Проверить документ процесса и вернуть его каноническим.
+ * Теги документа в одной внутренней форме — для обеих версий.
+ *
+ * Версия 2: `tags` массивом, каждый `{key, name, title, agent}`. Версия 1: `labels`
+ * объектом, тег из него получает `title = key` и `agent = null`. Возвращает `null`,
+ * если набор неполный или чужой: подставлять умолчания вместо опечатки значит молча
+ * работать по другим тегам, чем человек сохранил.
+ */
+function tagsOfDocument(value, problems) {
+  if (value.version === LEGACY_PROCESS_VERSION) {
+    if (!isObject(value.labels)) {
+      problems.push('Нужен объект процесса с полями version, labels, steps')
+      return null
+    }
+    for (const key of Object.keys(value.labels)) {
+      if (!PROCESS_LABEL_KEYS.includes(key)) {
+        problems.push(`Неизвестный ключ тега: «${key}»`)
+      }
+    }
+    const tags = []
+    for (const key of PROCESS_LABEL_KEYS) {
+      const name = value.labels[key]
+      if (!isText(name)) {
+        problems.push(`Имя тега пустое: «${key}»`)
+        continue
+      }
+      tags.push({ key, name: name.trim(), title: key, agent: null })
+    }
+    return tags.length === PROCESS_LABEL_KEYS.length ? tags : null
+  }
+
+  if (!Array.isArray(value.tags)) {
+    problems.push('Нужен объект процесса с полями version, tags, steps')
+    return null
+  }
+  const byKey = new Map()
+  for (const entry of value.tags) {
+    if (!isObject(entry) || !isText(entry.key)) {
+      problems.push('Нужен объект процесса с полями version, tags, steps')
+      continue
+    }
+    const key = entry.key.trim()
+    if (!PROCESS_LABEL_KEYS.includes(key)) {
+      problems.push(`Неизвестный ключ тега: «${key}»`)
+      continue
+    }
+    if (byKey.has(key)) {
+      problems.push(`Ключ тега повторяется: «${key}»`)
+      continue
+    }
+    byKey.set(key, entry)
+  }
+
+  const tags = []
+  const names = new Set()
+  for (const key of PROCESS_LABEL_KEYS) {
+    const entry = byKey.get(key)
+    if (!entry) {
+      problems.push(`Имя тега пустое: «${key}»`)
+      continue
+    }
+    const name = entry.name
+    if (!isText(name)) {
+      problems.push(`Имя тега пустое: «${key}»`)
+      continue
+    }
+    const title = entry.title
+    if (!isText(title)) {
+      problems.push(`Подпись тега пустая: «${key}»`)
+      continue
+    }
+    if (title.trim().length > TAG_TITLE_MAX_LENGTH) {
+      problems.push(`Подпись тега длиннее 100 символов: «${key}»`)
+      continue
+    }
+    const agent = entry.agent === undefined ? null : entry.agent
+    if (agent !== null && !isText(agent)) {
+      problems.push(`Агент тега «${key}» задан не кодом`)
+      continue
+    }
+    const trimmed = name.trim()
+    if (names.has(trimmed)) {
+      problems.push(`Имена тегов повторяются: «${trimmed}»`)
+      continue
+    }
+    names.add(trimmed)
+    tags.push({ key, name: trimmed, title: title.trim(), agent: agent === null ? null : agent.trim() })
+  }
+  return tags.length === PROCESS_LABEL_KEYS.length ? tags : null
+}
+
+/**
+ * Проверить документ процесса и вернуть его каноническим в версии 2.
+ *
+ * Принимаются обе версии: стенды с сохранённым процессом версии 1 обязаны продолжать
+ * работать после выкатки. Версия 1 переводится в `tags` (`name` из `labels`,
+ * `title = key`, `agent = null`) — веб пишет только версию 2.
  *
  * `options.roles` — коды ролей, которые хост умеет поднимать (`role-permissions.mjs`), плюс
  * резолверы. Роль, которой нет ни среди пресетов, ни среди резолверов, — валидна на вебе
@@ -304,6 +439,10 @@ function priorityOf(raw, stepId, problems) {
  * Каталог необязателен: без него связи «роль → пресет» проверить нечем, и проверка роли не
  * выполняется — так вызывают чистые тесты документа.
  *
+ * Живость агентов здесь не проверяется: справочник приезжает отдельным ключом реестра
+ * (`agents`), а процесс лишь называет код. Неизвестный код считается тегом без агента —
+ * ступень остаётся за диспетчером, а не ждёт несуществующего гостя молча.
+ *
  * @param {unknown} value документ из веба
  * @param {{roles?: string[]}} [options]
  * @returns {{document: object|null, problems: string[]}}
@@ -311,31 +450,16 @@ function priorityOf(raw, stepId, problems) {
 export function validateProcess(value, options = {}) {
   const problems = []
   if (!isObject(value)) {
-    return { document: null, problems: ['Нужен объект процесса с полями version, labels, steps'] }
+    return { document: null, problems: ['Нужен объект процесса с полями version, tags, steps'] }
   }
-  if (value.version !== PROCESS_VERSION) {
-    return { document: null, problems: ['Поддерживается только версия процесса 1'] }
+  if (value.version !== PROCESS_VERSION && value.version !== LEGACY_PROCESS_VERSION) {
+    return { document: null, problems: ['Поддерживается только версия процесса 2'] }
   }
-  if (!isObject(value.labels) || !Array.isArray(value.steps)) {
-    return { document: null, problems: ['Нужен объект процесса с полями version, labels, steps'] }
+  if (!Array.isArray(value.steps)) {
+    return { document: null, problems: ['Нужен объект процесса с полями version, tags, steps'] }
   }
-  const labels = {}
-  for (const key of Object.keys(value.labels)) {
-    if (!PROCESS_LABEL_KEYS.includes(key)) {
-      problems.push(`Неизвестный ключ метки: «${key}»`)
-    }
-  }
-  for (const key of PROCESS_LABEL_KEYS) {
-    const name = value.labels[key]
-    if (!isText(name)) {
-      problems.push(`Имя метки пустое: «${key}»`)
-      continue
-    }
-    labels[key] = name.trim()
-  }
-  if (problems.length > 0) {
-    // Неполный или чужой набор имён — документ целиком негоден: подставлять умолчания
-    // вместо опечатки значит молча работать по другим меткам, чем человек сохранил.
+  const tags = tagsOfDocument(value, problems)
+  if (tags === null || problems.length > 0) {
     return { document: null, problems }
   }
   // Без каталога ролей проверять нечем: `null` здесь значит «каталог не передан».
@@ -344,13 +468,13 @@ export function validateProcess(value, options = {}) {
   const steps = []
   for (const raw of value.steps) {
     if (!isObject(raw) || !isText(raw.id)) {
-      problems.push('Нужен объект процесса с полями version, labels, steps')
+      problems.push('Нужен объект процесса с полями version, tags, steps')
       continue
     }
     const id = raw.id.trim()
     const when = labelKeys(raw.when, id, 'when', problems)
     if (when.length === 0) {
-      problems.push(`У ступени «${id}» нет входящих меток`)
+      problems.push(`У ступени «${id}» нет входящих тегов`)
       continue
     }
     if (seen.has(id)) {
@@ -404,7 +528,7 @@ export function validateProcess(value, options = {}) {
   if (problems.length > 0) {
     return { document: null, problems }
   }
-  return { document: { version: PROCESS_VERSION, labels, steps }, problems: [] }
+  return { document: { version: PROCESS_VERSION, tags, steps }, problems: [] }
 }
 
 /**
@@ -415,9 +539,13 @@ export function validateProcess(value, options = {}) {
  * порядке документа), поэтому перестановка ключей в JSON отпечаток не меняет.
  */
 export function digestOf(document) {
+  const tags = new Map((document.tags || []).map((tag) => [tag.key, tag]))
   const canonical = {
     version: document.version,
-    labels: PROCESS_LABEL_KEYS.map((key) => [key, document.labels[key]]),
+    tags: PROCESS_LABEL_KEYS.map((key) => {
+      const tag = tags.get(key) || { name: '', title: '', agent: null }
+      return [key, tag.name, tag.title, tag.agent === undefined ? null : tag.agent]
+    }),
     steps: document.steps.map((row) => [
       row.id,
       row.title,
@@ -471,31 +599,81 @@ export function processOf(raw, options = {}) {
 }
 
 /**
- * Имена меток проекта: сохранённый в вебе документ → локальные `labels` файла → умолчания.
+ * Теги проекта: документ (сохранённый в вебе) → локальные `labels` файла → умолчания.
+ *
+ * Возвращает `{labels, agents}`: `labels` — имена тегов на GitHub, `agents` — код агента
+ * на ключ (`null` — «ступень берёт диспетчер»). Локальный `labels` из `projects.json`
+ * остаётся переопределением **имени**: агент приходит только из документа.
  *
  * Порядок из постановки. Тонкость одна: у отдела **без** сохранённого процесса
- * `document.labels` — это и есть умолчания, и если поставить их выше файла, локальные
+ * `document.tags` — это и есть умолчания, и если поставить их выше файла, локальные
  * переименования из `projects.json` перестали бы работать. Поэтому имена веба идут первыми
  * только при `source === 'web'`; при `source === 'default'` первым идёт файл, как было до
  * этой задачи.
  *
  * @param {{document: object, source: string}} process
  * @param {object|null|undefined} localLabels `labels` отдела из `projects.json`
- * @returns {Record<string, string>}
+ * @returns {{labels: Record<string, string>, agents: Record<string, string|null>}}
  */
-export function labelsOfProcess(process, localLabels) {
-  const fromWeb = process.source === 'web' ? process.document.labels : {}
+export function tagsOfProcess(process, localLabels) {
   const fromFile = isObject(localLabels) ? localLabels : {}
   const labels = { ...DEFAULT_PROCESS_LABELS }
+  const agents = {}
+  for (const key of PROCESS_LABEL_KEYS) agents[key] = null
   for (const key of PROCESS_LABEL_KEYS) {
     const name = fromFile[key]
     if (isText(name)) labels[key] = name.trim()
   }
-  for (const key of PROCESS_LABEL_KEYS) {
-    const name = fromWeb[key]
-    if (isText(name)) labels[key] = name.trim()
+  const fromWeb = process.source === 'web' ? process.document.tags || [] : []
+  for (const tag of fromWeb) {
+    if (isText(tag.name)) labels[tag.key] = tag.name.trim()
+    agents[tag.key] = typeof tag.agent === 'string' && tag.agent.trim() !== '' ? tag.agent.trim() : null
   }
-  return labels
+  return { labels, agents }
+}
+
+/**
+ * Владельцы входящих тегов ступени: коды **включённых** агентов, которым отдан хоть один
+ * тег из `keys`. Тег без агента, тег `dsh` и тег выключенного агента владельцем не
+ * считаются — ступень остаётся за диспетчером.
+ *
+ * Это единственное правило владения: им пользуются выбор ступени (`decisionOf`/`planFor`)
+ * и карточка статуса. Теги в `put`/`drop` владение не задают — это передача тикета.
+ *
+ * @param {string[]} keys ключи тегов (обычно `step.when`)
+ * @param {Record<string, string|null>|undefined} tagAgents код агента на ключ
+ * @param {Array<{code: string, enabled?: boolean}>|undefined} liveAgents живые агенты
+ * @returns {string[]} коды владельцев в порядке появления ключей
+ */
+export function tagOwnersOf(keys, tagAgents, liveAgents) {
+  if (!isObject(tagAgents)) return []
+  const live = new Map((liveAgents || []).map((agent) => [agent.code, agent]))
+  const owners = []
+  for (const key of keys || []) {
+    const code = tagAgents[key]
+    if (!code || code === DISPATCHER_AGENT_CODE) continue
+    const agent = live.get(code)
+    if (!agent || agent.enabled === false) continue
+    if (!owners.includes(code)) owners.push(code)
+  }
+  return owners
+}
+
+/** Владелец ступени: первый включённый агент её входящих тегов или `null`. */
+export function stepOwnerOf(step, tagAgents, liveAgents) {
+  const owners = tagOwnersOf(step.when, tagAgents, liveAgents)
+  return owners.length > 0 ? owners[0] : null
+}
+
+/**
+ * Ступени, отданные агентам: `[{id, title, agent}]` по возрастанию приоритета.
+ * Нужны карточке статуса, чтобы назвать «ступени разобраны агентами», когда план пуст.
+ */
+export function delegatedStepsOf(document, tagAgents, liveAgents) {
+  return sortedSteps(document)
+    .filter((step) => step.enabled !== false)
+    .map((step) => ({ id: step.id, title: step.title, agent: stepOwnerOf(step, tagAgents, liveAgents) }))
+    .filter((entry) => entry.agent !== null)
 }
 
 /** Ступени включённого процесса по возрастанию приоритета; выключенные — в конце. */

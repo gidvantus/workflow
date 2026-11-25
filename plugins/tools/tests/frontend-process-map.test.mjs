@@ -29,6 +29,7 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 const repo = path.resolve(here, '..', '..', '..')
 const frontend = path.join(repo, 'app', 'frontend')
 const graphFile = path.join(frontend, 'src', 'api', 'processGraph.ts')
+const processFile = path.join(frontend, 'src', 'api', 'process.ts')
 const defaultsFile = path.join(repo, 'app', 'backend', 'app', 'process_defaults.py')
 
 let failures = 0
@@ -63,6 +64,18 @@ const bundled = esbuild.buildSync({
 })
 const code = bundled.outputFiles[0].text
 const graphApi = await import('data:text/javascript;base64,' + Buffer.from(code).toString('base64'))
+
+const processBundle = esbuild.buildSync({
+  entryPoints: [processFile],
+  bundle: true,
+  format: 'esm',
+  platform: 'neutral',
+  target: 'node20',
+  write: false,
+})
+const processApi = await import(
+  'data:text/javascript;base64,' + Buffer.from(processBundle.outputFiles[0].text).toString('base64')
+)
 
 const {
   KIND_HINTS,
@@ -178,14 +191,22 @@ function stepCalls(source) {
 
 function readDefaults() {
   const stepsBlock = python.slice(python.indexOf('DEFAULT_STEPS'), python.indexOf('def default_process'))
-  const labelsBlock = python.slice(python.indexOf('DEFAULT_LABELS'), python.indexOf('ROLE_BY_AREA'))
+  const keysBlock = python.slice(python.indexOf('LABEL_KEYS:'), python.indexOf('DEFAULT_LABELS'))
+  const labelsBlock = python.slice(python.indexOf('DEFAULT_LABELS'), python.indexOf('DEFAULT_LABEL_TITLES'))
+  const titlesBlock = python.slice(python.indexOf('DEFAULT_LABEL_TITLES'), python.indexOf('GUARDS:'))
   const guardsBlock = python.slice(python.indexOf('GUARDS:'), python.indexOf('GUARD_IDS'))
   const version = Number(/PROCESS_VERSION\s*=\s*(\d+)/.exec(python)[1])
 
+  const keys = [...keysBlock.matchAll(/"([A-Za-z]+)"/g)].map((match) => match[1])
   const labels = {}
   for (const match of labelsBlock.matchAll(/"([A-Za-z]+)":\s*"([^"]+)"/g)) {
     labels[match[1]] = match[2]
   }
+  const titles = {}
+  for (const match of titlesBlock.matchAll(/"([A-Za-z]+)":\s*"([^"]+)"/g)) {
+    titles[match[1]] = match[2]
+  }
+  const tags = keys.map((key) => ({ key, name: labels[key], title: titles[key], agent: null }))
 
   const guards = [...guardsBlock.matchAll(/\(\s*"([A-Za-z-]+)",\s*"([^"]+)"\s*\)/g)].map((match) => ({
     id: match[1],
@@ -220,15 +241,17 @@ function readDefaults() {
     }
   })
 
-  return { document: { version, labels, steps }, guards }
-}
+  return { document: { version, tags, steps }, guards }}
 
 const { document: defaults, guards: defaultGuards } = readDefaults()
 
+/** Имя тега на GitHub по ключу — то, что рисует карта. */
+const tagName = (key) => defaults.tags.find((tag) => tag.key === key)?.name ?? ''
+
 // Шапка разбора: если разбор исходника сломался, дальше проверять нечего.
-check('документ умолчаний: версия формата', defaults.version, 1)
+check('документ умолчаний: версия формата', defaults.version, 2)
 check('документ умолчаний: ступеней', defaults.steps.length, 13)
-check('документ умолчаний: ключей меток', Object.keys(defaults.labels).length, 14)
+check('документ умолчаний: ключей тегов', defaults.tags.length, 14)
 check('документ умолчаний: стражей', defaultGuards.length, 7)
 check(
   'документ умолчаний: порядок ступеней по priority',
@@ -320,12 +343,12 @@ const mockupNode = graph.steps[0]
 check(
   'умолчания: «вход» первой ступени',
   mockupNode.whenLabels.map((item) => [item.key, item.name, item.fromStep]),
-  [['mockup', defaults.labels.mockup, false]],
+  [['mockup', tagName('mockup'), false]],
 )
 check(
   'умолчания: «выход» первой ступени',
   mockupNode.putLabels.map((item) => [item.key, item.name, item.fromStep]),
-  [['progress', defaults.labels.progress, true]],
+  [['progress', tagName('progress'), true]],
 )
 check(
   'умолчания: «снимает» ступени передачи фронтенду',
@@ -387,7 +410,7 @@ check(
 )
 check(
   'умолчания: подпись провода — имя метки из документа',
-  graph.wires.every((wire) => wire.labelName === defaults.labels[wire.key]),
+  graph.wires.every((wire) => wire.labelName === tagName(wire.key)),
   true,
 )
 check(
@@ -460,7 +483,7 @@ check('все ступени выключены: ступеней', nothingEnabl
 check('все ступени выключены: проводов', nothingEnabled.wires.length, 0)
 check('все ступени выключены: все метки вне схемы', nothingEnabled.unused.length, 14)
 
-const noSteps = buildProcessGraph({ version: 1, labels: defaults.labels, steps: [] }, defaultGuards)
+const noSteps = buildProcessGraph({ version: 2, tags: defaults.tags, steps: [] }, defaultGuards)
 check('пустой документ: ступеней', noSteps.steps.length, 0)
 check('пустой документ: проводов', noSteps.wires.length, 0)
 
@@ -630,8 +653,8 @@ const backwardBase = {
   enabled: true,
 }
 const backwardDocument = {
-  version: 1,
-  labels: defaults.labels,
+  version: 2,
+  tags: defaults.tags,
   steps: [
     { ...backwardBase, id: 'early', title: 'Ранняя', when: ['progress'], priority: 10 },
     { ...backwardBase, id: 'fill-a', title: 'Наполнение А', priority: 20 },
@@ -706,6 +729,63 @@ assert(
 check('подписи резолверов: два правила', Object.keys(RESOLVER_TITLES).sort(), ['by-area', 'by-findings'])
 check('подписи причин: две разные строки', new Set(Object.values(UNUSED_REASON_TITLES)).size, 2)
 assert('правило провода описано словами', typeof WIRE_RULE === 'string' && WIRE_RULE.length > 20, WIRE_RULE)
+
+// ---------------------------------------------------------------------------
+// 7. Нормализация v1 и таблица процесса: подписи приходят с сервера, колонка агента
+//    стоит на восьмом месте, а ширин таблицы остаётся ровно один набор.
+
+const legacyLabels = Object.fromEntries(defaults.tags.map((tag) => [tag.key, tag.name]))
+legacyLabels.review = 'code-review'
+const legacyDocument = { version: 1, labels: legacyLabels, steps: defaults.steps }
+const originalFetch = globalThis.fetch
+try {
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    document: legacyDocument,
+    defaults,
+    roles: [],
+    guards: defaultGuards,
+  }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  const normalized = await processApi.getProcess(79)
+  check('v1: нормализованная версия', normalized.document?.version, 2)
+  check('v1: имя legacy-тега сохранено', normalized.document?.tags.find((tag) => tag.key === 'review')?.name, 'code-review')
+  check(
+    'v1: подпись взята из defaults',
+    normalized.document?.tags.find((tag) => tag.key === 'review'),
+    { key: 'review', name: 'code-review', title: defaults.tags.find((tag) => tag.key === 'review').title, agent: null },
+  )
+  check(
+    'v1: все 14 подписей совпадают с defaults',
+    normalized.document?.tags.map((tag) => tag.title),
+    processApi.PROCESS_LABEL_KEYS.map((key) => defaults.tags.find((tag) => tag.key === key).title),
+  )
+
+  let savedBody = null
+  globalThis.fetch = async (_path, init) => {
+    savedBody = JSON.parse(init.body)
+    return new Response(JSON.stringify({ revision: 1, document: normalized.document }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+  await processApi.saveProcess(79, normalized.document)
+  check('сохранение всегда отправляет v2', savedBody.version, 2)
+} finally {
+  globalThis.fetch = originalFetch
+}
+
+const processComponent = readFileSync(path.join(frontend, 'src', 'components', 'DepartmentProcess.tsx'), 'utf8')
+const processHeaders = [...processComponent.matchAll(/<th scope="col">([^<]+)<\/th>/g)].map((match) => match[1])
+check('таблица процесса: одиннадцать колонок в порядке макета', processHeaders, [
+  'Порядок', 'Ступень', 'Вид', 'Входящие метки', 'Кроме', 'Ставит', 'Снимает',
+  'Агент', 'Страж', 'Роль', 'Включена',
+])
+assert('таблица процесса: агент стоит перед стражем', processComponent.indexOf('<td className="proc-col proc-col--agent"') < processComponent.indexOf('<td className="proc-col proc-col--guard"'))
+assert('таблица процесса: прежняя подпись пустой ячейки', processComponent.includes('— нет меток') && !processComponent.includes('— нет тегов'))
+const processCss = readFileSync(path.join(frontend, 'src', 'index.css'), 'utf8')
+const processWidths = [...processCss.matchAll(/\.proc-table th:nth-child\((\d+)\)\s*\{\s*width:\s*(\d+)%;/g)]
+check('таблица процесса: один набор ширин', processWidths.map((match) => Number(match[1])), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
+check('таблица процесса: ширины одиннадцати колонок', processWidths.map((match) => Number(match[2])), [6, 13, 8, 9, 9, 9, 9, 11, 10, 8, 8])
+assert('справочник тегов: мёртвого класса нет', !processCss.includes('.proc-tags__dispatcher'))
 
 console.log(failures === 0 ? '\nВСЕ ПРОВЕРКИ ПРОШЛИ' : '\nПРОВАЛОВ: ' + failures)
 process.exit(failures === 0 ? 0 : 1)

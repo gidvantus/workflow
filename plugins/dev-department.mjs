@@ -135,16 +135,19 @@ import {
 // документа, имена меток и матчер. Диспетчер её только исполняет — порядок
 // ступеней и переходы меток задаёт документ, а не ветвления `dispatch()`.
 import {
+  DISPATCHER_AGENT_CODE,
   PROCESS_LABEL_KEYS,
   activeOfPlan,
   areaRoleOfLabels,
+  delegatedStepsOf,
   isActiveStep,
   isEntryStep,
-  labelsOfProcess,
   nextOfPlan,
   planOfProcess,
   processOf,
   queueOfPlan,
+  stepOwnerOf,
+  tagsOfProcess,
 } from './process.mjs'
 // Журнал расхода: смена уезжает в веб снимком (сессии, тарифы, итог), а не
 // пересчитывается там. Модуль держит и очередь недоотправленного: смена
@@ -349,7 +352,7 @@ const INFRA_BACKOFF_MAX_MS = 40 * 60 * 1000
 // Метки конвейера по умолчанию — данные процесса отдела (`plugins/process.mjs`):
 // конвейер исполняет документ из веба, и второй копии набора меток в диспетчере
 // быть не должно. Проект переопределяет имена полем `labels` реестра или
-// документом процесса — см. `labelsOfProcess`.
+// документом процесса — см. `tagsOfProcess`.
 
 // Причина закрытия смены. Различать важно: окно закрывается само по часам,
 // а вручную смену закрывает человек инструментом dev_department_summary.
@@ -685,7 +688,7 @@ function projectRow(registry, id, shared) {
   // Поля проекта в прежней внутренней форме собирает `registry.mjs`: форма записи
   // отдела — его достояние. Здесь добавляется только то, что принадлежит
   // диспетчеру: расписание, лимиты и собранные проблемы.
-  const fields = projectFields(project)
+  const fields = projectFields(project, registry.document ? registry.document.agents : undefined)
   const problems = []
   if (found.problem) problems.push(id + ': ' + found.problem)
 
@@ -716,12 +719,15 @@ function projectRow(registry, id, shared) {
   // `problems` и в статусе. Останавливать смену из-за опечатки в вебе нельзя.
   const process = processOf(dept.process, { roles: hostRoleCodes() })
   for (const problem of process.problems) problems.push(id + ': процесс: ' + problem)
+  const tags = tagsOfProcess(process, fields.labels)
 
   return Object.assign({}, fields, {
     id,
     title: typeof project.title === 'string' && project.title ? project.title : id,
-    // Имена меток: сохранённый процесс → локальные `labels` файла → умолчания.
-    labels: labelsOfProcess(process, fields.labels),
+    // Имена тегов: сохранённый процесс → локальные `labels` файла → умолчания.
+    labels: tags.labels,
+    // Код агента на ключ тега: `null` — ступень берёт диспетчер.
+    tagAgents: tags.agents,
     process,
     problems,
     department: {
@@ -791,6 +797,9 @@ function loadProjects(shared) {
     disabled: rows.filter((row) => !row.department.enabled).map((row) => row.id),
     problem: problems.length > 0 ? problems.join('; ') : null,
     defaultId: registry.defaultId,
+    // Справочник агентов верхнего уровня: карточка статуса называет его поимённо, а
+    // ступени берут владельца из `tagAgents` проекта.
+    agents: registry.document.agents || [],
   }
 }
 
@@ -1529,6 +1538,16 @@ export default {
         dropped: 0,
         line: null,
       },
+      // Heartbeat диспетчера в веб: `ok: null` — записи в этом процессе ещё не было.
+      // Сбой веба смену не срывает — причина остаётся здесь и в `lastError`.
+      agentSync: {
+        ok: null,
+        at: null,
+        code: null,
+        state: null,
+        issue_number: null,
+        error: null,
+      },
     }
 
     // Переезд состояния со старого места (корень каталога установки) в каталог
@@ -2140,8 +2159,18 @@ export default {
     // План на тик: ступени по приоритету и тикеты по порядку GitHub. Вне смены
     // исполняется только маршрутная ступень (`kinds`) — работа сессий требует
     // открытого окна.
+    //
+    // Владение ступенью — одно правило на всех (`stepOwnerOf`): ступень, у которой хоть
+    // один входящий тег отдан включённому агенту, чей код не `dsh`, диспетчер не берёт.
+    // Через `planFor` это видят и выдача, и карточка статуса, и очередь: второго правила
+    // выбора в файле нет.
     function planFor(project, issues, options = {}) {
-      return planOfProcess(project.process.document, processItems(project, issues), options)
+      const callerSkip = typeof options.skip === 'function' ? options.skip : null
+      return planOfProcess(project.process.document, processItems(project, issues), Object.assign({}, options, {
+        skip: (step, item) =>
+          stepOwnerOf(step, project.tagAgents, project.agents) !== null ||
+          Boolean(callerSkip && callerSkip(step, item)),
+      }))
     }
 
     // Тикет и ступень, которые тик должен обслужить: первая ступень плана. Маршрутную
@@ -2767,7 +2796,83 @@ export default {
       return written
     }
 
+    // ── heartbeat диспетчера ────────────────────────────────────────────────
+    //
+    // Агент `dsh` — это сам диспетчер. Перед ходом он пишет себе `busy` с номером
+    // тикета, после хода — `idle`: экран «Агенты» и `dev_department_status` видят, чем
+    // отдел занят, не заглядывая в журнал. Сбой веба **не срывает ход**: та же политика,
+    // что у `registrySync` — причина уходит в `lastError`, конвейер продолжается на
+    // локальном состоянии.
+    const AGENT_HEARTBEAT_TIMEOUT_MS = 5 * 1000
+
+    function sendAgentStatus(code, agentState, issueNumber) {
+      return new Promise((resolve) => {
+        const settings = config.values.registry
+        if (!settings || !settings.apiUrl) {
+          resolve({ skipped: 'адрес API не задан' })
+          return
+        }
+        const base = presetsApiBase(settings.apiUrl)
+        if (!base) {
+          resolve({ error: 'адрес API не разобран: ' + settings.apiUrl })
+          return
+        }
+        let target
+        try {
+          target = new URL(base + '/api/agents/' + encodeURIComponent(code) + '/status')
+        } catch (error) {
+          resolve({ error: 'адрес heartbeat не разобран: ' + messageOf(error) })
+          return
+        }
+        const transport = target.protocol === 'https:' ? https : http
+        const headers = { Accept: 'application/json', 'Content-Type': 'application/json' }
+        if (settings.token) headers['X-Registry-Token'] = settings.token
+        const payload = JSON.stringify({ state: agentState, issue_number: issueNumber })
+        const request = transport.request(target, { method: 'PUT', headers }, (response) => {
+          let body = ''
+          response.setEncoding('utf8')
+          response.on('data', (chunk) => { body += chunk })
+          response.on('end', () => {
+            resolve(response.statusCode === 200
+              ? { ok: true, status: response.statusCode }
+              : { error: 'веб ответил кодом ' + response.statusCode })
+          })
+        })
+        request.setTimeout(AGENT_HEARTBEAT_TIMEOUT_MS, () => request.destroy(new Error('таймаут ответа')))
+        request.on('error', (error) => resolve({ error: messageOf(error) }))
+        request.write(payload)
+        request.end()
+      })
+    }
+
+    async function reportAgentStatus(code, agentState, issueNumber) {
+      const result = await sendAgentStatus(code, agentState, issueNumber)
+      state.agentSync = {
+        ok: result.error ? false : (result.skipped ? null : true),
+        at: new Date().toISOString(),
+        code,
+        state: agentState,
+        issue_number: issueNumber,
+        error: result.error || null,
+      }
+      if (result.error) state.lastError = 'агент ' + code + ': ' + result.error
+      return result
+    }
+
+    // Ход отдела: heartbeat `busy` ставится до подъёма сессии, `idle` — после того как
+    // ход закончился. `finally` держит `idle` и на отказе сессии: висящий `busy` врал бы
+    // человеку, что отдел всё ещё работает над тикетом.
     async function startSession(project, presetId, prompt, issue) {
+      const number = issue && Number.isInteger(issue.number) ? issue.number : null
+      if (number !== null) await reportAgentStatus(DISPATCHER_AGENT_CODE, 'busy', number)
+      try {
+        return await startSessionWork(project, presetId, prompt, issue)
+      } finally {
+        if (number !== null) await reportAgentStatus(DISPATCHER_AGENT_CODE, 'idle', null)
+      }
+    }
+
+    async function startSessionWork(project, presetId, prompt, issue) {
       const key = dialogKey(project, presetId, issue.number)
       const known = state.dialogs[key]
       if (known && await dialogIsResumable(known)) {
@@ -4019,12 +4124,20 @@ export default {
       }).join('; ')
     }
 
-    // Отпечаток документа. Ревизию наружу отдаёт только запись (`PUT`/`rebuild`),
-    // а `GET` возвращает сам документ; поэтому «на какой ревизии стоит кеш»
-    // отвечает отпечаток содержимого: он меняется ровно тогда, когда меняется
-    // документ, и его видно в статусе рядом с `ok`.
+    // Отпечаток настроек реестра. Ревизию наружу отдаёт только запись (`PUT`/`rebuild`),
+    // а `GET` возвращает сам документ; поэтому «на какой ревизии стоит кеш» отвечает
+    // отпечаток содержимого. Heartbeat агентов в нём не участвует: `busy`/`idle` меняется
+    // на каждом ходу, но не означает правку реестра и не должен двигать `changedAt`.
     function registryDigest(document) {
-      return crypto.createHash('sha1').update(JSON.stringify(document)).digest('hex').slice(0, 12)
+      const stable = Object.assign({}, document)
+      if (Array.isArray(document.agents)) {
+        stable.agents = document.agents.map((agent) => {
+          const copy = Object.assign({}, agent)
+          delete copy.status
+          return copy
+        })
+      }
+      return crypto.createHash('sha1').update(JSON.stringify(stable)).digest('hex').slice(0, 12)
     }
 
     // `registry.apiUrl` — полный адрес ручки (`http://localhost:8096/api/registry`),
@@ -4135,8 +4248,11 @@ export default {
       registrySync.ok = true
       registrySync.error = null
       registrySync.fetchedAt = new Date().toISOString()
+      const previousRevision = registrySync.revision
       registrySync.revision = registryDigest(merged.document)
-      if (written.changed) registrySync.changedAt = registrySync.fetchedAt
+      if (written.changed && (previousRevision === null || previousRevision !== registrySync.revision)) {
+        registrySync.changedAt = registrySync.fetchedAt
+      }
       return { ok: true, changed: written.changed, revision: registrySync.revision, localKeys: merged.localKeys }
     }
 
@@ -4610,6 +4726,9 @@ export default {
             defaultId: loaded.defaultId,
             serving: loaded.projects.map((p) => p.id),
             disabled: loaded.disabled,
+            // Справочник агентов с последним heartbeat: его же видит раздел «Агенты» в
+            // вебе. Пустой массив — «агентов нет»; `dsh` заводит миграция.
+            agents: loaded.agents || [],
             // Тревога по реестру: отдел не обслуживает ни одного проекта. `since` —
             // когда отдел впервые увидели без проектов, `lastSentAt` — когда об этом
             // последний раз сказали (журнал и Telegram), `channel` — где сказали:
@@ -4638,6 +4757,17 @@ export default {
             // перечень, а не пересказ.
             lost: registrySync.lost,
             error: registrySync.error,
+          },
+          // Heartbeat диспетчера: `ok: null` — записей в этом процессе ещё не было.
+          // Отказ виден рядом с `registrySync`/`presetsSync` и остаётся в `lastError`,
+          // но ход из-за него не срывается.
+          agentSync: {
+            ok: state.agentSync.ok,
+            at: state.agentSync.at,
+            code: state.agentSync.code,
+            state: state.agentSync.state,
+            issue_number: state.agentSync.issue_number,
+            error: state.agentSync.error,
           },
           // Раскладка пресетов ролей: `ok: null` — синхронизации в этом процессе
           // ещё не было. `roles` — что разложено, `removed` — роли, которых в вебе
@@ -4681,6 +4811,7 @@ export default {
           const st = projectState(project.id)
           const dept = project.department
           const inWin = inWindow(dept.windows, now)
+          const delegated = delegatedStepsOf(project.process.document, project.tagAgents, project.agents)
           const row = {
             id: project.id,
             title: project.title,
@@ -4710,6 +4841,9 @@ export default {
               steps: project.process.document.steps.filter((step) => step.enabled !== false).length,
               problems: project.process.problems,
             },
+            // Ступени, отданные агентам: диспетчер их не берёт, и карточка обязана
+            // назвать это, когда план пуст, — иначе пустой тик выглядит как «тикетов нет».
+            delegatedSteps: delegated,
             session: st.session,
             attempts: st.attempts,
             reworkCounters: st.rework,
@@ -4740,7 +4874,11 @@ export default {
                   : 'поднять ' + active.role + ' по issue #' + active.issue.number + ' (' + active.kind + ')')
               : (queued.length > 0
                 ? (inWin ? 'в окне — взять issue #' + queued[0].number : 'вне окна — ждать расписания, тогда issue #' + queued[0].number)
-                : 'делать нечего: очередь пуста')
+                : (delegated.length > 0
+                  ? 'делать нечего: ступени разобраны агентами — ' +
+                    delegated.slice(0, 5).map((entry) => entry.title + ' (' + entry.agent + ')').join(', ') +
+                    (delegated.length > 5 ? ', …' : '')
+                  : 'делать нечего: очередь пуста'))
           } catch (error) {
             row.github = { error: String(error && error.message ? error.message : error) }
             row.nextStep = 'состояние GitHub не прочитано'

@@ -62,6 +62,7 @@ from app.api.registry import (
     publish_registry,
 )
 from app.db import get_db
+from app.models.agent import DISPATCHER_AGENT_CODE, Agent
 from app.models.department import DEFAULT_MAX_REWORK, Department
 from app.models.department_kind import DepartmentKind
 from app.models.role import Role
@@ -354,6 +355,24 @@ def _role_codes(db: Session) -> list[str]:
     return [code for code in db.scalars(statement) if code]
 
 
+def _process_agent_codes(db: Session) -> tuple[list[str], list[str]]:
+    """Коды живых агентов и отдельно коды включённых гостей для проверки владения.
+
+    Тег с удалённым или несуществующим агентом не принимается: ступень молча ждала бы
+    гостя, которого нет. Владельцем же считается только включённый агент с кодом не
+    `dsh` — ровно то же правило, что у диспетчера и экрана процесса. Порядок — по `id`,
+    как у `GET /api/agents`.
+    """
+    agents = db.scalars(select(Agent).where(Agent.deleted_at.is_(None)).order_by(Agent.id)).all()
+    live_codes = [agent.code for agent in agents if agent.code]
+    owner_codes = [
+        agent.code
+        for agent in agents
+        if agent.code and agent.enabled and agent.code != DISPATCHER_AGENT_CODE
+    ]
+    return live_codes, owner_codes
+
+
 @router.get(
     "",
     response_model=list[DepartmentResponse],
@@ -562,7 +581,10 @@ def save_process(
     """
     department = _get_alive_department(db, department_id)
     try:
-        document = validate_process_document(payload, _role_codes(db))
+        agent_codes, owner_agent_codes = _process_agent_codes(db)
+        document = validate_process_document(
+            payload, _role_codes(db), agent_codes, owner_agent_codes
+        )
     except ProcessError as error:
         raise _reject(str(error)) from None
     department.process = document

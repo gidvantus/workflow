@@ -1,35 +1,41 @@
 /**
- * Оболочка приложения: бренд, меню из двух разделов — «Проекты» и «Роли» — и подвал.
+ * Оболочка приложения: бренд, меню из трёх разделов — «Проекты», «Роли» и «Агенты» — и подвал.
  *
  * Роутера и отдельных URL в приложении нет: раздел переключается состоянием, а F5 всегда
  * открывает «Проекты». Отделы живут внутри проекта вкладкой на его странице, отдельного
  * пункта меню и отдельного экрана у них по-прежнему нет.
  *
- * Оба раздела смонтированы постоянно, невыбранный скрыт атрибутом `hidden` — так переход в
+ * Все разделы смонтированы постоянно, невыбранный скрыт атрибутом `hidden` — так переход в
  * другой раздел и обратно не теряет состояние: список проектов, открытая страница проекта и
  * открытая роль остаются там, где их оставили. Своего `display` у обёртки нет, поэтому
  * пользовательское `[hidden] { display: none }` работает без отдельного правила.
  *
- * Бейдж меню показывает то же число, что счётчик списка проектов, и появляется, когда
- * список прочитан.
+ * Бейджи меню показывают числа живых проектов и агентов и появляются, когда списки
+ * прочитаны.
  */
 
 import { useCallback, useState } from 'react';
 
+import AgentsPage from './components/AgentsPage';
 import ProjectsPage from './components/ProjectsPage';
 import RolesPage from './components/RolesPage';
 
 /** Раздел оболочки; порядок в меню совпадает с порядком объявления. */
-type Section = 'projects' | 'roles';
+type Section = 'projects' | 'roles' | 'agents';
 
 export default function App(): JSX.Element {
   const [section, setSection] = useState<Section>('projects');
   const [projectsCount, setProjectsCount] = useState<number | null>(null);
+  const [agentsCount, setAgentsCount] = useState<number | null>(null);
 
   // Обработчик стабилен: раздел зовёт его из эффекта, и новая ссылка на каждой
   // отрисовке запускала бы эффект заново.
   const handleProjectsCount = useCallback((count: number | null): void => {
     setProjectsCount(count);
+  }, []);
+
+  const handleAgentsCount = useCallback((count: number | null): void => {
+    setAgentsCount(count);
   }, []);
 
   return (
@@ -105,6 +111,31 @@ export default function App(): JSX.Element {
             </svg>
             Роли
           </a>
+          <a
+            className="nav__item"
+            href="#"
+            aria-current={section === 'agents' ? 'page' : undefined}
+            data-testid="nav-agents"
+            onClick={(event) => {
+              event.preventDefault();
+              setSection('agents');
+            }}
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.4"
+              aria-hidden="true"
+            >
+              <rect x="2.5" y="3.5" width="11" height="8" rx="1.5" />
+              <path d="M5.5 6.5h5M5.5 9h3M8 2v1.5M8 11.5V13" />
+            </svg>
+            Агенты
+            {agentsCount !== null && <span className="nav__count">{agentsCount}</span>}
+          </a>
         </nav>
       </aside>
 
@@ -114,6 +145,9 @@ export default function App(): JSX.Element {
         </div>
         <div className="view" hidden={section !== 'roles'}>
           <RolesPage />
+        </div>
+        <div className="view" hidden={section !== 'agents'}>
+          <AgentsPage onCountChange={handleAgentsCount} />
         </div>
 
         <footer className="footbar">

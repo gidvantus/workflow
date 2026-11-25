@@ -38,6 +38,7 @@ import {
   PROCESS_LABEL_KEYS,
   getProcess,
   saveProcess,
+  tagNameOf,
   type ProcessDocument,
   type ProcessGuard,
   type ProcessLabelKey,
@@ -402,7 +403,7 @@ function LabelEditor({
       <div className="proc-map__chips" data-testid={`process-map-field-${field}`}>
         {keys.map((key) => (
           <span className="proc-map__chip" key={key} data-label-key={key}>
-            {document.labels[key] === '' ? key : document.labels[key]}
+            {tagNameOf(document, key) === '' ? key : tagNameOf(document, key)}
             <button
               className="proc-map__chip-x"
               type="button"
@@ -434,7 +435,7 @@ function LabelEditor({
             <option value="">+ метка</option>
             {free.map((key) => (
               <option key={key} value={key}>
-                {document.labels[key] === '' ? key : `${document.labels[key]} · ${key}`}
+                {tagNameOf(document, key) === '' ? key : `${tagNameOf(document, key)} · ${key}`}
               </option>
             ))}
           </select>

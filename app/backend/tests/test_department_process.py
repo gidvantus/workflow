@@ -1,6 +1,6 @@
-"""Процесс отдела: умолчания, документ, ручки `GET`/`PUT` и тексты отказов.
+"""Процесс отдела: умолчания, документ v2, ручки `GET`/`PUT` и тексты отказов.
 
-Проверяется контракт постановки `#67` целиком, потому что половина его — тексты: экран
+Проверяется контракт постановки `#79` целиком, потому что половина его — тексты: экран
 «Процесс» показывает `detail` ответа `422` дословно, тестировщик сверяет его по таблице
 «Контракт половин», а диспетчер исполняет ровно то, что вернула ручка. Поэтому таблица
 ступеней по умолчанию закреплена здесь **литералом** — расхождение Python-копии с
@@ -23,8 +23,11 @@ from sqlalchemy.orm import Session, sessionmaker
 from app import main
 from app.api import departments as api
 from app.config import Settings, get_settings
+from app.models.agent import Agent
+from app.models.department import Department
 from app.models.role import DEFAULT_ROLES, Role
 from app.process_defaults import (
+    DEFAULT_LABEL_TITLES,
     DEFAULT_LABELS,
     DEFAULT_STEPS,
     GUARDS,
@@ -33,9 +36,8 @@ from app.process_defaults import (
     default_process,
 )
 from app.schemas.process import (
-    LABEL_EMPTY,
-    LABEL_UNKNOWN,
     SHAPE_INVALID,
+    STEP_AGENTS_CONFLICT,
     STEP_GUARD_UNKNOWN,
     STEP_ID_DUPLICATE,
     STEP_KIND_UNKNOWN,
@@ -44,6 +46,11 @@ from app.schemas.process import (
     STEP_PRIORITY_INVALID,
     STEP_ROLE_UNKNOWN,
     STEP_ROUTE_GUARD,
+    TAG_AGENT_UNKNOWN,
+    TAG_NAME_DUPLICATE,
+    TAG_NAME_EMPTY,
+    TAG_TITLE_EMPTY,
+    TAG_UNKNOWN,
     VERSION_UNSUPPORTED,
     ProcessError,
     validate_process_document,
@@ -59,8 +66,13 @@ DEVELOPMENT_KIND_ID = 1
 # `by-findings`) в справочнике не живут — они правила выбора, а не роли.
 ROLE_CODES = [code for code, _ in DEFAULT_ROLES]
 
+# Живые агенты для проверки тегов: диспетчер, два гостя и выключенный агент.
+AGENT_CODES = ["dsh", "opencode", "verify-ci", "off"]
+# Владельцем ступени может быть только включённый гость; `dsh` и `off` им не считаются.
+OWNER_AGENT_CODES = ["opencode", "verify-ci"]
+
 # Таблица ступеней по умолчанию — **литерал из постановки** `#67`: id, приоритет, вид,
-# роль, входящие метки, «кроме», ставит, снимает, страж. Порядок строк — порядок
+# роль, входящие теги, «кроме», ставит, снимает, страж. Порядок строк — порядок
 # конвейера; приоритет растёт на 60 (1, 61, … 721), оставляя место для вставки.
 DEFAULT_TABLE: list[
     tuple[
@@ -222,6 +234,17 @@ def api_client_fixture(client: TestClient) -> Iterator[TestClient]:
         main.app.dependency_overrides.pop(get_settings, None)
 
 
+@pytest.fixture(name="open_code_agent")
+def open_code_agent_fixture(
+    session_factory: sessionmaker[Session],
+) -> Iterator[None]:
+    """Живой агент `opencode` в справочнике: тег может на него сослаться."""
+    with session_factory() as session:
+        session.add(Agent(code="opencode", title="OpenCode", runtime="opencode"))
+        session.commit()
+    yield
+
+
 def _process_url(department_id: int) -> str:
     return f"/api/departments/{department_id}/process"
 
@@ -235,6 +258,10 @@ def _document(**overrides: Any) -> dict[str, Any]:
 
 def _first_step(document: dict[str, Any]) -> dict[str, Any]:
     return document["steps"][0]
+
+
+def _tag(document: dict[str, Any], key: str) -> dict[str, Any]:
+    return next(tag for tag in document["tags"] if tag["key"] == key)
 
 
 def _rebuild(api_client: TestClient) -> None:
@@ -260,7 +287,7 @@ def _registry_department(api_client: TestClient, department_id: int) -> dict[str
 
 
 def test_default_table_is_the_reference_table() -> None:
-    """13 ступеней ровно из постановки: id, приоритет, метки, роли, стражи."""
+    """13 ступеней ровно из постановки: id, приоритет, теги, роли, стражи."""
     actual = [
         (
             step["id"],
@@ -284,11 +311,14 @@ def test_default_priorities_leave_room_between_steps() -> None:
     assert priorities == list(range(1, 1 + 60 * len(priorities), 60))
 
 
-def test_default_labels_cover_every_key_in_contract_order() -> None:
-    """Имена меток: 14 ключей, порядок контракта, имена прежние."""
+def test_default_tags_cover_every_key_in_contract_order() -> None:
+    """Теги: 14 ключей, порядок контракта, имя и подпись прежние, агента нет."""
     document = default_process()
-    assert list(document["labels"]) == list(LABEL_KEYS)
-    assert document["labels"] == DEFAULT_LABELS
+    assert [tag["key"] for tag in document["tags"]] == list(LABEL_KEYS)
+    assert {tag["key"]: tag["name"] for tag in document["tags"]} == DEFAULT_LABELS
+    assert {tag["key"]: tag["title"] for tag in document["tags"]} == DEFAULT_LABEL_TITLES
+    assert {tag["agent"] for tag in document["tags"]} == {None}
+    assert list(document) == ["version", "tags", "steps"]
     assert document["version"] == PROCESS_VERSION
 
 
@@ -317,16 +347,18 @@ def test_guards_catalogue_is_fixed() -> None:
 def test_defaults_pass_their_own_validation_unchanged() -> None:
     """Документ по умолчанию — уже канонический: проверка не двигает и не теряет ключей."""
     document = default_process()
-    assert validate_process_document(document, ROLE_CODES) == document
+    assert (
+        validate_process_document(document, ROLE_CODES, AGENT_CODES, OWNER_AGENT_CODES) == document
+    )
 
 
 def test_defaults_do_not_leak_between_calls() -> None:
     """`default_process()` отдаёт копию: правка ответа не меняет образец."""
     first = default_process()
     _first_step(first)["put"].append("test")
-    first["labels"]["test"] = "чужое-имя"
+    _tag(first, "test")["name"] = "чужое-имя"
     assert _first_step(default_process())["put"] == ["progress"]
-    assert default_process()["labels"]["test"] == "ready-for-test"
+    assert _tag(default_process(), "test")["name"] == "ready-for-test"
 
 
 # --- GET -------------------------------------------------------------------
@@ -346,12 +378,46 @@ def test_get_returns_defaults_roles_and_guards(client: TestClient, department_id
 def test_get_returns_saved_document(client: TestClient, department_id: int) -> None:
     """Сохранённый документ возвращается как сохранён, а не пересобранным."""
     document = _document()
-    document["labels"]["test"] = "qa-ready"
+    _tag(document, "test")["name"] = "qa-ready"
     assert client.put(_process_url(department_id), json=document).status_code == 200
 
     response = client.get(_process_url(department_id))
     assert response.status_code == 200, response.text
     assert response.json()["document"] == document
+
+
+def test_get_returns_v1_document_as_is(
+    client: TestClient,
+    department_id: int,
+    session_factory: sessionmaker[Session],
+) -> None:
+    """Стенд с процессом версии 1 получает документ как лежит: конвертирует фронт."""
+    v1 = {
+        "version": 1,
+        "labels": dict(DEFAULT_LABELS),
+        "steps": default_process()["steps"],
+    }
+    with session_factory() as session:
+        department = session.get(Department, department_id)
+        assert department is not None
+        department.process = v1
+        session.commit()
+
+    response = client.get(_process_url(department_id))
+    assert response.status_code == 200, response.text
+    assert response.json()["document"] == v1
+
+
+def test_put_rejects_v1_document(client: TestClient, department_id: int) -> None:
+    """Сохранение принимает только v2: старый документ обязан пройти через фронт."""
+    v1 = {
+        "version": 1,
+        "labels": dict(DEFAULT_LABELS),
+        "steps": default_process()["steps"],
+    }
+    response = client.put(_process_url(department_id), json=v1)
+    assert response.status_code == 422
+    assert response.json()["detail"] == VERSION_UNSUPPORTED
 
 
 def test_get_hides_deleted_role_from_roles(
@@ -395,51 +461,41 @@ def test_put_saves_document_and_returns_revision(client: TestClient, department_
 
 
 def test_put_process_publishes_registry_revision(client: TestClient, department_id: int) -> None:
-    """Сохранение процесса публикует реестр; повтор того же документа ревизии не даёт.
-
-    Публикует та же транзакция, что пишет колонку (`_commit_or_conflict`), отдельной
-    пересборки нет. Номер растёт вместе с содержимым документа: первое сохранение
-    добавляет отделу `process` — ревизия есть; повтор того же документа документ не
-    меняет — номера нет; правка метки снова меняет документ — номер растёт.
-    """
+    """Сохранение процесса публикует реестр; повтор того же документа ревизии не даёт."""
     first = client.put(_process_url(department_id), json=default_process()).json()["revision"]
     repeat = client.put(_process_url(department_id), json=default_process()).json()["revision"]
     assert repeat == first
 
     changed = default_process()
-    changed["labels"]["test"] = "qa-ready"
+    _tag(changed, "test")["name"] = "qa-ready"
     renamed = client.put(_process_url(department_id), json=changed).json()["revision"]
     assert renamed > first
 
 
-def test_put_renames_label_and_registry_shows_it(
+def test_put_renames_tag_and_registry_shows_it(
     api_client: TestClient,
     department_id: int,
 ) -> None:
-    """Переименование метки доезжает до документа реестра: это и есть путь до диспетчера."""
+    """Переименование тега доезжает до документа реестра: это и есть путь до диспетчера."""
     _rebuild(api_client)
     before = _registry_department(api_client, department_id)
     assert before["process"] is None
 
     document = default_process()
-    document["labels"]["test"] = "qa-ready"
+    _tag(document, "test")["name"] = "qa-ready"
     response = api_client.put(_process_url(department_id), json=document)
     assert response.status_code == 200, response.text
 
     after = _registry_department(api_client, department_id)
     assert after["process"] == document
-    assert after["process"]["labels"]["test"] == "qa-ready"
+    assert _tag(after["process"], "test")["name"] == "qa-ready"
 
 
 def test_put_without_saved_process_sends_null_to_registry(
     api_client: TestClient,
     department_id: int,
 ) -> None:
-    """Ключ `process` есть всегда, а «своего процесса нет» — это `null`.
-
-    Пропущенный ключ `plugins/registry.mjs` читает как «веб про процесс молчит» и оставляет
-    в файле прежнюю таблицу: снятый в вебе процесс продолжал бы исполняться диспетчером.
-    """
+    """Ключ `process` есть всегда, а «своего процесса нет» — это `null`."""
     _rebuild(api_client)
     department = _registry_department(api_client, department_id)
     assert "process" in department
@@ -447,18 +503,20 @@ def test_put_without_saved_process_sends_null_to_registry(
 
 
 def test_put_normalizes_document(client: TestClient, department_id: int) -> None:
-    """Канон: лишние ключи ступени отброшены, `enabled` по умолчанию, имена обрезаны."""
+    """Канон: лишние ключи ступени и тега отброшены, `enabled` по умолчанию, строки обрезаны."""
     document = default_process()
     for step in document["steps"]:
         step.pop("enabled")
     _first_step(document)["лишний"] = "мусор"
-    document["labels"]["dev"] = "  ready-for-dev  "
+    _tag(document, "dev")["name"] = "  ready-for-dev  "
+    _tag(document, "dev")["лишний"] = "мусор"
 
     body = client.put(_process_url(department_id), json=document).json()
     saved = body["document"]
     assert "лишний" not in _first_step(saved)
     assert _first_step(saved)["enabled"] is True
-    assert saved["labels"]["dev"] == "ready-for-dev"
+    assert _tag(saved, "dev")["name"] == "ready-for-dev"
+    assert set(_tag(saved, "dev")) == {"key", "name", "title", "agent"}
     assert set(_first_step(saved)) == {
         "id",
         "title",
@@ -506,6 +564,36 @@ def test_put_accepts_roles_resolvers(client: TestClient, department_id: int) -> 
     assert client.put(_process_url(department_id), json=document).status_code == 200
 
 
+def test_put_accepts_live_agent_on_tag(
+    client: TestClient,
+    department_id: int,
+    open_code_agent: None,
+) -> None:
+    """Тег с кодом живого агента сохраняется и возвращается документом."""
+    document = default_process()
+    _tag(document, "review")["agent"] = "opencode"
+    response = client.put(_process_url(department_id), json=document)
+    assert response.status_code == 200, response.text
+    assert _tag(response.json()["document"], "review")["agent"] == "opencode"
+
+
+def test_put_accepts_step_with_disabled_agent_tag(
+    client: TestClient,
+    department_id: int,
+) -> None:
+    """Выключенный агент остаётся допустимым кодом тега, но не владеет ступенью."""
+    for code, enabled in (("opencode", True), ("verify-ci", False)):
+        created = client.post("/api/agents", json={"code": code, "title": code, "enabled": enabled})
+        assert created.status_code == 201, created.text
+    document = default_process()
+    _tag(document, "review")["agent"] = "opencode"
+    _tag(document, "test")["agent"] = "verify-ci"
+    document["steps"][3]["when"] = ["review", "test"]
+    response = client.put(_process_url(department_id), json=document)
+    assert response.status_code == 200, response.text
+    assert response.json()["document"]["steps"][3]["when"] == ["review", "test"]
+
+
 def test_put_hides_deleted_department(client: TestClient, department_id: int) -> None:
     """В удалённый отдел процесс не записать."""
     assert client.delete(f"/api/departments/{department_id}").status_code == 204
@@ -518,40 +606,65 @@ def test_put_hides_deleted_department(client: TestClient, department_id: int) ->
 def _rejects(document: Any) -> str:
     """Текст отказа на документе: `ProcessError` из чистой проверки."""
     with pytest.raises(ProcessError) as caught:
-        validate_process_document(document, ROLE_CODES)
+        validate_process_document(document, ROLE_CODES, AGENT_CODES, OWNER_AGENT_CODES)
     return str(caught.value)
 
 
 def test_rejects_unknown_version() -> None:
-    assert _rejects(_document(version=2)) == VERSION_UNSUPPORTED
-    assert _rejects(_document(version="1")) == VERSION_UNSUPPORTED
+    assert _rejects(_document(version=1)) == VERSION_UNSUPPORTED
+    assert _rejects(_document(version="2")) == VERSION_UNSUPPORTED
     # `True == 1` в Python: флаг версией не считается.
     assert _rejects(_document(version=True)) == VERSION_UNSUPPORTED
 
 
 @pytest.mark.parametrize(
     "value",
-    [None, "process", 42, [], {"version": 1, "steps": []}, {"version": 1, "labels": {}}],
-    ids=["null", "text", "number", "array", "no-labels", "no-steps"],
+    [None, "process", 42, [], {"version": 2, "steps": []}, {"version": 2, "tags": []}],
+    ids=["null", "text", "number", "array", "no-tags", "no-steps"],
 )
 def test_rejects_wrong_shape(value: Any) -> None:
     assert _rejects(value) == SHAPE_INVALID
 
 
-def test_rejects_unknown_label_key() -> None:
+def test_rejects_unknown_tag_key() -> None:
     document = default_process()
-    document["labels"]["какая-то"] = "метка"
-    assert _rejects(document) == LABEL_UNKNOWN.format(key="какая-то")
+    document["tags"].append({"key": "какая-то", "name": "метка", "title": "Метка", "agent": None})
+    assert _rejects(document) == TAG_UNKNOWN.format(key="какая-то")
+
+
+def test_rejects_missing_tag_key() -> None:
+    document = default_process()
+    document["tags"].pop()
+    assert _rejects(document) == SHAPE_INVALID
 
 
 @pytest.mark.parametrize("name", ["", "   ", None], ids=["empty", "spaces", "null"])
-def test_rejects_empty_label_name(name: Any) -> None:
+def test_rejects_empty_tag_name(name: Any) -> None:
     document = default_process()
-    document["labels"]["merged"] = name
-    assert _rejects(document) == LABEL_EMPTY.format(key="merged")
+    _tag(document, "merged")["name"] = name
+    assert _rejects(document) == TAG_NAME_EMPTY.format(key="merged")
 
 
-def test_rejects_step_without_incoming_labels() -> None:
+def test_rejects_duplicate_tag_name() -> None:
+    document = default_process()
+    _tag(document, "merged")["name"] = "ready-for-test"
+    assert _rejects(document) == TAG_NAME_DUPLICATE.format(name="ready-for-test")
+
+
+@pytest.mark.parametrize("title", ["", "   ", None], ids=["empty", "spaces", "null"])
+def test_rejects_empty_tag_title(title: Any) -> None:
+    document = default_process()
+    _tag(document, "merged")["title"] = title
+    assert _rejects(document) == TAG_TITLE_EMPTY.format(key="merged")
+
+
+def test_rejects_unknown_tag_agent() -> None:
+    document = default_process()
+    _tag(document, "review")["agent"] = "нет-такого"
+    assert _rejects(document) == TAG_AGENT_UNKNOWN.format(code="нет-такого")
+
+
+def test_rejects_step_without_incoming_tags() -> None:
     document = default_process()
     _first_step(document)["when"] = []
     assert _rejects(document) == STEP_NO_WHEN.format(id="mockup")
@@ -563,7 +676,7 @@ def test_rejects_duplicate_step_id() -> None:
     assert _rejects(document) == STEP_ID_DUPLICATE.format(id="mockup")
 
 
-def test_rejects_unknown_label_key_in_step() -> None:
+def test_rejects_unknown_tag_key_in_step() -> None:
     document = default_process()
     _first_step(document)["put"] = ["какая-то"]
     assert _rejects(document) == STEP_LABEL_UNKNOWN.format(id="mockup", key="какая-то")
@@ -612,33 +725,87 @@ def test_rejects_route_step_without_route_guard() -> None:
     assert _rejects(document) == STEP_ROUTE_GUARD.format(id="route")
 
 
-def test_labels_are_checked_before_steps() -> None:
-    """Порядок отказов: опечатка в ключе метки называется раньше ошибки ступени."""
+@pytest.mark.parametrize("other_agent", [None, "dsh", "off"], ids=["no-agent", "dsh", "disabled"])
+def test_accepts_step_with_at_most_one_guest_owner(other_agent: str | None) -> None:
+    """Диспетчер, пустой тег и выключенный агент не создают конфликт с гостем."""
     document = default_process()
-    document["labels"]["какая-то"] = "метка"
+    _tag(document, "review")["agent"] = "opencode"
+    _tag(document, "test")["agent"] = other_agent
+    document["steps"][3]["when"] = ["review", "test"]
+    saved = validate_process_document(document, ROLE_CODES, AGENT_CODES, OWNER_AGENT_CODES)
+    assert saved["steps"][3]["when"] == ["review", "test"]
+
+
+def test_rejects_step_with_tags_of_two_agents() -> None:
+    """Входящие теги двух включённых гостей: ступень не знает, кому её отдать."""
+    document = default_process()
+    _tag(document, "review")["agent"] = "opencode"
+    _tag(document, "test")["agent"] = "verify-ci"
+    document["steps"][3]["when"] = ["review", "test"]
+    assert _rejects(document) == STEP_AGENTS_CONFLICT.format(
+        id="review", a="opencode", b="verify-ci"
+    )
+
+
+def test_tags_are_checked_before_steps() -> None:
+    """Порядок отказов: опечатка в ключе тега называется раньше ошибки ступени."""
+    document = default_process()
+    document["tags"].append({"key": "какая-то", "name": "метка", "title": "Метка", "agent": None})
     _first_step(document)["when"] = []
-    assert _rejects(document) == LABEL_UNKNOWN.format(key="какая-то")
+    assert _rejects(document) == TAG_UNKNOWN.format(key="какая-то")
 
 
 def test_step_when_is_checked_before_duplicate_id() -> None:
-    """Внутри ступени «нет входящих меток» называется раньше дубля id."""
+    """Внутри ступени «нет входящих тегов» называется раньше дубля id."""
     document = default_process()
     document["steps"][1]["id"] = "mockup"
     document["steps"][1]["when"] = []
     assert _rejects(document) == STEP_NO_WHEN.format(id="mockup")
 
 
+def test_put_rejects_step_with_two_agents_and_keeps_everything(
+    api_client: TestClient, department_id: int
+) -> None:
+    """422 по ступени с двумя агентами не пишет ни процесс, ни ревизию реестра."""
+    for code, title in (("opencode", "OpenCode"), ("verify-ci", "Verify CI")):
+        created = api_client.post("/api/agents", json={"code": code, "title": title})
+        assert created.status_code == 201, created.text
+
+    _rebuild(api_client)
+    before = api_client.get("/api/registry", headers=HEADERS)
+    assert before.status_code == 200, before.text
+    document = default_process()
+    _tag(document, "review")["agent"] = "opencode"
+    _tag(document, "test")["agent"] = "verify-ci"
+    document["steps"][3]["when"] = ["review", "test"]
+
+    response = api_client.put(_process_url(department_id), json=document)
+    assert response.status_code == 422
+    assert response.json()["detail"] == STEP_AGENTS_CONFLICT.format(
+        id="review", a="opencode", b="verify-ci"
+    )
+    assert api_client.get(_process_url(department_id)).json()["document"] is None
+    after = api_client.get("/api/registry", headers=HEADERS)
+    assert after.status_code == 200, after.text
+    assert after.json() == before.json()
+
+
 @pytest.mark.parametrize(
     "document,text",
     [
-        (_document(version=2), VERSION_UNSUPPORTED),
+        (_document(version=1), VERSION_UNSUPPORTED),
         ("мусор", SHAPE_INVALID),
         (
-            _document(labels={**DEFAULT_LABELS, "лишний": "ключ"}),
-            LABEL_UNKNOWN.format(key="лишний"),
+            _document(
+                tags=[
+                    *default_process()["tags"],
+                    {"key": "лишний", "name": "x", "title": "X", "agent": None},
+                ]
+            ),
+            TAG_UNKNOWN.format(key="лишний"),
         ),
     ],
-    ids=["version", "shape", "label"],
+    ids=["version", "shape", "tag"],
 )
 def test_put_answers_422_with_contract_text(
     client: TestClient,

@@ -1,20 +1,20 @@
 /**
- * Вкладка «Процесс»: таблица переходов отдела, по которой диспетчер исполняет конвейер.
+ * Вкладка «Процесс»: справочник тегов отдела и таблица переходов конвейера.
  *
- * Экран — редактор одного документа: 14 имён меток и строки ступеней. Имена меток и
- * ступени сохраняются **вместе**: таблица ссылается на ключи меток, поэтому половина
- * документа — документ, который никто не проверял. Отсюда одна пара `GET`/`PUT` и одна
- * кнопка «Сохранить» на весь экран.
+ * Экран — редактор одного документа: 14 тегов проекта и строки ступеней. Теги и ступени
+ * сохраняются **вместе**: таблица ссылается на ключи тегов, поэтому половина документа —
+ * документ, который никто не проверял. Отсюда одна пара `GET`/`PUT` и одна кнопка
+ * «Сохранить» на весь экран.
+ *
+ * **Тег, а не имя метки.** У каждого из 14 ключей — имя на GitHub, подпись для глаза и
+ * агент. Агент выбирается на теге: ступень берёт его из своих входящих тегов, и если хоть
+ * один входящий тег отдан включённому гостю, диспетчер ступень не берёт. Подписи тегов
+ * приходят с сервера — своей таблицы подписей у фронта нет.
  *
  * **Своих значений экран не придумывает.** Список стражей и ролей приходит с сервера тем
- * же ответом, что и документ; тексты отказов `422` показываются дословно, без
- * переписывания. Порядок ступеней — колонка `priority`: экран сортирует строки по ней,
- * чтобы таблица совпадала с порядком исполнения.
- *
- * **Метки в ячейке — ключи, а не имена.** В строке ступени видно ровно то, что уходит в
- * документ (`dev`, `areaBackend`), поэтому расхождение со ступенью видно глазами, а
- * человеческие имена живут в блоке имён ниже. Правятся метки списком галочек под строкой:
- * выбор одной метки не сбрасывает остальные, а `select multiple` делал именно это.
+ * же ответом, что и документ; агенты — отдельной ручкой `GET /api/agents`. Тексты отказов
+ * `422` показываются дословно, без переписывания. Порядок ступеней — колонка `priority`:
+ * экран сортирует строки по ней, чтобы таблица совпадала с порядком исполнения.
  *
  * **Сброс к умолчанию не ходит на сервер.** Документ по умолчанию приезжает в `defaults`
  * первого `GET`, кнопка заполняет им форму и оставляет документ «не сохранённым»: пока
@@ -22,8 +22,9 @@
  * именно сохранённое. Так «Сбросить» — это правка формы, а не тихая запись в реестр.
  */
 
-import { Fragment, useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 
+import { listAgents, type Agent } from '../api/agents';
 import { ApiError, UNREACHABLE_TEXT } from '../api/http';
 import {
   PROCESS_LABEL_KEYS,
@@ -35,31 +36,21 @@ import {
   type ProcessStep,
   type ProcessStepKind,
   type ProcessStepRole,
+  type ProcessTag,
 } from '../api/process';
 import { KIND_TITLES, RESOLVER_TITLES } from '../api/processGraph';
 
 type ProcessState =
   | { status: 'loading' }
-  | { status: 'ready'; document: ProcessDocument; defaults: ProcessDocument; roles: string[]; guards: ProcessGuard[] }
+  | {
+      status: 'ready';
+      document: ProcessDocument;
+      defaults: ProcessDocument;
+      roles: string[];
+      guards: ProcessGuard[];
+      agents: Agent[];
+    }
   | { status: 'error'; text: string };
-
-/** Подписи ключей меток: ключ контракта — `dev`, подпись — по-русски. */
-const LABEL_TITLES: Record<ProcessLabelKey, string> = {
-  dev: 'К разработке',
-  frontend: 'Фронтенд',
-  areaBackend: 'Половина: бэкенд',
-  areaFrontend: 'Половина: фронтенд',
-  areaFullstack: 'Половина: полный стек',
-  phaseFrontend: 'Фаза фронтенда',
-  mockup: 'Нужен макет',
-  mockupsReady: 'Макет готов',
-  progress: 'В работе',
-  review: 'На код-ревью',
-  test: 'На тестирование',
-  ok: 'Проверено',
-  failed: 'Тест не прошёл',
-  merged: 'Слито',
-};
 
 /** Четыре ячейки строки, которые правятся списком галочек. */
 type PickerField = 'when' | 'unless' | 'put' | 'drop';
@@ -119,7 +110,7 @@ function pickerHint(field: PickerField, count: number): string {
       : 'Пусто — ступень ничего не меняет.';
   }
   if (field === 'when') {
-    return `Выбрано ${count}: ступень возьмёт тикет со всеми этими метками.`;
+    return `Выбрано ${count}: ступень возьмёт тикет со всеми этими тегами.`;
   }
   return `Выбрано ${count}.`;
 }
@@ -135,18 +126,49 @@ function withStep(document: ProcessDocument, index: number, patch: Partial<Proce
   };
 }
 
+function withTag(document: ProcessDocument, key: ProcessLabelKey, patch: Partial<ProcessTag>): ProcessDocument {
+  return {
+    ...document,
+    tags: document.tags.map((tag) => (tag.key === key ? { ...tag, ...patch } : tag)),
+  };
+}
+
 /** Метки в наборе: порядок канонический, чтобы ячейка не переставляла ключи местами. */
 function toggleKey(keys: ProcessLabelKey[], key: ProcessLabelKey, on: boolean): ProcessLabelKey[] {
   const next = on ? [...keys, key] : keys.filter((current) => current !== key);
   return PROCESS_LABEL_KEYS.filter((current) => next.includes(current));
 }
 
-/** Список галочек под строкой: подписи — ключи документа, как и в самой ячейке. */
+/** Подпись тега с кодом агента: то, что видно в ячейке и в списке галочек. */
+function tagText(tag: ProcessTag | undefined, key: string): string {
+  const title = tag !== undefined && tag.title !== '' ? tag.title : key;
+  return tag?.agent !== null && tag?.agent !== undefined ? `${title} · ${tag.agent}` : title;
+}
+
+/** Владельцы входящих тегов: только живые включённые гости, как у диспетчера и API. */
+function incomingAgents(
+  step: ProcessStep,
+  tags: Map<ProcessLabelKey, ProcessTag>,
+  agents: Agent[],
+): string[] {
+  const live = new Map(agents.map((agent) => [agent.code, agent]));
+  const owners: string[] = [];
+  for (const key of step.when) {
+    const code = tags.get(key)?.agent ?? null;
+    if (code !== null && code !== 'dsh' && live.get(code)?.enabled && !owners.includes(code)) {
+      owners.push(code);
+    }
+  }
+  return owners;
+}
+
+/** Список галочек под строкой: подписи — подпись тега и код агента. */
 function LabelPicker({
   id,
   testId,
   field,
   value,
+  tags,
   onChange,
   onClose,
 }: {
@@ -154,6 +176,7 @@ function LabelPicker({
   testId: string;
   field: PickerField;
   value: ProcessLabelKey[];
+  tags: Map<ProcessLabelKey, ProcessTag>;
   onChange: (keys: ProcessLabelKey[]) => void;
   onClose: () => void;
 }): JSX.Element {
@@ -169,7 +192,7 @@ function LabelPicker({
               checked={value.includes(key)}
               onChange={(event) => onChange(toggleKey(value, key, event.target.checked))}
             />
-            <span>{key}</span>
+            <span>{tagText(tags.get(key), key)}</span>
           </label>
         ))}
       </div>
@@ -183,12 +206,13 @@ function LabelPicker({
   );
 }
 
-/** Ячейка с метками: в покое это текст из ключей, нажатие раскрывает список галочек. */
+/** Ячейка с тегами: в покое это подписи, нажатие раскрывает список галочек. */
 function LabelCell({
   testId,
   field,
   step,
   value,
+  tags,
   open,
   panelId,
   onToggle,
@@ -197,17 +221,19 @@ function LabelCell({
   field: PickerField;
   step: ProcessStep;
   value: ProcessLabelKey[];
+  tags: Map<ProcessLabelKey, ProcessTag>;
   open: boolean;
   panelId: string;
   onToggle: () => void;
 }): JSX.Element {
+  const shown = value.map((key) => tagText(tags.get(key), key));
   return (
     /* Ячейка — обычный `table-cell`: `display: flex` на самом `td` выбрасывает его из
-       раскладки таблицы, и десять колонок перестают совпадать с шапкой. Столбик из
+       раскладки таблицы, и одиннадцать колонок перестают совпадать с шапкой. Столбик из
        кнопки собирает `.proc-cell` внутри. */
     <td className={`proc-cell-cell proc-cell--${field}`} data-label={CELL_LABELS[field]}>
       <div className="proc-cell">
-        {/* Имя кнопки начинается с видимых ключей: скринридер называет то же, что видно
+        {/* Имя кнопки начинается с видимых подписей: скринридер называет то же, что видно
             глазами (`label-content-name-mismatch`, WCAG 2.5.3). Пустая ячейка говорит
             «нет меток» — прочерк сам по себе ничего не называет. */}
         <button
@@ -217,7 +243,7 @@ function LabelCell({
           aria-expanded={open}
           aria-controls={panelId}
           aria-label={`${CELL_TITLES[field]} ступени «${step.title}»: ${
-            value.length === 0 ? '— нет меток' : value.join(', ')
+            shown.length === 0 ? '— нет меток' : shown.join(', ')
           }`}
           onClick={onToggle}
         >
@@ -227,8 +253,8 @@ function LabelCell({
             value.map((key, index) => (
               /* Запятая — текст внутри токена, а не `::after`: имя кнопки выше обязано
                  содержать видимый текст целиком (WCAG 2.5.3). */
-              <span className="lbl" key={key}>
-                {key}
+              <span className="lbl" key={key} data-agent={tags.get(key)?.agent ?? ''}>
+                {tagText(tags.get(key), key)}
                 {index < value.length - 1 ? <span className="lbl__sep">, </span> : null}
               </span>
             ))
@@ -258,7 +284,7 @@ export default function DepartmentProcess({
     setState({ status: 'loading' });
     setError(null);
     try {
-      const body = await getProcess(departmentId);
+      const [body, agents] = await Promise.all([getProcess(departmentId), listAgents()]);
       // Своего процесса нет — форма заполняется умолчаниями: пустая таблица не даёт
       // человеку ничего, а умолчания — это то, что отдел исполняет прямо сейчас.
       const shown = body.document ?? body.defaults;
@@ -269,6 +295,7 @@ export default function DepartmentProcess({
         defaults: body.defaults,
         roles: body.roles,
         guards: body.guards,
+        agents,
       });
       // Сохранённый документ — «Сохранено», а не «не сохранено»: ревизию `GET` не отдаёт,
       // поэтому номер остаётся неизвестным до первого сохранения.
@@ -321,6 +348,11 @@ export default function DepartmentProcess({
     );
   };
 
+  const tags = useMemo(
+    () => new Map((document?.tags ?? []).map((tag) => [tag.key, tag])),
+    [document],
+  );
+
   if (state.status === 'loading') {
     return (
       <p className="muted" data-testid="department-process">
@@ -339,8 +371,9 @@ export default function DepartmentProcess({
     return <></>;
   }
 
-  const { roles, guards } = state;
+  const { roles, guards, agents } = state;
   const roleOptions: ProcessStepRole[] = [null, ...roles, 'by-area', 'by-findings'];
+  const agentOptions = agents.filter((agent) => agent.code !== 'dsh');
 
   return (
     <section className="card proc" data-testid="department-process" aria-label="Процесс отдела">
@@ -382,6 +415,7 @@ export default function DepartmentProcess({
               <th scope="col">Кроме</th>
               <th scope="col">Ставит</th>
               <th scope="col">Снимает</th>
+              <th scope="col">Агент</th>
               <th scope="col">Страж</th>
               <th scope="col">Роль</th>
               <th scope="col">Включена</th>
@@ -395,10 +429,31 @@ export default function DepartmentProcess({
                 patch[field] = keys;
                 edit(withStep(document, index, patch));
               };
+              const owners = incomingAgents(step, tags, agents);
+              const assignedOwners = [
+                ...new Set(
+                  step.when
+                    .map((key) => tags.get(key)?.agent ?? null)
+                    .filter((code): code is string => code !== null && code !== 'dsh'),
+                ),
+              ];
+              const conflict = owners.length > 1;
+              const activeOwner = owners.length === 1 ? owners[0] : null;
+              const ownerNotes = assignedOwners
+                .filter((code) => !owners.includes(code))
+                .map((code) => agents.some((agent) => agent.code === code)
+                  ? `${code} выключен`
+                  : `${code} не найден`);
               return (
                 <Fragment key={step.id}>
                   <tr
-                    className={step.enabled ? 'proc-row' : 'proc-row proc-row--off'}
+                    className={
+                      !step.enabled
+                        ? 'proc-row proc-row--off'
+                        : conflict
+                          ? 'proc-row proc-row--conflict'
+                          : 'proc-row'
+                    }
                     data-testid="process-step-row"
                     data-step-id={step.id}
                   >
@@ -450,11 +505,26 @@ export default function DepartmentProcess({
                         field={field}
                         step={step}
                         value={step[field]}
+                        tags={tags}
                         open={open === field}
                         panelId={`process-picker-${step.id}-${field}`}
                         onToggle={() => togglePicker(step.id, field)}
                       />
                     ))}
+                    <td className="proc-col proc-col--agent" data-label="Агент">
+                      <span
+                        className={conflict ? 'proc-agent proc-agent--conflict' : 'proc-agent'}
+                        data-testid="process-step-agent"
+                      >
+                        {conflict
+                          ? `разные агенты: ${owners.join(', ')}`
+                          : activeOwner !== null
+                            ? activeOwner
+                            : ownerNotes.length > 0
+                              ? `диспетчер (dsh) · ${ownerNotes.join(', ')}`
+                              : 'диспетчер (dsh)'}
+                      </span>
+                    </td>
                     <td className="proc-col proc-col--guard" data-label="Страж">
                       <select
                         className="field__select"
@@ -512,12 +582,13 @@ export default function DepartmentProcess({
                   </tr>
                   {open !== null && (
                     <tr className="proc-picker-row">
-                      <td colSpan={10}>
+                      <td colSpan={11}>
                         <LabelPicker
                           id={`process-picker-${step.id}-${open}`}
                           testId={`process-step-${open}`}
                           field={open}
                           value={step[open]}
+                          tags={tags}
                           onChange={(keys) => changeLabels(open, keys)}
                           onClose={() => setOpenPicker(null)}
                         />
@@ -532,30 +603,87 @@ export default function DepartmentProcess({
         </div>
       )}
 
-      <div className="proc-labels form-section">
-        <h3 className="proc-labels__title">Справочник лейблов</h3>
+      <div className="proc-tags form-section" data-testid="process-tags">
+        <h3 className="proc-labels__title">Справочник тегов проекта</h3>
         <p className="muted">
-          Слева ключ — то, что стоит в ступенях, справа имя лейбла на GitHub: переименовали
-          лейбл — ступени не трогали.
+          Слева ключ — то, что стоит в ступенях. Имя — метка на GitHub, подпись — то, что
+          видно на экране, агент забирает ступень из своих входящих тегов. Тег без агента
+          берёт диспетчер; выключенный агент возвращает тег диспетчеру.
         </p>
-        <div className="proc-labels__grid">
+        {error !== null && (
+          <p className="error" data-testid="process-tags-error" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="proc-tags__grid">
           {PROCESS_LABEL_KEYS.map((key) => {
-            const id = `${key}-name`;
+            const tag = tags.get(key);
+            const agent = agents.find((item) => item.code === tag?.agent);
             return (
-              <label className="proc-cell" key={key} htmlFor={id}>
+              <div className="proc-tags__row" key={key} data-testid={`process-label-${key}`}>
                 <span className="proc-cell__title">
-                  {LABEL_TITLES[key]} · <code>{key}</code>
+                  <code>{key}</code>
                 </span>
-                <input
-                  className="field__input"
-                  id={id}
-                  data-testid={`process-label-${key}`}
-                  value={document.labels[key]}
-                  onChange={(event) =>
-                    edit({ ...document, labels: { ...document.labels, [key]: event.target.value } })
-                  }
-                />
-              </label>
+                <div className="field">
+                  <label className="field__label" htmlFor={`${key}-name`}>
+                    Метка в GitHub
+                  </label>
+                  <input
+                    className="field__input"
+                    id={`${key}-name`}
+                    data-testid={`tag-${key}-name`}
+                    value={tag?.name ?? ''}
+                    onChange={(event) => edit(withTag(document, key, { name: event.target.value }))}
+                  />
+                </div>
+                <div className="field">
+                  <label className="field__label" htmlFor={`${key}-title`}>
+                    Подпись для глаза
+                  </label>
+                  <input
+                    className="field__input"
+                    id={`${key}-title`}
+                    maxLength={100}
+                    data-testid={`tag-${key}-title`}
+                    value={tag?.title ?? ''}
+                    onChange={(event) => edit(withTag(document, key, { title: event.target.value }))}
+                  />
+                </div>
+                <div className="field">
+                  <label className="field__label" htmlFor={`${key}-agent`}>
+                    Агент
+                  </label>
+                  <select
+                    className="field__select"
+                    id={`${key}-agent`}
+                    data-testid={`tag-${key}-agent`}
+                    value={tag?.agent ?? ''}
+                    onChange={(event) =>
+                      edit(withTag(document, key, { agent: event.target.value === '' ? null : event.target.value }))
+                    }
+                  >
+                    <option value="">диспетчер (dsh)</option>
+                    {tag?.agent === 'dsh' && <option value="dsh">диспетчер (dsh)</option>}
+                    {agentOptions.map((item) => (
+                      <option key={item.code} value={item.code}>
+                        {item.title} ({item.code}){item.enabled ? '' : ' — выключен'}
+                      </option>
+                    ))}
+                    {tag?.agent !== null && tag?.agent !== undefined && tag.agent !== 'dsh' && agent === undefined && (
+                      <option value={tag.agent}>{tag.agent} — не найден</option>
+                    )}
+                  </select>
+                  <span className="field__hint">
+                    {tag?.agent === null || tag?.agent === undefined
+                      ? 'его берёт диспетчер'
+                      : agent === undefined
+                        ? 'агента нет в справочнике — ступень возьмёт диспетчер'
+                        : agent.enabled
+                          ? `ступень берёт ${agent.title}`
+                          : 'агент выключен — ступень вернётся диспетчеру'}
+                  </span>
+                </div>
+              </div>
             );
           })}
         </div>

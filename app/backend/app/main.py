@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from app.api import (
+    agents,
     department_kinds,
     departments,
     expenses,
@@ -66,7 +67,11 @@ def create_app() -> FastAPI:
             "по пути `/api/roles`, правятся и удаляются по `/api/roles/{role_id}`; скиллы "
             "роли читаются и создаются по `/api/roles/{role_id}/skills`, а правятся и "
             "удаляются по id скилла — `/api/skills/{skill_id}`. Удаление мягкое, код роли "
-            "и скилла неизменяем. Для harness есть машинные ручки `/api/presets`: манифест "
+            "и скилла неизменяем. Справочник агентов конвейера — `/api/agents`: список и "
+            "создание по `/api/agents`, правка и мягкое удаление по id, машинный heartbeat "
+            "по `PUT /api/agents/{code}/status` с заголовком `X-Registry-Token`. Агент "
+            "выбирается на теге процесса отдела, а не на ступени. Для harness есть машинные "
+            "ручки `/api/presets`: манифест "
             "живых ролей с ревизиями, документ роли и его сохранение; все три требуют "
             "заголовок `X-Registry-Token`. "
             "Реестр проектов отдела — отдельно: `GET /api/registry` отдаёт документ "
@@ -89,6 +94,7 @@ def create_app() -> FastAPI:
     application.include_router(departments.items_router)
     application.include_router(roles.router)
     application.include_router(roles.skills_router)
+    application.include_router(agents.router)
     application.include_router(department_kinds.router)
     application.include_router(tasks.router)
     application.include_router(expenses.router)

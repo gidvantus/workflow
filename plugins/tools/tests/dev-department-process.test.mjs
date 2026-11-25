@@ -139,7 +139,17 @@ check(
   proc.defaultProcess().steps.map((row) => row.priority),
   [1, 61, 121, 181, 241, 301, 361, 421, 481, 541, 601, 661, 721],
 )
-check('имена меток по умолчанию', proc.defaultProcess().labels, proc.DEFAULT_PROCESS_LABELS)
+check(
+  'имена тегов по умолчанию',
+  Object.fromEntries(proc.defaultProcess().tags.map((tag) => [tag.key, tag.name])),
+  proc.DEFAULT_PROCESS_LABELS,
+)
+check(
+  'подписи тегов по умолчанию',
+  Object.fromEntries(proc.defaultProcess().tags.map((tag) => [tag.key, tag.title])),
+  Object.fromEntries(proc.PROCESS_LABEL_KEYS.map((key) => [key, proc.DEFAULT_PROCESS_LABEL_TITLES[key]])),
+)
+check('у тегов по умолчанию агента нет', proc.defaultProcess().tags.every((tag) => tag.agent === null), true)
 check('ключей меток — 14', proc.PROCESS_LABEL_KEYS.length, 14)
 check(
   'каталог стражей',
@@ -367,29 +377,99 @@ check('отпечаток умолчаний', none.digest.length, 12)
 const saved = proc.processOf(proc.defaultProcess())
 check('сохранённый документ — источник web', saved.source, 'web')
 const renamed = proc.defaultProcess()
-renamed.labels.test = 'qa-ready'
+renamed.tags.find((tag) => tag.key === 'test').name = 'qa-ready'
 const renamedProcess = proc.processOf(renamed)
-check('отпечаток меняется от переименования метки', renamedProcess.digest !== saved.digest, true)
-const broken = proc.processOf({ version: 1, labels: { test: 'x' }, steps: [] })
+check('отпечаток меняется от переименования тега', renamedProcess.digest !== saved.digest, true)
+const broken = proc.processOf({ version: 2, tags: [], steps: [] })
 check('битый документ процессом не становится', broken.source, 'default')
 check('причина названа', broken.problems.length > 0, true)
 check('служебный документ не прошёл проверку', proc.validateProcess({ version: 7 }).document, null)
 
-console.log('\n=== имена меток: веб → файл → умолчания ===')
+console.log('\n=== имена тегов: веб → файл → умолчания ===')
 check(
   'без своего процесса имена берутся из файла',
-  proc.labelsOfProcess(none, { test: 'из-файла' }).test,
+  proc.tagsOfProcess(none, { test: 'из-файла' }).labels.test,
   'из-файла',
 )
 check(
   'сохранённый процесс перекрывает файл',
-  proc.labelsOfProcess(renamedProcess, { test: 'из-файла' }).test,
+  proc.tagsOfProcess(renamedProcess, { test: 'из-файла' }).labels.test,
   'qa-ready',
 )
 check(
   'остальные имена — умолчания',
-  proc.labelsOfProcess(none, {}).merged,
+  proc.tagsOfProcess(none, {}).labels.merged,
   'merged',
+)
+check(
+  'агенты приходят только из документа',
+  proc.tagsOfProcess(renamedProcess, { test: 'из-файла' }).agents.test,
+  null,
+)
+
+console.log('\n=== версия 1 читается и переводится в теги ===')
+const legacy = {
+  version: 1,
+  labels: { ...proc.DEFAULT_PROCESS_LABELS },
+  steps: proc.defaultProcess().steps,
+}
+const legacyProcess = proc.processOf(legacy)
+check('старый документ — источник web', legacyProcess.source, 'web')
+check('версия внутренней формы — 2', legacyProcess.document.version, 2)
+check(
+  'тег версии 1: имя из labels, подпись — ключ, агент — null',
+  legacyProcess.document.tags.find((tag) => tag.key === 'review'),
+  { key: 'review', name: 'for-code-review', title: 'review', agent: null },
+)
+check(
+  'старый документ и новый дают разные отпечатки подписей',
+  legacyProcess.digest !== saved.digest,
+  true,
+)
+
+console.log('\n=== владение ступенью по входящим тегам ===')
+const agents = [
+  { code: 'dsh', enabled: true },
+  { code: 'opencode', enabled: true },
+  { code: 'verify-ci', enabled: true },
+  { code: 'off', enabled: false },
+]
+const owners = { review: 'opencode', test: 'dsh', ok: 'off', merged: null, dev: 'verify-ci' }
+check('тег opencode — владелец review', proc.stepOwnerOf(stepOf('review'), owners, agents), 'opencode')
+check('тег dsh владельцем не считается', proc.stepOwnerOf(stepOf('test'), owners, agents), null)
+check('тег выключенного агента владельцем не считается', proc.stepOwnerOf(stepOf('merge'), owners, agents), null)
+check('тег без агента владельцем не считается', proc.stepOwnerOf(stepOf('handoff-frontend'), owners, agents), null)
+check('тег чужого агента владельцем не считается', proc.stepOwnerOf(stepOf('route'), owners, agents), 'verify-ci')
+check(
+  'входящие теги двух агентов дают двух владельцев',
+  proc.tagOwnersOf(['review', 'dev', 'review'], owners, agents),
+  ['opencode', 'verify-ci'],
+)
+const withOwner = proc.defaultProcess()
+withOwner.tags.find((tag) => tag.key === 'review').agent = 'opencode'
+const ownedProcess = proc.processOf(withOwner)
+check(
+  'отданная ступень не попадает в план',
+  proc.planOfProcess(
+    ownedProcess.document,
+    [{ item: 'a', labels: ['review'] }],
+    { skip: (step) => proc.stepOwnerOf(step, proc.tagsOfProcess(ownedProcess, {}).agents, agents) !== null },
+  ),
+  [],
+)
+check(
+  'карточка статуса называет отданные ступени',
+  proc.delegatedStepsOf(ownedProcess.document, proc.tagsOfProcess(ownedProcess, {}).agents, agents),
+  [{ id: 'review', title: 'Код-ревью', agent: 'opencode' }],
+)
+check(
+  'выключенный агент возвращает ступень диспетчеру',
+  proc.delegatedStepsOf(
+    ownedProcess.document,
+    proc.tagsOfProcess(ownedProcess, {}).agents,
+    agents.map((agent) => (agent.code === 'opencode' ? { ...agent, enabled: false } : agent)),
+  ),
+  [],
 )
 const withRole = proc.defaultProcess()
 withRole.steps[0].role = 'нет-такой'

@@ -1,7 +1,7 @@
 /**
  * Клиент процесса отдела: таблица переходов, по которой диспетчер исполняет конвейер.
  *
- * Процесс — документ (`version`, 14 имён меток, ступени), а не набор полей отдела: его
+ * Процесс — документ (`version`, 14 тегов, ступени), а не набор полей отдела: его
  * читают и сохраняют **целиком** парой `GET`/`PUT /api/departments/{id}/process`.
  * `PUT` принимает документ как тело запроса, а не `{document: …}`: половины сохранённой
  * таблицы не бывает, поэтому «частичного» сохранения у ручки нет.
@@ -10,11 +10,17 @@
  * отдела нет, диспетчер исполняет `defaults`), `defaults` — документ по умолчанию сразу,
  * чтобы кнопка «Сбросить к умолчанию» работала без второго запроса, `roles` и `guards` —
  * справочники для выпадающих списков. Своей копии каталога стражей фронт не держит.
+ * Агенты для выбора на теге приходят отдельной ручкой `GET /api/agents`.
  *
- * Ступень ссылается на **ключи** меток (`dev`, `review`, …), а не на имена: имена живут в
- * `labels` документа, и переименование метки не трогает ступени. `priority` — порядок,
- * целое 1..999; шаг между соседними ступенями умолчаний — 60, чтобы новую вставлять между
- * любыми двумя без перенумерации.
+ * **Версия документа.** Сервер пишет версию 2 (`tags` вместо `labels`), но стенд может
+ * хранить версию 1. `readDocument` нормализует обе в памяти: тег версии 1 получает
+ * подпись из `defaults` того же ответа (если её нет — `key`) и `agent = null`.
+ * Сохранение всегда отправляет версию 2.
+ *
+ * Ступень ссылается на **ключи** тегов (`dev`, `review`, …), а не на имена: имена, подписи
+ * и агенты живут в `tags` документа, и переименование тега не трогает ступени. `priority` —
+ * порядок, целое 1..999; шаг между соседними ступенями умолчаний — 60, чтобы новую
+ * вставлять между любыми двумя без перенумерации.
  *
  * Тексты отказов пишет сервер (`422`), фронт показывает их дословно: список текстов —
  * часть контракта, переписывать их на клиенте нельзя.
@@ -22,7 +28,7 @@
 
 import { ApiError, isRecord, readDetail, readJson, send } from './http';
 
-/** Ключ метки: 14 штук, все значения `labels` — строки. */
+/** Ключ тега: 14 штук, все значения тегов ссылаются на них. */
 export type ProcessLabelKey =
   | 'dev'
   | 'frontend'
@@ -90,10 +96,21 @@ export type ProcessStep = {
   enabled: boolean;
 };
 
+/** Тег проекта: имя метки на GitHub, подпись для глаза и ответственный агент. */
+export type ProcessTag = {
+  key: ProcessLabelKey;
+  /** Метка на GitHub (`for-code-review`); переименование не трогает ступени. */
+  name: string;
+  /** Подпись для глаза («На код-ревью»); приходит с сервера, своей копии у фронта нет. */
+  title: string;
+  /** Код живого агента или `null` — «ступень берёт диспетчер». */
+  agent: string | null;
+};
+
 /** Документ процесса: то, что лежит в колонке отдела и уходит в `PUT` целиком. */
 export type ProcessDocument = {
   version: number;
-  labels: Record<ProcessLabelKey, string>;
+  tags: ProcessTag[];
   steps: ProcessStep[];
 };
 
@@ -120,6 +137,22 @@ export type ProcessSaveResponse = {
   revision: number;
   document: ProcessDocument;
 };
+
+/** Имя тега на GitHub из документа; пустая строка — тега нет. */
+export function tagNameOf(document: ProcessDocument, key: ProcessLabelKey): string {
+  return document.tags.find((tag) => tag.key === key)?.name ?? '';
+}
+
+/** Подпись тега для глаза из документа; ключ — запасной вариант. */
+export function tagTitleOf(document: ProcessDocument, key: ProcessLabelKey): string {
+  const title = document.tags.find((tag) => tag.key === key)?.title ?? '';
+  return title === '' ? key : title;
+}
+
+/** Тег документа по ключу: нужен экранам, которые рисуют агента рядом с подписью. */
+export function tagOf(document: ProcessDocument, key: ProcessLabelKey): ProcessTag | undefined {
+  return document.tags.find((tag) => tag.key === key);
+}
 
 const DEPARTMENTS_URL = '/api/departments';
 
@@ -151,18 +184,62 @@ function readLabelKeys(value: unknown): ProcessLabelKey[] {
   );
 }
 
-function readDocument(value: unknown): ProcessDocument | null {
-  if (!isRecord(value) || !isRecord(value.labels) || !Array.isArray(value.steps)) {
+/** Теги версии 2; недостающий ключ заполняется пустым тегом, чтобы строки не пропали. */
+function readTags(value: unknown): ProcessTag[] {
+  const byKey = new Map<ProcessLabelKey, Record<string, unknown>>();
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      if (!isRecord(item)) {
+        continue;
+      }
+      const key = item.key;
+      if (PROCESS_LABEL_KEYS.includes(key as ProcessLabelKey)) {
+        byKey.set(key as ProcessLabelKey, item);
+      }
+    }
+  }
+  return PROCESS_LABEL_KEYS.map((key) => {
+    const tag = byKey.get(key);
+    return {
+      key,
+      name: typeof tag?.name === 'string' ? tag.name : '',
+      title: typeof tag?.title === 'string' && tag.title !== '' ? tag.title : key,
+      agent: typeof tag?.agent === 'string' && tag.agent !== '' ? tag.agent : null,
+    };
+  });
+}
+
+/** Теги версии 1: `labels` объектом; подпись — из умолчаний, агент — диспетчер. */
+function readLegacyTags(
+  value: Record<string, unknown>,
+  defaults: ProcessDocument | null,
+): ProcessTag[] {
+  const titles = new Map((defaults?.tags ?? []).map((tag) => [tag.key, tag.title]));
+  return PROCESS_LABEL_KEYS.map((key) => ({
+    key,
+    name: typeof value[key] === 'string' ? (value[key] as string) : '',
+    title: titles.get(key) ?? key,
+    agent: null,
+  }));
+}
+
+function readDocument(value: unknown, defaults: ProcessDocument | null = null): ProcessDocument | null {
+  if (!isRecord(value) || !Array.isArray(value.steps)) {
     return null;
   }
-  const labels = {} as Record<ProcessLabelKey, string>;
-  for (const key of PROCESS_LABEL_KEYS) {
-    const name = value.labels[key];
-    labels[key] = typeof name === 'string' ? name : '';
+  let tags: ProcessTag[] | null = null;
+  if (Array.isArray(value.tags)) {
+    tags = readTags(value.tags);
+  } else if (isRecord(value.labels)) {
+    tags = readLegacyTags(value.labels, defaults);
+  }
+  if (tags === null) {
+    return null;
   }
   return {
-    version: typeof value.version === 'number' ? value.version : 1,
-    labels,
+    // Фронт всегда пишет версию 2: старый документ нормализуется в памяти при чтении.
+    version: 2,
+    tags,
     steps: readSteps(value.steps),
   };
 }
@@ -181,9 +258,9 @@ function readProcessBody(value: unknown): ProcessResponse {
   const body = isRecord(value) ? value : {};
   const defaults = readDocument(body.defaults);
   return {
-    document: readDocument(body.document),
+    document: readDocument(body.document, defaults),
     // Без умолчаний экран нечего сбрасывать: пустой документ честнее выдуманного.
-    defaults: defaults ?? { version: 1, labels: {} as Record<ProcessLabelKey, string>, steps: [] },
+    defaults: defaults ?? { version: 2, tags: [], steps: [] },
     roles: Array.isArray(body.roles) ? body.roles.filter((role): role is string => typeof role === 'string') : [],
     guards: readGuards(body.guards),
   };

@@ -193,6 +193,37 @@ check('время изменения файла то же', status.registrySync.
 check('а время удачного ответа новое', status.registrySync.fetchedAt !== fetchedAt, true)
 check('при этом синхронизация снова удачна', status.registrySync.ok, true)
 
+console.log('\n=== heartbeat агента: кеш обновляется, ревизия и changedAt — нет ===')
+const idleDocument = webDocument('gidvantus/vahta')
+idleDocument.agents = [{
+  code: 'dsh',
+  title: 'Диспетчер',
+  runtime: 'dsh',
+  enabled: true,
+  status: { state: 'idle', issue_number: null, seen_at: '2026-11-25T10:00:00+00:00' },
+}]
+mode = { kind: 'ok', status: 200, body: idleDocument }
+await app.tick()
+status = await app.status()
+const heartbeatRevision = status.registrySync.revision
+const heartbeatChangedAt = status.registrySync.changedAt
+const busyDocument = JSON.parse(JSON.stringify(idleDocument))
+busyDocument.agents[0].status = { state: 'busy', issue_number: 79, seen_at: '2026-11-25T10:01:00+00:00' }
+mode = { kind: 'ok', status: 200, body: busyDocument }
+await app.tick()
+status = await app.status()
+check('heartbeat доехал до кеша', readCache().agents[0].status.state, 'busy')
+check('heartbeat виден в статусе', status.registry.agents[0].status.issue_number, 79)
+check('ревизия не двигается от heartbeat', status.registrySync.revision, heartbeatRevision)
+check('changedAt не двигается от heartbeat', status.registrySync.changedAt, heartbeatChangedAt)
+const disabledDocument = JSON.parse(JSON.stringify(busyDocument))
+disabledDocument.agents[0].enabled = false
+mode = { kind: 'ok', status: 200, body: disabledDocument }
+await app.tick()
+status = await app.status()
+check('настройка агента меняет ревизию', status.registrySync.revision !== heartbeatRevision, true)
+check('настройка агента двигает changedAt', status.registrySync.changedAt !== heartbeatChangedAt, true)
+
 console.log('\n=== документ не совпал по id: локальные ключи не теряются, кеш не переписан ===')
 // Ровно инцидент из постановки #63: в вебе коды проектов не заполнены, и `id`
 // приходит числовым, а файл держится на слагах. Склейка по `id` не совпадёт —
