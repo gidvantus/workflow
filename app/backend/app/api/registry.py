@@ -260,9 +260,41 @@ def _next_revision(db: Session) -> int:
     return (current or 0) + 1
 
 
+def _empty_status() -> dict[str, Any]:
+    """Пустой heartbeat агента: то, что попадает в **ревизию**, а не в ответ `GET`."""
+    return {"state": None, "issue_number": None, "seen_at": None}
+
+
+def _without_heartbeat(document: dict[str, Any]) -> dict[str, Any]:
+    """Документ ревизии без heartbeat: у агентов `status` пустой.
+
+    Heartbeat — живое состояние, а не свойство реестра: он меняется между ревизиями и
+    новой ревизии не создаёт. Поэтому в историю он не попадает совсем — иначе текст
+    ревизии зависел бы от сердцебиения: две публикации, между которыми человек ничего не
+    правил, различались бы `status` агентов, а в истории осталось бы состояние, верное
+    ровно в момент записи. Ручка `PUT /api/registry` тоже не может его записать: документ
+    приходит из того же `GET`, и его `status` — ровно текущее сердцебиение.
+    """
+    agents = document.get("agents")
+    if not isinstance(agents, list):
+        return document
+    rows: list[Any] = []
+    for agent in agents:
+        if not isinstance(agent, dict) or "status" not in agent:
+            # Ключа нет — агент пришёл от клиента без heartbeat: форму не навязываем.
+            rows.append(agent)
+            continue
+        rows.append({**agent, "status": _empty_status()})
+    return {**document, "agents": rows}
+
+
 def _body(document: dict[str, Any]) -> str:
-    """Текст документа для колонки `body`: одна и та же запись у всех, кто её пишет."""
-    return json.dumps(document, ensure_ascii=False, indent=2)
+    """Текст документа для колонки `body`: одна и та же запись у всех, кто её пишет.
+
+    Heartbeat агентов вычищается: в ревизии `status` пустой, живой отдаёт
+    `GET /api/registry` (`_with_live_agents`).
+    """
+    return json.dumps(_without_heartbeat(document), ensure_ascii=False, indent=2)
 
 
 def _insert(db: Session, document: dict[str, Any], note: str) -> RegistryDocument:
@@ -533,10 +565,11 @@ def _agents(db: Session) -> list[dict[str, Any]]:
 def _with_live_agents(db: Session, document: dict[str, Any]) -> dict[str, Any]:
     """Документ ревизии плюс **текущий** справочник агентов.
 
-    Ревизия хранит состояние на момент записи, а heartbeat агента — живое: он меняется
-    между ревизиями и новой ревизии не создаёт (иначе каждый ход диспетчера писал бы
-    строку истории). Поэтому `GET /api/registry` подставляет актуальный `agents` в
-    документ последней ревизии. Ключ есть всегда, даже у старых ревизий без него.
+    Heartbeat агента — живое состояние: он меняется между ревизиями и новой ревизии не
+    создаёт (иначе каждый ход диспетчера писал бы строку истории). В самой ревизии его
+    поэтому нет — `status` там пустой (`_without_heartbeat`), а `GET /api/registry`
+    подставляет актуальный справочник. Ключ `agents` есть всегда, даже у старых ревизий
+    без него — «агентов нет» отдаётся пустым массивом.
     """
     return {**document, "agents": _agents(db)}
 

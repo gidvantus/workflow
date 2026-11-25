@@ -6,15 +6,18 @@
 экран и диспетчер разошлись бы.
 """
 
+import json
 from collections.abc import Iterator
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app import main
 from app.api import agents as api
 from app.config import Settings, get_settings
+from app.models.registry import RegistryDocument
 
 TOKEN = "registry-test-token"
 HEADERS = {"X-Registry-Token": TOKEN}
@@ -46,6 +49,24 @@ def _create(
     )
     assert response.status_code == 201, response.text
     return response.json()
+
+
+def _project_ready_for_registry(client: TestClient) -> None:
+    """Минимальный проект с отделом: без него `rebuild` не соберёт документ."""
+    project = client.post(
+        "/api/projects",
+        json={"name": "Workflow", "description": "", "repo_url": "gidvantus/workflow"},
+    ).json()
+    created = client.post(f"/api/projects/{project['id']}/departments", json={"kind_id": 1})
+    assert created.status_code == 201, created.text
+
+
+def _revisions(session_factory: sessionmaker[Session]) -> list[RegistryDocument]:
+    """Строки ревизий напрямую из базы — в обход ручек."""
+    with session_factory() as session:
+        return list(
+            session.scalars(select(RegistryDocument).order_by(RegistryDocument.revision)).all()
+        )
 
 
 def test_list_is_empty_without_agents(client: TestClient) -> None:
@@ -191,11 +212,7 @@ def test_status_is_visible_in_list_and_registry(
     assert status["seen_at"].replace("Z", "") == body["seen_at"].replace("Z", "")
 
     # Реестр требует хотя бы один проект с отделом — заводим минимальный.
-    project = api_client.post(
-        "/api/projects",
-        json={"name": "Workflow", "description": "", "repo_url": "gidvantus/workflow"},
-    ).json()
-    api_client.post(f"/api/projects/{project['id']}/departments", json={"kind_id": 1})
+    _project_ready_for_registry(api_client)
     published = api_client.post("/api/registry/rebuild", headers=HEADERS)
     assert published.status_code == 200, published.text
     registry = published.json()["document"]
@@ -219,14 +236,7 @@ def test_registry_agents_are_sorted_by_code_and_always_present(
 ) -> None:
     _create(api_client, code="verify-ci", title="Verify CI")
     _create(api_client, code="opencode", title="OpenCode")
-    project = api_client.post(
-        "/api/projects",
-        json={"name": "Workflow", "description": "", "repo_url": "gidvantus/workflow"},
-    ).json()
-    department = api_client.post(
-        f"/api/projects/{project['id']}/departments", json={"kind_id": 1}
-    ).json()
-    assert department["id"]
+    _project_ready_for_registry(api_client)
 
     response = api_client.post("/api/registry/rebuild", headers=HEADERS)
     assert response.status_code == 200, response.text
@@ -239,11 +249,7 @@ def test_registry_agents_are_sorted_by_code_and_always_present(
 def test_registry_agents_are_live_even_without_new_revision(api_client: TestClient) -> None:
     """`GET /api/registry` подставляет живой справочник: heartbeat не пишет ревизию."""
     agent = _create(api_client, code="verify-ci", title="Verify CI")
-    project = api_client.post(
-        "/api/projects",
-        json={"name": "Workflow", "description": "", "repo_url": "gidvantus/workflow"},
-    ).json()
-    api_client.post(f"/api/projects/{project['id']}/departments", json={"kind_id": 1})
+    _project_ready_for_registry(api_client)
     rebuilt = api_client.post("/api/registry/rebuild", headers=HEADERS)
     assert rebuilt.status_code == 200, rebuilt.text
     before = api_client.get("/api/registry", headers=HEADERS).json()
@@ -260,6 +266,65 @@ def test_registry_agents_are_live_even_without_new_revision(api_client: TestClie
     assert after["agents"][0]["status"]["state"] == "busy"
     assert after["agents"][0]["status"]["issue_number"] == 7
     assert after["projects"] == before["projects"]
+
+
+def test_revision_body_keeps_no_heartbeat(
+    api_client: TestClient,
+    session_factory: sessionmaker[Session],
+) -> None:
+    """Heartbeat живёт только в ответе `GET`: в ревизию он не попадает.
+
+    Иначе две публикации, между которыми человек ничего не правил, различались бы
+    текстом из-за одного сердцебиения — а история хранила бы состояние, верное ровно
+    в момент записи.
+    """
+    _create(api_client)
+    _project_ready_for_registry(api_client)
+    first = api_client.post("/api/registry/rebuild", headers=HEADERS)
+    assert first.status_code == 200, first.text
+
+    heartbeat = api_client.put(
+        "/api/agents/opencode/status",
+        json={"state": "busy", "issue_number": 81},
+        headers=HEADERS,
+    )
+    assert heartbeat.status_code == 200, heartbeat.text
+    second = api_client.post("/api/registry/rebuild", headers=HEADERS)
+    assert second.status_code == 200, second.text
+
+    rows = _revisions(session_factory)
+    assert len(rows) >= 2
+    # Между двумя последними ревизиями менялось только сердцебиение — текст тот же.
+    assert rows[-2].body == rows[-1].body
+    stored = json.loads(rows[-1].body)["agents"][0]
+    assert stored["status"] == {"state": None, "issue_number": None, "seen_at": None}
+
+    # Живой статус по-прежнему виден в документе реестра.
+    live = api_client.get("/api/registry", headers=HEADERS).json()
+    assert live["agents"][0]["status"]["state"] == "busy"
+    assert live["agents"][0]["status"]["issue_number"] == 81
+
+
+def test_put_cannot_store_heartbeat(
+    api_client: TestClient,
+    session_factory: sessionmaker[Session],
+) -> None:
+    """`PUT` документа из того же `GET` не записывает heartbeat в историю."""
+    _create(api_client)
+    _project_ready_for_registry(api_client)
+    assert api_client.post("/api/registry/rebuild", headers=HEADERS).status_code == 200
+    live = api_client.get("/api/registry", headers=HEADERS).json()
+    live["agents"][0]["status"] = {
+        "state": "busy",
+        "issue_number": 7,
+        "seen_at": "2026-11-25T12:00:00Z",
+    }
+
+    saved = api_client.put("/api/registry", json=live, headers=HEADERS)
+    assert saved.status_code == 200, saved.text
+
+    stored = json.loads(_revisions(session_factory)[-1].body)["agents"][0]
+    assert stored["status"] == {"state": None, "issue_number": None, "seen_at": None}
 
 
 def test_status_rejects_unknown_agent_and_state(api_client: TestClient) -> None:
