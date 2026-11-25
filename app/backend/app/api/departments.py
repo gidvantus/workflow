@@ -363,9 +363,7 @@ def _process_agent_codes(db: Session) -> tuple[list[str], list[str]]:
     `dsh` — ровно то же правило, что у диспетчера и экрана процесса. Порядок — по `id`,
     как у `GET /api/agents`.
     """
-    agents = db.scalars(
-        select(Agent).where(Agent.deleted_at.is_(None)).order_by(Agent.id)
-    ).all()
+    agents = db.scalars(select(Agent).where(Agent.deleted_at.is_(None)).order_by(Agent.id)).all()
     live_codes = [agent.code for agent in agents if agent.code]
     owner_codes = [
         agent.code
