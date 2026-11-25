@@ -4124,12 +4124,20 @@ export default {
       }).join('; ')
     }
 
-    // Отпечаток документа. Ревизию наружу отдаёт только запись (`PUT`/`rebuild`),
-    // а `GET` возвращает сам документ; поэтому «на какой ревизии стоит кеш»
-    // отвечает отпечаток содержимого: он меняется ровно тогда, когда меняется
-    // документ, и его видно в статусе рядом с `ok`.
+    // Отпечаток настроек реестра. Ревизию наружу отдаёт только запись (`PUT`/`rebuild`),
+    // а `GET` возвращает сам документ; поэтому «на какой ревизии стоит кеш» отвечает
+    // отпечаток содержимого. Heartbeat агентов в нём не участвует: `busy`/`idle` меняется
+    // на каждом ходу, но не означает правку реестра и не должен двигать `changedAt`.
     function registryDigest(document) {
-      return crypto.createHash('sha1').update(JSON.stringify(document)).digest('hex').slice(0, 12)
+      const stable = Object.assign({}, document)
+      if (Array.isArray(document.agents)) {
+        stable.agents = document.agents.map((agent) => {
+          const copy = Object.assign({}, agent)
+          delete copy.status
+          return copy
+        })
+      }
+      return crypto.createHash('sha1').update(JSON.stringify(stable)).digest('hex').slice(0, 12)
     }
 
     // `registry.apiUrl` — полный адрес ручки (`http://localhost:8096/api/registry`),
@@ -4240,8 +4248,11 @@ export default {
       registrySync.ok = true
       registrySync.error = null
       registrySync.fetchedAt = new Date().toISOString()
+      const previousRevision = registrySync.revision
       registrySync.revision = registryDigest(merged.document)
-      if (written.changed) registrySync.changedAt = registrySync.fetchedAt
+      if (written.changed && (previousRevision === null || previousRevision !== registrySync.revision)) {
+        registrySync.changedAt = registrySync.fetchedAt
+      }
       return { ok: true, changed: written.changed, revision: registrySync.revision, localKeys: merged.localKeys }
     }
 
@@ -4746,6 +4757,17 @@ export default {
             // перечень, а не пересказ.
             lost: registrySync.lost,
             error: registrySync.error,
+          },
+          // Heartbeat диспетчера: `ok: null` — записей в этом процессе ещё не было.
+          // Отказ виден рядом с `registrySync`/`presetsSync` и остаётся в `lastError`,
+          // но ход из-за него не срывается.
+          agentSync: {
+            ok: state.agentSync.ok,
+            at: state.agentSync.at,
+            code: state.agentSync.code,
+            state: state.agentSync.state,
+            issue_number: state.agentSync.issue_number,
+            error: state.agentSync.error,
           },
           // Раскладка пресетов ролей: `ok: null` — синхронизации в этом процессе
           // ещё не было. `roles` — что разложено, `removed` — роли, которых в вебе

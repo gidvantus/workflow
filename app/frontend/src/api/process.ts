@@ -14,7 +14,8 @@
  *
  * **Версия документа.** Сервер пишет версию 2 (`tags` вместо `labels`), но стенд может
  * хранить версию 1. `readDocument` нормализует обе в памяти: тег версии 1 получает
- * `title = key` и `agent = null`. Сохранение всегда отправляет версию 2.
+ * подпись из `defaults` того же ответа (если её нет — `key`) и `agent = null`.
+ * Сохранение всегда отправляет версию 2.
  *
  * Ступень ссылается на **ключи** тегов (`dev`, `review`, …), а не на имена: имена, подписи
  * и агенты живут в `tags` документа, и переименование тега не трогает ступени. `priority` —
@@ -208,17 +209,21 @@ function readTags(value: unknown): ProcessTag[] {
   });
 }
 
-/** Теги версии 1: `labels` объектом; подпись — ключ, агент — диспетчер. */
-function readLegacyTags(value: Record<string, unknown>): ProcessTag[] {
+/** Теги версии 1: `labels` объектом; подпись — из умолчаний, агент — диспетчер. */
+function readLegacyTags(
+  value: Record<string, unknown>,
+  defaults: ProcessDocument | null,
+): ProcessTag[] {
+  const titles = new Map((defaults?.tags ?? []).map((tag) => [tag.key, tag.title]));
   return PROCESS_LABEL_KEYS.map((key) => ({
     key,
     name: typeof value[key] === 'string' ? (value[key] as string) : '',
-    title: key,
+    title: titles.get(key) ?? key,
     agent: null,
   }));
 }
 
-function readDocument(value: unknown): ProcessDocument | null {
+function readDocument(value: unknown, defaults: ProcessDocument | null = null): ProcessDocument | null {
   if (!isRecord(value) || !Array.isArray(value.steps)) {
     return null;
   }
@@ -226,7 +231,7 @@ function readDocument(value: unknown): ProcessDocument | null {
   if (Array.isArray(value.tags)) {
     tags = readTags(value.tags);
   } else if (isRecord(value.labels)) {
-    tags = readLegacyTags(value.labels);
+    tags = readLegacyTags(value.labels, defaults);
   }
   if (tags === null) {
     return null;
@@ -253,7 +258,7 @@ function readProcessBody(value: unknown): ProcessResponse {
   const body = isRecord(value) ? value : {};
   const defaults = readDocument(body.defaults);
   return {
-    document: readDocument(body.document),
+    document: readDocument(body.document, defaults),
     // Без умолчаний экран нечего сбрасывать: пустой документ честнее выдуманного.
     defaults: defaults ?? { version: 2, tags: [], steps: [] },
     roles: Array.isArray(body.roles) ? body.roles.filter((role): role is string => typeof role === 'string') : [],

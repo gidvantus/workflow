@@ -56,17 +56,17 @@ type ProcessState =
 type PickerField = 'when' | 'unless' | 'put' | 'drop';
 
 const CELL_TITLES: Record<PickerField, string> = {
-  when: 'Входящие теги',
+  when: 'Входящие метки',
   unless: 'Кроме',
   put: 'Ставит',
   drop: 'Снимает',
 };
 
 const PICKER_TITLES: Record<PickerField, string> = {
-  when: 'Входящие теги — тикет должен нести все',
-  unless: 'Кроме — ни одного из этих',
-  put: 'Ставит — эти теги появятся у тикета',
-  drop: 'Снимает — эти теги уйдут у тикета',
+  when: 'Входящие метки — тикет должен нести все',
+  unless: 'Кроме — ни одной из этих',
+  put: 'Ставит — эти метки появятся у тикета',
+  drop: 'Снимает — эти метки уйдут у тикета',
 };
 
 /** Подписи полей ступени в блоке на узком экране (≤900): шапки таблицы там нет. */
@@ -145,12 +145,17 @@ function tagText(tag: ProcessTag | undefined, key: string): string {
   return tag?.agent !== null && tag?.agent !== undefined ? `${title} · ${tag.agent}` : title;
 }
 
-/** Разные агенты входящих тегов ступени — без `dsh`: он и есть диспетчер. */
-function incomingAgents(step: ProcessStep, tags: Map<ProcessLabelKey, ProcessTag>): string[] {
+/** Владельцы входящих тегов: только живые включённые гости, как у диспетчера и API. */
+function incomingAgents(
+  step: ProcessStep,
+  tags: Map<ProcessLabelKey, ProcessTag>,
+  agents: Agent[],
+): string[] {
+  const live = new Map(agents.map((agent) => [agent.code, agent]));
   const owners: string[] = [];
   for (const key of step.when) {
     const code = tags.get(key)?.agent ?? null;
-    if (code !== null && code !== 'dsh' && !owners.includes(code)) {
+    if (code !== null && code !== 'dsh' && live.get(code)?.enabled && !owners.includes(code)) {
       owners.push(code);
     }
   }
@@ -224,13 +229,13 @@ function LabelCell({
   const shown = value.map((key) => tagText(tags.get(key), key));
   return (
     /* Ячейка — обычный `table-cell`: `display: flex` на самом `td` выбрасывает его из
-       раскладки таблицы, и колонки перестают совпадать с шапкой. Столбик из кнопки
-       собирает `.proc-cell` внутри. */
+       раскладки таблицы, и одиннадцать колонок перестают совпадать с шапкой. Столбик из
+       кнопки собирает `.proc-cell` внутри. */
     <td className={`proc-cell-cell proc-cell--${field}`} data-label={CELL_LABELS[field]}>
       <div className="proc-cell">
         {/* Имя кнопки начинается с видимых подписей: скринридер называет то же, что видно
             глазами (`label-content-name-mismatch`, WCAG 2.5.3). Пустая ячейка говорит
-            «нет тегов» — прочерк сам по себе ничего не называет. */}
+            «нет меток» — прочерк сам по себе ничего не называет. */}
         <button
           className="proc-cell__pick"
           type="button"
@@ -238,7 +243,7 @@ function LabelCell({
           aria-expanded={open}
           aria-controls={panelId}
           aria-label={`${CELL_TITLES[field]} ступени «${step.title}»: ${
-            shown.length === 0 ? '— нет тегов' : shown.join(', ')
+            shown.length === 0 ? '— нет меток' : shown.join(', ')
           }`}
           onClick={onToggle}
         >
@@ -406,13 +411,13 @@ export default function DepartmentProcess({
               <th scope="col">Порядок</th>
               <th scope="col">Ступень</th>
               <th scope="col">Вид</th>
-              <th scope="col">Входящие теги</th>
+              <th scope="col">Входящие метки</th>
               <th scope="col">Кроме</th>
               <th scope="col">Ставит</th>
               <th scope="col">Снимает</th>
+              <th scope="col">Агент</th>
               <th scope="col">Страж</th>
               <th scope="col">Роль</th>
-              <th scope="col">Агент</th>
               <th scope="col">Включена</th>
             </tr>
           </thead>
@@ -424,13 +429,21 @@ export default function DepartmentProcess({
                 patch[field] = keys;
                 edit(withStep(document, index, patch));
               };
-              const owners = incomingAgents(step, tags);
+              const owners = incomingAgents(step, tags, agents);
+              const assignedOwners = [
+                ...new Set(
+                  step.when
+                    .map((key) => tags.get(key)?.agent ?? null)
+                    .filter((code): code is string => code !== null && code !== 'dsh'),
+                ),
+              ];
               const conflict = owners.length > 1;
-              const activeOwner =
-                owners.length === 1 && agents.some((agent) => agent.code === owners[0] && agent.enabled)
-                  ? owners[0]
-                  : null;
-              const inactiveOwner = owners.length === 1 && activeOwner === null ? owners[0] : null;
+              const activeOwner = owners.length === 1 ? owners[0] : null;
+              const ownerNotes = assignedOwners
+                .filter((code) => !owners.includes(code))
+                .map((code) => agents.some((agent) => agent.code === code)
+                  ? `${code} выключен`
+                  : `${code} не найден`);
               return (
                 <Fragment key={step.id}>
                   <tr
@@ -498,6 +511,20 @@ export default function DepartmentProcess({
                         onToggle={() => togglePicker(step.id, field)}
                       />
                     ))}
+                    <td className="proc-col proc-col--agent" data-label="Агент">
+                      <span
+                        className={conflict ? 'proc-agent proc-agent--conflict' : 'proc-agent'}
+                        data-testid="process-step-agent"
+                      >
+                        {conflict
+                          ? `разные агенты: ${owners.join(', ')}`
+                          : activeOwner !== null
+                            ? activeOwner
+                            : ownerNotes.length > 0
+                              ? `диспетчер (dsh) · ${ownerNotes.join(', ')}`
+                              : 'диспетчер (dsh)'}
+                      </span>
+                    </td>
                     <td className="proc-col proc-col--guard" data-label="Страж">
                       <select
                         className="field__select"
@@ -540,20 +567,6 @@ export default function DepartmentProcess({
                           </option>
                         ))}
                       </select>
-                    </td>
-                    <td className="proc-col proc-col--agent" data-label="Агент">
-                      <span
-                        className={conflict ? 'proc-agent proc-agent--conflict' : 'proc-agent'}
-                        data-testid="process-step-agent"
-                      >
-                        {conflict
-                          ? `разные агенты: ${owners.join(', ')}`
-                          : activeOwner === null
-                            ? inactiveOwner === null
-                              ? 'диспетчер (dsh)'
-                              : `диспетчер (dsh) · ${inactiveOwner} выключен`
-                            : activeOwner}
-                      </span>
                     </td>
                     <td className="proc-col proc-col--enabled" data-label="Включена">
                       <input
