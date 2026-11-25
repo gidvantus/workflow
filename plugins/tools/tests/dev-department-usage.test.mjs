@@ -213,6 +213,9 @@ syncBuiltinESMExports()
 // ходит туда же — на адрес `registry.apiUrl`, поэтому тела смен складываются в
 // `usagePosts`: по ним видно, с каким ключом смена уехала в веб (Б1).
 const usagePosts = []
+// Heartbeat диспетчера ходит на тот же веб: тела проверяют порядок `busy` → `idle`
+// вокруг выдачи роли, а не только успешный факт самого хода.
+const agentPosts = []
 // Занятые пары `(project_ref, shift_key)` — то же, что хранит настоящий веб.
 // Без этого подделка отвечала `changed:true` на любой ключ, и совпавшие ключи двух
 // смен одного дня проходили мимо теста: расход второй смены терялся молча.
@@ -247,6 +250,19 @@ function respondTelegram(options, payload) {
     // диспетчер обязан сходить и за реестром.
     if (path_ === '/api/registry') {
       return { statusCode: 200, body: fs.readFileSync(path.join(stateDir, 'projects.json'), 'utf8') }
+    }
+    if (path_.startsWith('/api/agents/') && path_.endsWith('/status')) {
+      const body = JSON.parse(payload)
+      agentPosts.push(body)
+      return {
+        statusCode: 200,
+        body: JSON.stringify({
+          code: path_.slice('/api/agents/'.length, -'/status'.length),
+          state: body.state,
+          issue_number: body.issue_number,
+          seen_at: new Date().toISOString(),
+        }),
+      }
     }
   }
   return { statusCode: 500, body: '{"message":"неожиданный HTTP: диспетчер должен ходить в GitHub только через MCP"}' }
@@ -312,6 +328,18 @@ https.get = (...args) => {
   }
   process.nextTick(() => cb(res))
   return { on() { return this }, setTimeout() { return this }, destroy() { return this }, end() { return this } }
+}
+
+// С включённым реестром тик также сверяет пресеты через `fetch`. Пустой манифест
+// оставляет пакетные роли на месте и не даёт тесту уйти в настоящую сеть.
+const originalFetch = globalThis.fetch
+globalThis.fetch = async (input) => {
+  const url = new URL(String(input))
+  if (url.pathname !== '/api/presets') throw new Error('неожиданный fetch: ' + url.href)
+  return new Response(JSON.stringify({ revision: 'test-empty', roles: [] }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  })
 }
 
 // ── поддельные сервисы ──────────────────────────────────────────────────────
@@ -451,10 +479,15 @@ issues.set(15, {
   number: 15, title: 'Считать токены по тикету', state: 'open', body: 'постановка',
   labels: ['ready-for-dev', 'area:frontend'], assignees: [],
 })
+agentPosts.length = 0
+writeConfig({ registry: { apiUrl: 'https://web.local/api/registry', token: 't' } })
 let app = await boot()
 let step = await app.tick()
 check('тикет выдан фронтенд-разработчику', step.action + ':' + step.role, 'dispatched:dev-frontend')
 const devSession = step.sessionId
+check('heartbeat стоит busy до выдачи и idle после',
+  agentPosts.map(({ state, issue_number }) => [state, issue_number]),
+  [['busy', 15], ['idle', null]])
 
 let book = readBook()
 check('запись появилась при выдаче', book.length, 1)
@@ -1044,5 +1077,6 @@ checkText('ночная смена принята новым телом', telegr
 check('ни одна из смен суток не ушла в «уже была в журнале»', telegram.join('\n').includes('уже была в журнале'), false)
 
 console.log(failures === 0 ? '\nВСЕ ПРОВЕРКИ ПРОШЛИ' : '\nПРОВАЛОВ: ' + failures)
+globalThis.fetch = originalFetch
 fs.rmSync(home, { recursive: true, force: true })
 process.exit(failures === 0 ? 0 : 1)
