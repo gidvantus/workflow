@@ -283,18 +283,24 @@ def _step(raw: Any, roles: Sequence[str], seen: set[str]) -> dict[str, Any]:
     }
 
 
-def _check_step_owners(steps: Sequence[dict[str, Any]], tags: Sequence[dict[str, Any]]) -> None:
-    """Входящие теги ступени не могут принадлежать двум разным агентам.
+def _check_step_owners(
+    steps: Sequence[dict[str, Any]],
+    tags: Sequence[dict[str, Any]],
+    owner_agent_codes: Sequence[str],
+) -> None:
+    """Входящие теги ступени не могут принадлежать двум разным гостям.
 
-    Правило то же, что у диспетчера: владелец ступени выводится из её входящих тегов.
-    Если теги указывают на двух агентов, ступень не знает, кому её отдать, и сохранение
-    отклоняется — иначе выдача и карточка статуса разошлись бы в толковании.
+    Правило то же, что у диспетчера: владельцем считается только включённый живой агент
+    с кодом не `dsh`. Тег диспетчера, выключенного или отсутствующего агента владение
+    не задаёт, поэтому такую ступень берёт `dsh` и конфликта двух гостей нет.
     """
-    agents = {tag["key"]: tag["agent"] for tag in tags}
+    owners_by_key = {
+        tag["key"]: tag["agent"] if tag["agent"] in owner_agent_codes else None for tag in tags
+    }
     for step in steps:
         owners: list[str] = []
         for key in step["when"]:
-            code = agents.get(key)
+            code = owners_by_key.get(key)
             if code is not None and code not in owners:
                 owners.append(code)
         if len(owners) > 1:
@@ -305,6 +311,7 @@ def validate_process_document(
     value: Any,
     role_codes: Sequence[str],
     agent_codes: Sequence[str],
+    owner_agent_codes: Sequence[str],
 ) -> dict[str, Any]:
     """Проверить документ процесса и вернуть его каноническим.
 
@@ -312,6 +319,8 @@ def validate_process_document(
     документ с несуществующей ролью дал бы отказ при подъёме сессии уже в диспетчере.
     Исключение — резолверы `by-area` и `by-findings`: они не роли, а правила выбора.
     `agent_codes` — коды живых агентов: ими ограничен `agent` тега.
+    `owner_agent_codes` — коды включённых живых агентов, кроме `dsh`: только они
+    считаются владельцем ступени при проверке конфликта входящих тегов.
     """
     if not isinstance(value, dict):
         raise _reject(SHAPE_INVALID)
@@ -327,5 +336,5 @@ def validate_process_document(
     roles = list(role_codes) + list(ROLE_RESOLVERS)
     seen: set[str] = set()
     steps = [_step(raw, roles, seen) for raw in raw_steps]
-    _check_step_owners(steps, tags)
+    _check_step_owners(steps, tags, owner_agent_codes)
     return {"version": PROCESS_VERSION, "tags": tags, "steps": steps}

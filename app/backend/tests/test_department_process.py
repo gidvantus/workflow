@@ -66,8 +66,10 @@ DEVELOPMENT_KIND_ID = 1
 # `by-findings`) в справочнике не живут — они правила выбора, а не роли.
 ROLE_CODES = [code for code, _ in DEFAULT_ROLES]
 
-# Живые агенты для проверки тегов: `dsh` — диспетчер, `opencode` — гость.
-AGENT_CODES = ["dsh", "opencode"]
+# Живые агенты для проверки тегов: диспетчер, два гостя и выключенный агент.
+AGENT_CODES = ["dsh", "opencode", "verify-ci", "off"]
+# Владельцем ступени может быть только включённый гость; `dsh` и `off` им не считаются.
+OWNER_AGENT_CODES = ["opencode", "verify-ci"]
 
 # Таблица ступеней по умолчанию — **литерал из постановки** `#67`: id, приоритет, вид,
 # роль, входящие теги, «кроме», ставит, снимает, страж. Порядок строк — порядок
@@ -345,7 +347,7 @@ def test_guards_catalogue_is_fixed() -> None:
 def test_defaults_pass_their_own_validation_unchanged() -> None:
     """Документ по умолчанию — уже канонический: проверка не двигает и не теряет ключей."""
     document = default_process()
-    assert validate_process_document(document, ROLE_CODES, AGENT_CODES) == document
+    assert validate_process_document(document, ROLE_CODES, AGENT_CODES, OWNER_AGENT_CODES) == document
 
 
 def test_defaults_do_not_leak_between_calls() -> None:
@@ -573,6 +575,25 @@ def test_put_accepts_live_agent_on_tag(
     assert _tag(response.json()["document"], "review")["agent"] == "opencode"
 
 
+def test_put_accepts_step_with_disabled_agent_tag(
+    client: TestClient,
+    department_id: int,
+) -> None:
+    """Выключенный агент остаётся допустимым кодом тега, но не владеет ступенью."""
+    for code, enabled in (("opencode", True), ("verify-ci", False)):
+        created = client.post(
+            "/api/agents", json={"code": code, "title": code, "enabled": enabled}
+        )
+        assert created.status_code == 201, created.text
+    document = default_process()
+    _tag(document, "review")["agent"] = "opencode"
+    _tag(document, "test")["agent"] = "verify-ci"
+    document["steps"][3]["when"] = ["review", "test"]
+    response = client.put(_process_url(department_id), json=document)
+    assert response.status_code == 200, response.text
+    assert response.json()["document"]["steps"][3]["when"] == ["review", "test"]
+
+
 def test_put_hides_deleted_department(client: TestClient, department_id: int) -> None:
     """В удалённый отдел процесс не записать."""
     assert client.delete(f"/api/departments/{department_id}").status_code == 204
@@ -585,7 +606,7 @@ def test_put_hides_deleted_department(client: TestClient, department_id: int) ->
 def _rejects(document: Any) -> str:
     """Текст отказа на документе: `ProcessError` из чистой проверки."""
     with pytest.raises(ProcessError) as caught:
-        validate_process_document(document, ROLE_CODES, AGENT_CODES)
+        validate_process_document(document, ROLE_CODES, AGENT_CODES, OWNER_AGENT_CODES)
     return str(caught.value)
 
 
@@ -704,13 +725,26 @@ def test_rejects_route_step_without_route_guard() -> None:
     assert _rejects(document) == STEP_ROUTE_GUARD.format(id="route")
 
 
-def test_rejects_step_with_tags_of_two_agents() -> None:
-    """Входящие теги двух агентов: ступень не знает, кому её отдать."""
+@pytest.mark.parametrize("other_agent", [None, "dsh", "off"], ids=["no-agent", "dsh", "disabled"])
+def test_accepts_step_with_at_most_one_guest_owner(other_agent: str | None) -> None:
+    """Диспетчер, пустой тег и выключенный агент не создают конфликт с гостем."""
     document = default_process()
     _tag(document, "review")["agent"] = "opencode"
-    _tag(document, "test")["agent"] = "dsh"
+    _tag(document, "test")["agent"] = other_agent
     document["steps"][3]["when"] = ["review", "test"]
-    assert _rejects(document) == STEP_AGENTS_CONFLICT.format(id="review", a="opencode", b="dsh")
+    saved = validate_process_document(document, ROLE_CODES, AGENT_CODES, OWNER_AGENT_CODES)
+    assert saved["steps"][3]["when"] == ["review", "test"]
+
+
+def test_rejects_step_with_tags_of_two_agents() -> None:
+    """Входящие теги двух включённых гостей: ступень не знает, кому её отдать."""
+    document = default_process()
+    _tag(document, "review")["agent"] = "opencode"
+    _tag(document, "test")["agent"] = "verify-ci"
+    document["steps"][3]["when"] = ["review", "test"]
+    assert _rejects(document) == STEP_AGENTS_CONFLICT.format(
+        id="review", a="opencode", b="verify-ci"
+    )
 
 
 def test_tags_are_checked_before_steps() -> None:
@@ -730,24 +764,30 @@ def test_step_when_is_checked_before_duplicate_id() -> None:
 
 
 def test_put_rejects_step_with_two_agents_and_keeps_everything(
-    client: TestClient, department_id: int
+    api_client: TestClient, department_id: int
 ) -> None:
-    """422 по ступени с двумя агентами не пишет ни строки процесса, ни ревизии реестра."""
+    """422 по ступени с двумя агентами не пишет ни процесс, ни ревизию реестра."""
     for code, title in (("opencode", "OpenCode"), ("verify-ci", "Verify CI")):
-        created = client.post("/api/agents", json={"code": code, "title": title})
+        created = api_client.post("/api/agents", json={"code": code, "title": title})
         assert created.status_code == 201, created.text
 
+    _rebuild(api_client)
+    before = api_client.get("/api/registry", headers=HEADERS)
+    assert before.status_code == 200, before.text
     document = default_process()
     _tag(document, "review")["agent"] = "opencode"
     _tag(document, "test")["agent"] = "verify-ci"
     document["steps"][3]["when"] = ["review", "test"]
 
-    response = client.put(_process_url(department_id), json=document)
+    response = api_client.put(_process_url(department_id), json=document)
     assert response.status_code == 422
     assert response.json()["detail"] == STEP_AGENTS_CONFLICT.format(
         id="review", a="opencode", b="verify-ci"
     )
-    assert client.get(_process_url(department_id)).json()["document"] is None
+    assert api_client.get(_process_url(department_id)).json()["document"] is None
+    after = api_client.get("/api/registry", headers=HEADERS)
+    assert after.status_code == 200, after.text
+    assert after.json() == before.json()
 
 
 @pytest.mark.parametrize(

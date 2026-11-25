@@ -9,6 +9,7 @@
 // Запуск: node .dev-department-dialogs-test.mjs
 import fs from 'node:fs'
 import path from 'node:path'
+import http from 'node:http'
 import https from 'node:https'
 import * as pluginPaths from '../plugin-paths.mjs'
 
@@ -1653,6 +1654,114 @@ check('при отказе чтения PR ревьюер зовётся', step.
 check('метки не тронуты', issues.get(4000).labels.slice().sort(), ['area:backend', 'for-code-review'])
 check('сбой назван в состоянии', String((await app.status()).lastError || '').includes('502 Bad Gateway'), true)
 pullDetailsFail = null
+
+console.log('\n=== сценарий 41: heartbeat dsh — busy до сессии, idle после ===')
+const heartbeats = []
+let heartbeatCode = 200
+const heartbeatRegistry = JSON.parse(fs.readFileSync(path.join(stateDir, 'projects.json'), 'utf8'))
+heartbeatRegistry.agents = [{
+  code: 'dsh',
+  title: 'Диспетчер',
+  runtime: 'dsh',
+  enabled: true,
+  status: { state: null, issue_number: null, seen_at: null },
+}]
+const originalHttpRequest = http.request
+const originalHttpGet = http.get
+const originalHeartbeatFetch = globalThis.fetch
+globalThis.fetch = async () => new Response(JSON.stringify({ detail: 'нет' }), { status: 404 })
+function heartbeatResponse(options, payload, callback) {
+  const method = options.method || 'GET'
+  let statusCode = 404
+  let body = '{}'
+  if (method === 'GET' && options.path === '/api/registry') {
+    statusCode = 200
+    body = JSON.stringify(heartbeatRegistry)
+  } else if (method === 'PUT' && options.path === '/api/agents/dsh/status') {
+    const parsed = JSON.parse(payload)
+    heartbeats.push({ token: options.headers['X-Registry-Token'], ...parsed })
+    statusCode = heartbeatCode
+    body = JSON.stringify({ code: 'dsh', ...parsed })
+    if (heartbeatCode === 200) {
+      heartbeatRegistry.agents[0].status = {
+        state: parsed.state,
+        issue_number: parsed.issue_number,
+        seen_at: new Date().toISOString(),
+      }
+    }
+  }
+  const response = {
+    statusCode,
+    setEncoding() { return response },
+    on(event, handler) {
+      if (event === 'data') handler(body)
+      if (event === 'end') process.nextTick(handler)
+      return response
+    },
+  }
+  process.nextTick(() => callback(response))
+}
+function fakeHeartbeatRequest(options, requestOptions, callback) {
+  const done = typeof requestOptions === 'function' ? requestOptions : callback
+  const normalized = typeof requestOptions === 'function'
+    ? options
+    : Object.assign({}, options, requestOptions)
+  if (options instanceof URL) normalized.path = options.pathname + options.search
+  let payload = ''
+  const request = {
+    on() { return request },
+    setTimeout() { return request },
+    destroy() { return request },
+    write(chunk) { payload += chunk; return true },
+    end(chunk) {
+      if (chunk) payload += chunk
+      heartbeatResponse(normalized, payload, done)
+    },
+  }
+  return request
+}
+http.request = fakeHeartbeatRequest
+http.get = (options, requestOptions, callback) => {
+  const request = fakeHeartbeatRequest(options, requestOptions, callback)
+  request.end()
+  return request
+}
+const heartbeatUrl = 'http://127.0.0.1:8096/api/registry'
+fs.writeFileSync(path.join(stateDir, 'dev-department.json'), JSON.stringify({
+  windows: [{ start: '00:00', stop: '23:59' }],
+  maxRework: 3,
+  maxAttempts: 4,
+  stuckAfterMinutes: 30,
+  registry: { apiUrl: heartbeatUrl, token: 'registry-token' },
+}, null, 2))
+reset({ number: 4100, title: 'Демо-тикет 4100', labels: ['ready-for-dev', 'area:backend'], state: 'open' })
+app = await boot()
+step = await tick(app)
+check('heartbeat не сорвал выдачу', step.result.action + ':' + step.result.role, 'dispatched:dev-backend')
+check('busy и idle записаны по контракту', heartbeats.map(({ state, issue_number }) => [state, issue_number]), [['busy', 4100], ['idle', null]])
+check('heartbeat несёт токен реестра', heartbeats.every((item) => item.token === 'registry-token'), true)
+let heartbeatStatus = await app.status()
+check('agentSync успех виден в статусе', {
+  ok: heartbeatStatus.agentSync.ok,
+  code: heartbeatStatus.agentSync.code,
+  state: heartbeatStatus.agentSync.state,
+  issue_number: heartbeatStatus.agentSync.issue_number,
+  error: heartbeatStatus.agentSync.error,
+}, { ok: true, code: 'dsh', state: 'idle', issue_number: null, error: null })
+
+console.log('\n=== сценарий 42: отказ heartbeat не срывает ход и виден в agentSync ===')
+heartbeatCode = 503
+reset({ number: 4200, title: 'Демо-тикет 4200', labels: ['ready-for-dev', 'area:backend'], state: 'open' })
+app = await boot()
+step = await tick(app)
+check('сессия поднята несмотря на 503', step.result.action + ':' + step.result.role, 'dispatched:dev-backend')
+heartbeatStatus = await app.status()
+check('agentSync отказ виден в статусе', heartbeatStatus.agentSync.ok, false)
+check('agentSync называет код отказа', heartbeatStatus.agentSync.error, 'веб ответил кодом 503')
+check('lastError тоже называет heartbeat', String(heartbeatStatus.lastError || '').includes('агент dsh: веб ответил кодом 503'), true)
+http.request = originalHttpRequest
+http.get = originalHttpGet
+globalThis.fetch = originalHeartbeatFetch
 
 console.log('\n=== служебное ===')
 const ids = allRequestIds.map((p) => p.requestId)
