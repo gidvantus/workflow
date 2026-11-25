@@ -268,13 +268,19 @@ function callOf(args) {
 
 https.request = (...args) => {
   const { cb, options } = callOf(args)
+  let body = ''
   return {
     on() { return this },
     setTimeout() { return this },
     destroy() { return this },
+    // Настоящий ClientRequest принимает тело и через write(), и через end().
+    // Heartbeat диспетчера пишет JSON отдельно, поэтому подделка обязана
+    // собрать его так же, как смена, передающая тело сразу в end().
+    write(payload) { body += payload; return true },
     end(payload) {
+      if (payload) body += payload
       process.nextTick(() => {
-        const result = respondTelegram(options, payload)
+        const result = respondTelegram(options, body)
         const res = {
           statusCode: result.statusCode,
           setEncoding() { return res },
