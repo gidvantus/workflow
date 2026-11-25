@@ -347,7 +347,9 @@ def test_guards_catalogue_is_fixed() -> None:
 def test_defaults_pass_their_own_validation_unchanged() -> None:
     """Документ по умолчанию — уже канонический: проверка не двигает и не теряет ключей."""
     document = default_process()
-    assert validate_process_document(document, ROLE_CODES, AGENT_CODES, OWNER_AGENT_CODES) == document
+    assert (
+        validate_process_document(document, ROLE_CODES, AGENT_CODES, OWNER_AGENT_CODES) == document
+    )
 
 
 def test_defaults_do_not_leak_between_calls() -> None:
@@ -581,9 +583,7 @@ def test_put_accepts_step_with_disabled_agent_tag(
 ) -> None:
     """Выключенный агент остаётся допустимым кодом тега, но не владеет ступенью."""
     for code, enabled in (("opencode", True), ("verify-ci", False)):
-        created = client.post(
-            "/api/agents", json={"code": code, "title": code, "enabled": enabled}
-        )
+        created = client.post("/api/agents", json={"code": code, "title": code, "enabled": enabled})
         assert created.status_code == 201, created.text
     document = default_process()
     _tag(document, "review")["agent"] = "opencode"
