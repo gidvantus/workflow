@@ -1850,6 +1850,49 @@ const saved45 = JSON.parse(fs.readFileSync(dialogsPath, 'utf8'))
 check('совпадающий путь: ключ не переписан', saved45['vahta:dev-fullstack:4500'].session, liveSession)
 check('совпадающий путь: ротации не было', readShiftLog().includes('жил в рабочей копии'), false)
 
+console.log('\n=== сценарий 46: ротация диалога ревьюера не стирает контракт повторного круга ===')
+// Диалог и история тикета — разные вопросы: после ротации у ревьюера новый
+// диалог, но прошлые пункты лежат в PR, и «Повторный круг» с секцией «не
+// блокирует» обязан остаться. Фраза «Это тот же диалог…» — наоборот, ложна.
+const staleReview = 'stale-review-4600'
+fs.writeFileSync(dialogsPath, JSON.stringify({ 'vahta:code-review:4600': staleReview }, null, 2))
+fs.rmSync(shiftLog, { force: true })
+pulls.clear()
+comments.length = 0
+pulls.set(4600, { number: 4600, head: { ref: 'feature/4600-demo', sha: 'sha-4600-1' } })
+reset({ number: 4600, title: 'Демо-тикет 4600', labels: ['for-code-review'], state: 'open' })
+persisted.add(staleReview)
+app = await boot()
+step = await tick(app)
+check('ревьюер после ротации: задача выдана', step.result.action + ':' + step.result.role, 'dispatched:code-review')
+check('ревьюер после ротации: сессия новая', step.result.sessionId === staleReview, false)
+check('ревьюер после ротации: agents.create вызван', created.length, 1)
+check('ревьюер после ротации: повтор назван', lastPrompt().text.includes('ПОВТОРНО'), true)
+check('ревьюер после ротации: контракт повторного круга на месте', lastPrompt().text.includes('### Повторная проверка'), true)
+check('ревьюер после ротации: «не блокирует» выведена из маршрута', lastPrompt().text.includes('не создают доработку и в маршруте не участвуют'), true)
+check('ревьюер после ротации: не врёт про тот же диалог', lastPrompt().text.includes('Это тот же диалог'), false)
+check('ревьюер после ротации: история тикета названа', lastPrompt().text.includes('Тикет уже ревьюился'), true)
+check('ревьюер после ротации: ротация в журнале', readShiftLog().includes('диалог ' + staleReview + ' жил в рабочей копии неизвестна'), true)
+
+console.log('\n=== сценарий 47: ротация диалога тестировщика не стирает сверку с прошлым вердиктом ===')
+const staleTester = 'stale-tester-4700'
+fs.writeFileSync(dialogsPath, JSON.stringify({ 'vahta:tester:4700': staleTester }, null, 2))
+fs.rmSync(shiftLog, { force: true })
+pulls.clear()
+comments.length = 0
+pulls.set(4700, { number: 4700, head: { ref: 'feature/4700-demo', sha: 'sha-4700-1' } })
+reset({ number: 4700, title: 'Демо-тикет 4700', labels: ['ready-for-test'], state: 'open' })
+persisted.add(staleTester)
+app = await boot()
+step = await tick(app)
+check('тестировщик после ротации: задача выдана', step.result.action + ':' + step.result.role, 'dispatched:tester')
+check('тестировщик после ротации: сессия новая', step.result.sessionId === staleTester, false)
+check('тестировщик после ротации: agents.create вызван', created.length, 1)
+check('тестировщик после ротации: повтор назван', lastPrompt().text.includes('ПОВТОРНО'), true)
+check('тестировщик после ротации: сверка с прошлым вердиктом на месте', lastPrompt().text.includes('сверься со своим прошлым вердиктом'), true)
+check('тестировщик после ротации: не врёт про тот же диалог', lastPrompt().text.includes('Это тот же диалог'), false)
+check('тестировщик после ротации: ротация в журнале', readShiftLog().includes('диалог ' + staleTester + ' жил в рабочей копии неизвестна'), true)
+
 console.log('\n=== служебное ===')
 const ids = allRequestIds.map((p) => p.requestId)
 check('requestId уникальны', new Set(ids).size, ids.length)

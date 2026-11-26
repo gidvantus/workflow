@@ -2593,9 +2593,11 @@ export default {
       }
     }
 
-    // Тот же вопрос, что и у стража, но для заданий роли: «продолжаешь прошлый
-    // диалог?». Признак «есть запись» здесь не годится — страж может завести
+    // «Предыдущий диалог жив в той же рабочей копии?» — для фразы задания о
+    // продолжении. Признак «есть запись» здесь не годится: страж может завести
     // новую сессию, и роль получила бы задание про историю, которой у неё нет.
+    // Живость самой сессии (`dialogIsResumable`) здесь не проверяется: это
+    // отдельный асинхронный вопрос стража, а фраза строится синхронно.
     function dialogReusable(project, presetId, issueNumber) {
       const entry = existingDialog(project, presetId, issueNumber)
       return !!(entry && dialogWorkspaceFits(entry, project.workspace))
@@ -3168,7 +3170,10 @@ export default {
       return lines.join('\n')
     }
 
-    function testerPrompt(project, issue, repeat) {
+    // `repeat` — «тикет уже был в круге» (история тикета), `sameDialog` — «продолжаешь
+    // тот же диалог». Это разные вопросы: после ротации диалог новый, а тикет всё
+    // равно возвращался в доработку, и сверка с прошлым вердиктом нужна.
+    function testerPrompt(project, issue, repeat, sameDialog) {
       const L = project.labels
       const lines = [
         (repeat ? 'Отдел разработки: ПОВТОРНО проверь issue #' : 'Отдел разработки: проверь issue #') + issue.number + ' «' + issue.title + '» (метка ' + L.test + ').',
@@ -3188,7 +3193,8 @@ export default {
       // россыпь, из-за которой затевался тикет.
       lines.push('При `VERDICT: RED` дефекты идут чеклистом в ТОМ ЖЕ вердикте, двумя секциями `### Бэкенд` и `### Фронтенд`, пункты `- [ ] Б1 · <path:line> — что сломано · Случай: … · Правка: … · Воспроизведение: <команда>`: номер — префикс половины (Б/Ф) и сквозной номер по секции. Закрывать пункты будет разработчик галочками в твоём комментарии, поэтому по одному комментарию на дефект не пиши. `GREEN` — без пунктов и без секций.')
       if (repeat) {
-        lines.splice(2, 0, 'Это тот же диалог, где ты уже проверял этот тикет: тикет возвращался в доработку. Сверься со своим прошлым вердиктом в комментариях и проверь в первую очередь то, что тогда сломалось.')
+        lines.splice(2, 0, (sameDialog ? 'Это тот же диалог, где ты уже проверял этот тикет. ' : '') +
+          'Тикет возвращался в доработку: сверься со своим прошлым вердиктом в комментариях и проверь в первую очередь то, что тогда сломалось.')
         lines.push('Если прошлый дефект исправлен и новых нет — метка ' + L.ok + '.')
       }
       lines.push(reworkCounterLine(project, issue))
@@ -3211,7 +3217,10 @@ export default {
 
     // Код-ревьюер: читает PR и код вокруг него, замечания пишет в PR, а решение
     // отдаёт меткой. Продуктовый код он не правит и стенд не поднимает.
-    function reviewPrompt(project, issue, repeat) {
+    // `repeat` — история тикета (круг не первый), `sameDialog` — диалог тот же.
+    // После ротации рабочей копии ревьюер получает новый диалог, но обязан
+    // сохранить контракт повторного круга: прошлые пункты он читает в PR.
+    function reviewPrompt(project, issue, repeat, sameDialog) {
       const L = project.labels
       const lines = [
         (repeat ? 'Отдел разработки: ПОВТОРНО проверь код по issue #' : 'Отдел разработки: проверь код по issue #') + issue.number + ' «' + issue.title + '» (метка ' + L.review + ').',
@@ -3230,7 +3239,11 @@ export default {
           (project.humanClone ? ' В клон человека ' + project.humanClone + ' не заходить.' : ''),
         'Поставь себе цель, чтобы довести ревью до конца: тикет не должен остаться без метки.',
       ]
-      if (repeat) lines.splice(2, 0, 'Это тот же диалог, где ты уже ревьюил этот тикет: твои прошлые замечания и правки разработчика в его истории — проверь в первую очередь то, что тогда вернул.')
+      if (repeat) {
+        lines.splice(2, 0, sameDialog
+          ? 'Это тот же диалог, где ты уже ревьюил этот тикет: твои прошлые замечания и правки разработчика в его истории — проверь в первую очередь то, что тогда вернул.'
+          : 'Тикет уже ревьюился: прошлые замечания и правки разработчика — в истории тикета. Проверь в первую очередь то, что ты тогда вернул.')
+      }
       // Повторный круг читается сверху вниз: сначала закрыты ли прошлые пункты,
       // потом новое по диффу, и только потом всё, что не блокирует. Секции —
       // часть контракта: по `### Повторная проверка` и `### Новое` диспетчер
@@ -3943,7 +3956,9 @@ export default {
       }
 
       if (role === 'code-review') {
-        const sessionId = await startSession(project, 'code-review', reviewPrompt(project, issue, dialogReusable(project, 'code-review', issue.number)), issue)
+        // История тикета и признак «тот же диалог» считаются по отдельности:
+        // ротация диалога не отменяет того, что круг ревью уже не первый.
+        const sessionId = await startSession(project, 'code-review', reviewPrompt(project, issue, !!existingDialog(project, 'code-review', issue.number), dialogReusable(project, 'code-review', issue.number)), issue)
         // Сессия создана — только теперь ревизия считается показанной ревьюеру;
         // новый коммит обнуляет накопленные пустые круги.
         if (reviewSha) {
@@ -3957,7 +3972,7 @@ export default {
         return { action: 'dispatched', project: project.id, role: 'code-review', issue: issue.number, sessionId }
       }
 
-      const sessionId = await startSession(project, 'tester', testerPrompt(project, issue, dialogReusable(project, 'tester', issue.number)), issue)
+      const sessionId = await startSession(project, 'tester', testerPrompt(project, issue, !!existingDialog(project, 'tester', issue.number), dialogReusable(project, 'tester', issue.number)), issue)
       st.session = { role: 'tester', issue: issue.number, title: issue.title, sessionId, startedAt: new Date().toISOString() }
       st.run.sessions = (st.run.sessions || 0) + 1
       return { action: 'dispatched', project: project.id, role: 'tester', issue: issue.number, sessionId }
