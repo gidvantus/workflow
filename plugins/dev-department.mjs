@@ -37,7 +37,9 @@
 // с код-ревью и повторный тест продолжаются в том же диалоге: у агента уже есть
 // ветка, коммиты и разбор прошлого вердикта. Карта диалогов лежит в
 // <DSH_HOME>/profiles/desktop/dsh-dev-department/dev-department-dialogs.json и
-// переживает перезапуск приложения.
+// переживает перезапуск приложения. Значение — `{ session, workspace }`; диалог
+// продолжается только в той же рабочей копии, иначе ключ ротируется (см.
+// `startSessionWork`).
 //
 // Прогоны идут, пока запущен DSH Desktop. Приложение закрыто — прогонов нет,
 // и это ожидаемое поведение, а не сбой.
@@ -1280,10 +1282,16 @@ function appendShiftLog(text) {
   }
 }
 
-// Карта диалогов: 'проект:роль:номер тикета' → id сессии. Без неё каждая
-// доработка и каждый повторный тест открывали новый диалог, и агент начинал с
-// нуля. Номер тикета уникален только внутри проекта, поэтому проект входит в
-// ключ: у vahta #52 и у brain #52 — разные задачи.
+// Карта диалогов: 'проект:роль:номер тикета' → { session, workspace }. Без неё
+// каждая доработка и каждый повторный тест открывали новый диалог, и агент
+// начинал с нуля. Номер тикета уникален только внутри проекта, поэтому проект
+// входит в ключ: у vahta #52 и у brain #52 — разные задачи.
+//
+// Путь рабочей копии хранится рядом с id не для красоты: сессия живёт в каталоге,
+// где её создали, и после переезда копии подпроцесс-слой (`pwsh`, ripgrep) в ней
+// мёртв. Сверка пути при переиспользовании — в `startSessionWork`; без неё роль
+// молча теряет возможность грепать и запускать команды, а её вердикт выглядит
+// как проверка «по чтению».
 function dialogsFile() {
   return stateFile(STATE_FILES.dialogs)
 }
@@ -1294,7 +1302,20 @@ function readDialogs() {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
     const map = {}
     for (const key of Object.keys(raw)) {
-      if (typeof raw[key] === 'string' && raw[key] !== '') map[key] = raw[key]
+      const value = raw[key]
+      // Старый формат — строка с одним id. Путь рабочей копии в нём не записан,
+      // поэтому значение считается «путь неизвестен» и диалог ротируется при
+      // первом использовании (`startSessionWork`), а не продолжается вслепую.
+      if (typeof value === 'string' && value !== '') {
+        map[key] = { session: value, workspace: null }
+        continue
+      }
+      if (value && typeof value === 'object' && typeof value.session === 'string' && value.session !== '') {
+        map[key] = {
+          session: value.session,
+          workspace: typeof value.workspace === 'string' && value.workspace !== '' ? value.workspace : null,
+        }
+      }
     }
     return map
   } catch (error) {
@@ -1304,10 +1325,38 @@ function readDialogs() {
 
 function writeDialogs(map) {
   try {
-    fs.writeFileSync(dialogsFile(), JSON.stringify(map, null, 2))
+    const out = {}
+    for (const key of Object.keys(map)) {
+      const entry = map[key]
+      if (!entry) continue
+      if (typeof entry === 'string') {
+        // Значение-строку в файл не пишем: новый формат — объект. Путь остаётся
+        // неизвестным, и страж ротирует диалог при первом использовании.
+        out[key] = { session: entry, workspace: null }
+        continue
+      }
+      if (typeof entry.session !== 'string' || entry.session === '') continue
+      out[key] = {
+        session: entry.session,
+        workspace: typeof entry.workspace === 'string' && entry.workspace !== '' ? entry.workspace : null,
+      }
+    }
+    fs.writeFileSync(dialogsFile(), JSON.stringify(out, null, 2))
   } catch (error) {
     // Карта не должна ломать смену: в худшем случае заведётся новый диалог.
   }
+}
+
+// Внешний вид статуса не меняется: `dev_department_status` отдаёт карту
+// `ключ → id сессии` строками, хотя внутри значение — объект с рабочей копией.
+function dialogSessionIds(map) {
+  const out = {}
+  for (const key of Object.keys(map)) {
+    const entry = map[key]
+    const id = typeof entry === 'string' ? entry : (entry && entry.session)
+    if (typeof id === 'string' && id !== '') out[key] = id
+  }
+  return out
 }
 
 async function sendTelegram(bot, text) {
@@ -1506,7 +1555,7 @@ export default {
     // активная сессия и свои счётчики. Общего state.run здесь больше нет.
     const state = {
       projects: {},       // id → { run, lastShiftKey, session, rework, attempts }
-      dialogs: readDialogs(), // 'проект:роль:номер' → id диалога, который ведёт этот тикет
+      dialogs: readDialogs(), // 'проект:роль:номер' → { session, workspace } — диалог, который ведёт этот тикет
       projectProblem: null,
       servedIds: [],
       disabledIds: [],
@@ -2514,6 +2563,53 @@ export default {
       }
     }
 
+    // Один путь — одно имя: регистр и хвостовые слэши Windows не различает, а
+    // прямые и обратные пишутся в одной строке. Пустая строка путём не считается:
+    // у значения старого формата путь неизвестен, и это повод ротировать диалог.
+    function sameWorkspacePath(left, right) {
+      const normalize = (value) => String(value == null ? '' : value)
+        .replace(/\\/g, '/')
+        .replace(/\/+$/, '')
+        .toLowerCase()
+      const a = normalize(left)
+      const b = normalize(right)
+      return a !== '' && b !== '' && a === b
+    }
+
+    // Каталог рабочей копии обязан существовать: сессия из удалённого каталога —
+    // ровно та мёртвая среда, в которой не живут `pwsh` и ripgrep.
+    function workspaceDirectoryExists(value) {
+      try {
+        return fs.statSync(value).isDirectory()
+      } catch (error) {
+        return false
+      }
+    }
+
+    // Страж переиспользования: диалог продолжаем только в той же самой и ещё
+    // существующей рабочей копии. Любая ошибка сверки — повод завести новый
+    // диалог, а не сорвать выдачу задачи: страж падает в сторону «новый».
+    function dialogWorkspaceFits(entry, workspace) {
+      try {
+        if (!entry) return false
+        const saved = typeof entry === 'string' ? null : entry.workspace
+        if (!saved) return false
+        if (!sameWorkspacePath(saved, workspace)) return false
+        return workspaceDirectoryExists(workspace)
+      } catch (error) {
+        return false
+      }
+    }
+
+    // История диалога не должна теряться молча: причина ротации идёт в тот же
+    // канал, что и остальные проблемы диспетчера — `state.lastError` и журнал смены.
+    function noteDialogRotation(sessionId, oldWorkspace, newWorkspace) {
+      const line = 'диалог ' + sessionId + ' жил в рабочей копии ' + (oldWorkspace || 'неизвестна') +
+        ' — заведён новый в ' + newWorkspace
+      state.lastError = line
+      appendShiftLog(line)
+    }
+
     // requestId должен быть новым на каждый запрос: у одного диалога теперь
     // много заданий, а повторный id может быть отброшен как дубль. Одного
     // счётчика мало: после перезапуска приложения он начинается заново, и
@@ -2875,16 +2971,28 @@ export default {
     async function startSessionWork(project, presetId, prompt, issue) {
       const key = dialogKey(project, presetId, issue.number)
       const known = state.dialogs[key]
-      if (known && await dialogIsResumable(known)) {
-        // Продолжаем тот же диалог, а не начинаем с нуля. Запись книги — на обоих
-        // путях и до первого хода: возврат в доработку тоже расходует токены.
-        try {
-          await recordUsageBinding(project, presetId, issue, known)
-          await promptSession(project, known, prompt)
-          return known
-        } catch (error) {
-          // Диалог не ожил — смену не срываем, заводим новый.
-          state.lastError = 'продолжение диалога ' + known + ': ' + (error && error.message ? error.message : String(error))
+      const knownId = typeof known === 'string' ? known : (known && known.session)
+      if (knownId && await dialogIsResumable(knownId)) {
+        // Продолжаем диалог только если он жил в той же рабочей копии, что задана
+        // проекту сейчас. Иначе подпроцесс-слой сессии привязан к переехавшему или
+        // удалённому каталогу, и роль молча теряет `pwsh` и ripgrep.
+        if (dialogWorkspaceFits(known, project.workspace)) {
+          // Продолжаем тот же диалог, а не начинаем с нуля. Запись книги — на обоих
+          // путях и до первого хода: возврат в доработку тоже расходует токены.
+          try {
+            await recordUsageBinding(project, presetId, issue, knownId)
+            await promptSession(project, knownId, prompt)
+            return knownId
+          } catch (error) {
+            // Диалог не ожил — смену не срываем, заводим новый.
+            state.lastError = 'продолжение диалога ' + knownId + ': ' + (error && error.message ? error.message : String(error))
+            delete state.dialogs[key]
+            writeDialogs(state.dialogs)
+          }
+        } else {
+          // Рабочая копия диалога не та (или неизвестна): ключ удаляем и заводим
+          // новую сессию существующим путём ниже. Ротация пишется в журнал.
+          noteDialogRotation(knownId, typeof known === 'string' ? null : known.workspace, project.workspace)
           delete state.dialogs[key]
           writeDialogs(state.dialogs)
         }
@@ -2913,7 +3021,7 @@ export default {
       } catch (error) {
         state.lastError = 'разрешения роли: ' + (error && error.message ? error.message : String(error))
       }
-      state.dialogs[key] = sessionId
+      state.dialogs[key] = { session: sessionId, workspace: workspace.path }
       writeDialogs(state.dialogs)
       await recordUsageBinding(project, presetId, issue, sessionId)
       await promptSession(project, sessionId, prompt)
@@ -4802,7 +4910,7 @@ export default {
           },
           lastTickAt: state.lastTickAt,
           lastError: state.lastError,
-          dialogs: state.dialogs,
+          dialogs: dialogSessionIds(state.dialogs),
           projects: [],
         }
         // Настоящее состояние конвейера — в метках GitHub, поэтому оно переживает

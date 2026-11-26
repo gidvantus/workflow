@@ -1763,6 +1763,91 @@ http.request = originalHttpRequest
 http.get = originalHttpGet
 globalThis.fetch = originalHeartbeatFetch
 
+console.log('\n=== сценарий 43: значение-строка (старый формат) ротируется в новую сессию ===')
+// Путь рабочей копии в старом формате не записан: продолжать такой диалог
+// вслепую значит оставить роль без `pwsh` и ripgrep после переезда копии.
+// Поэтому строка считается «путь неизвестен», ключ заменяется объектом, а
+// причина ротации остаётся в журнале — история не теряется молча.
+const dialogsPath = path.join(stateDir, 'dev-department-dialogs.json')
+const readShiftLog = () => (fs.existsSync(shiftLog) ? fs.readFileSync(shiftLog, 'utf8') : '')
+// Реестр heartbeat из сценариев 41–42 больше не нужен: его отказ перетёр бы
+// `lastError` после строки ротации.
+fs.writeFileSync(path.join(stateDir, 'dev-department.json'), JSON.stringify({
+  windows: [{ start: '00:00', stop: '23:59' }],
+  maxRework: 3,
+  maxAttempts: 4,
+  stuckAfterMinutes: 30,
+}, null, 2))
+const legacySession = 'legacy-4300'
+fs.writeFileSync(dialogsPath, JSON.stringify({ 'vahta:dev-fullstack:4300': legacySession }, null, 2))
+fs.rmSync(shiftLog, { force: true })
+reset({ number: 4300, title: 'Демо-тикет 4300', labels: ['ready-for-dev'], state: 'open' })
+persisted.add(legacySession)
+app = await boot()
+step = await tick(app)
+check('задача выдана', step.result.action + ':' + step.result.role, 'dispatched:dev-fullstack')
+check('сессия новая, а не из старого формата', step.result.sessionId === legacySession, false)
+check('agents.create вызван', created.length, 1)
+check('задание ушло в новую сессию', lastPrompt().sessionId, step.result.sessionId)
+check('статус отдаёт id строкой', (await app.status()).dialogs['vahta:dev-fullstack:4300'], step.result.sessionId)
+const saved43 = JSON.parse(fs.readFileSync(dialogsPath, 'utf8'))
+check('ключ записан объектом с рабочей копией', saved43['vahta:dev-fullstack:4300'], { session: step.result.sessionId, workspace: WORKSPACE })
+check('ротация названа в lastError', String((await app.status()).lastError || ''), 'диалог ' + legacySession + ' жил в рабочей копии неизвестна — заведён новый в ' + WORKSPACE)
+check('ротация названа в журнале смены', readShiftLog().includes('диалог ' + legacySession + ' жил в рабочей копии неизвестна — заведён новый в ' + WORKSPACE), true)
+
+console.log('\n=== сценарий 44: чужой и несуществующий путь — новая сессия и замена ключа ===')
+const oldWorkspace = path.join(home, 'old-workspace')
+fs.mkdirSync(oldWorkspace, { recursive: true })
+const foreignSession = 'foreign-4400'
+fs.writeFileSync(dialogsPath, JSON.stringify({ 'vahta:dev-fullstack:4400': { session: foreignSession, workspace: oldWorkspace } }, null, 2))
+fs.rmSync(shiftLog, { force: true })
+reset({ number: 4400, title: 'Демо-тикет 4400', labels: ['ready-for-dev'], state: 'open' })
+persisted.add(foreignSession)
+app = await boot()
+step = await tick(app)
+check('чужой путь: задача выдана', step.result.action + ':' + step.result.role, 'dispatched:dev-fullstack')
+check('чужой путь: сессия новая', step.result.sessionId === foreignSession, false)
+check('чужой путь: agents.create вызван', created.length, 1)
+check('чужой путь: задание ушло в новую сессию', lastPrompt().sessionId, step.result.sessionId)
+const saved44 = JSON.parse(fs.readFileSync(dialogsPath, 'utf8'))
+check('чужой путь: ключ заменён новым путём', saved44['vahta:dev-fullstack:4400'], { session: step.result.sessionId, workspace: WORKSPACE })
+check('чужой путь: ротация названа в журнале', readShiftLog().includes('диалог ' + foreignSession + ' жил в рабочей копии ' + oldWorkspace + ' — заведён новый в ' + WORKSPACE), true)
+
+const missingSession = 'missing-4401'
+const goneWorkspace = path.join(home, 'gone-workspace')
+fs.writeFileSync(dialogsPath, JSON.stringify({ 'vahta:dev-fullstack:4401': { session: missingSession, workspace: goneWorkspace } }, null, 2))
+fs.rmSync(shiftLog, { force: true })
+reset({ number: 4401, title: 'Демо-тикет 4401', labels: ['ready-for-dev'], state: 'open' })
+persisted.add(missingSession)
+app = await boot()
+step = await tick(app)
+check('нет каталога: задача выдана', step.result.action + ':' + step.result.role, 'dispatched:dev-fullstack')
+check('нет каталога: сессия новая', step.result.sessionId === missingSession, false)
+check('нет каталога: agents.create вызван', created.length, 1)
+check('нет каталога: задание ушло в новую сессию', lastPrompt().sessionId, step.result.sessionId)
+const saved44b = JSON.parse(fs.readFileSync(dialogsPath, 'utf8'))
+check('нет каталога: ключ заменён новым путём', saved44b['vahta:dev-fullstack:4401'], { session: step.result.sessionId, workspace: WORKSPACE })
+check('нет каталога: ротация названа в журнале', readShiftLog().includes('диалог ' + missingSession + ' жил в рабочей копии ' + goneWorkspace + ' — заведён новый в ' + WORKSPACE), true)
+
+console.log('\n=== сценарий 45: совпадающий путь — диалог продолжается без создания сессии ===')
+// Регистр и хвостовой слэш пути не различаются: иначе диалог, записанный с
+// другим написанием того же каталога, ротировался бы зря.
+const liveSession = 'live-4500'
+const samePath = WORKSPACE.toUpperCase().replace(/\\/g, '/') + '/'
+fs.writeFileSync(dialogsPath, JSON.stringify({ 'vahta:dev-fullstack:4500': { session: liveSession, workspace: samePath } }, null, 2))
+fs.rmSync(shiftLog, { force: true })
+reset({ number: 4500, title: 'Демо-тикет 4500', labels: ['ready-for-dev'], state: 'open' })
+persisted.add(liveSession)
+app = await boot()
+step = await tick(app)
+check('совпадающий путь: диалог продолжен', step.result.sessionId, liveSession)
+check('совпадающий путь: agents.create не вызван', created.length, 0)
+check('совпадающий путь: задание ушло в живой диалог', lastPrompt().sessionId, liveSession)
+check('совпадающий путь: статус отдаёт id строкой', (await app.status()).dialogs['vahta:dev-fullstack:4500'], liveSession)
+const saved45 = JSON.parse(fs.readFileSync(dialogsPath, 'utf8'))
+check('совпадающий путь: ключ не переписан', saved45['vahta:dev-fullstack:4500'].session, liveSession)
+check('совпадающий путь: ротации не было', readShiftLog().includes('жил в рабочей копии'), false)
+
 console.log('\n=== служебное ===')
 const ids = allRequestIds.map((p) => p.requestId)
 check('requestId уникальны', new Set(ids).size, ids.length)
