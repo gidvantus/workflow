@@ -1655,7 +1655,7 @@ check('метки не тронуты', issues.get(4000).labels.slice().sort(), 
 check('сбой назван в состоянии', String((await app.status()).lastError || '').includes('502 Bad Gateway'), true)
 pullDetailsFail = null
 
-console.log('\n=== сценарий 41: heartbeat dsh — busy до сессии, idle после ===')
+console.log('\n=== сценарий 41: heartbeat dsh — тик и busy/idle вокруг сессии ===')
 const heartbeats = []
 let heartbeatCode = 200
 const heartbeatRegistry = JSON.parse(fs.readFileSync(path.join(stateDir, 'projects.json'), 'utf8'))
@@ -1738,10 +1738,29 @@ reset({ number: 4100, title: 'Демо-тикет 4100', labels: ['ready-for-dev
 app = await boot()
 step = await tick(app)
 check('heartbeat не сорвал выдачу', step.result.action + ':' + step.result.role, 'dispatched:dev-backend')
-check('busy и idle записаны по контракту', heartbeats.map(({ state, issue_number }) => [state, issue_number]), [['busy', 4100], ['idle', null]])
+check('тик, busy и idle записаны по контракту', heartbeats.map(({ state, issue_number }) => [state, issue_number]), [['idle', null], ['busy', 4100], ['idle', null]])
 check('heartbeat несёт токен реестра', heartbeats.every((item) => item.token === 'registry-token'), true)
 let heartbeatStatus = await app.status()
 check('agentSync успех виден в статусе', {
+  ok: heartbeatStatus.agentSync.ok,
+  code: heartbeatStatus.agentSync.code,
+  state: heartbeatStatus.agentSync.state,
+  issue_number: heartbeatStatus.agentSync.issue_number,
+  error: heartbeatStatus.agentSync.error,
+}, { ok: true, code: 'dsh', state: 'idle', issue_number: null, error: null })
+
+console.log('\n=== сценарий 41б: тик без сессий отмечается на связи сам ===')
+// Реестр уже содержит только агента `dsh` и ни одного тикета с меткой
+// конвейера: тик ничего не запускает, но живой диспетчер обязан отметиться.
+heartbeats.length = 0
+reset()
+app = await boot()
+step = await tick(app)
+check('сессий при тике без тикетов нет', created.length, 0)
+check('тик без сессий отправил idle до всякой сессии', heartbeats.map(({ state, issue_number }) => [state, issue_number]), [['idle', null]])
+check('idle тика несёт токен реестра', heartbeats.every((item) => item.token === 'registry-token'), true)
+heartbeatStatus = await app.status()
+check('agentSync после тика без сессий', {
   ok: heartbeatStatus.agentSync.ok,
   code: heartbeatStatus.agentSync.code,
   state: heartbeatStatus.agentSync.state,
