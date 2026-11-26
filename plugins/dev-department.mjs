@@ -1329,12 +1329,6 @@ function writeDialogs(map) {
     for (const key of Object.keys(map)) {
       const entry = map[key]
       if (!entry) continue
-      if (typeof entry === 'string') {
-        // Значение-строку в файл не пишем: новый формат — объект. Путь остаётся
-        // неизвестным, и страж ротирует диалог при первом использовании.
-        out[key] = { session: entry, workspace: null }
-        continue
-      }
       if (typeof entry.session !== 'string' || entry.session === '') continue
       out[key] = {
         session: entry.session,
@@ -1353,7 +1347,7 @@ function dialogSessionIds(map) {
   const out = {}
   for (const key of Object.keys(map)) {
     const entry = map[key]
-    const id = typeof entry === 'string' ? entry : (entry && entry.session)
+    const id = entry && entry.session
     if (typeof id === 'string' && id !== '') out[key] = id
   }
   return out
@@ -2591,14 +2585,20 @@ export default {
     // диалог, а не сорвать выдачу задачи: страж падает в сторону «новый».
     function dialogWorkspaceFits(entry, workspace) {
       try {
-        if (!entry) return false
-        const saved = typeof entry === 'string' ? null : entry.workspace
-        if (!saved) return false
-        if (!sameWorkspacePath(saved, workspace)) return false
+        if (!entry || !entry.workspace) return false
+        if (!sameWorkspacePath(entry.workspace, workspace)) return false
         return workspaceDirectoryExists(workspace)
       } catch (error) {
         return false
       }
+    }
+
+    // Тот же вопрос, что и у стража, но для заданий роли: «продолжаешь прошлый
+    // диалог?». Признак «есть запись» здесь не годится — страж может завести
+    // новую сессию, и роль получила бы задание про историю, которой у неё нет.
+    function dialogReusable(project, presetId, issueNumber) {
+      const entry = existingDialog(project, presetId, issueNumber)
+      return !!(entry && dialogWorkspaceFits(entry, project.workspace))
     }
 
     // История диалога не должна теряться молча: причина ротации идёт в тот же
@@ -2971,7 +2971,7 @@ export default {
     async function startSessionWork(project, presetId, prompt, issue) {
       const key = dialogKey(project, presetId, issue.number)
       const known = state.dialogs[key]
-      const knownId = typeof known === 'string' ? known : (known && known.session)
+      const knownId = known && known.session
       if (knownId && await dialogIsResumable(knownId)) {
         // Продолжаем диалог только если он жил в той же рабочей копии, что задана
         // проекту сейчас. Иначе подпроцесс-слой сессии привязан к переехавшему или
@@ -2992,7 +2992,7 @@ export default {
         } else {
           // Рабочая копия диалога не та (или неизвестна): ключ удаляем и заводим
           // новую сессию существующим путём ниже. Ротация пишется в журнал.
-          noteDialogRotation(knownId, typeof known === 'string' ? null : known.workspace, project.workspace)
+          noteDialogRotation(knownId, known.workspace, project.workspace)
           delete state.dialogs[key]
           writeDialogs(state.dialogs)
         }
@@ -3778,7 +3778,7 @@ export default {
           state.lastError = 'метка фазы фронтенда: ' + (error && error.message ? error.message : String(error))
         }
       }
-      const prompt = implementerPrompt(project, issue, kind, !!existingDialog(project, role, issue.number), role, findingPaths, findings.source)
+      const prompt = implementerPrompt(project, issue, kind, dialogReusable(project, role, issue.number), role, findingPaths, findings.source)
       const sessionId = await startSession(project, role, prompt, issue)
       st.session = { role: role, issue: issue.number, title: issue.title, sessionId, startedAt: new Date().toISOString() }
       st.run.sessions = (st.run.sessions || 0) + 1
@@ -3922,7 +3922,7 @@ export default {
       // ready-for-dev не снимается: человек мог поставить его заранее, и по
       // готовому макету задача уйдёт в разработку сама.
       if (role === 'design') {
-        const repeat = existingDialog(project, 'design', issue.number)
+        const repeat = dialogReusable(project, 'design', issue.number)
         await applyStepLabels(project, issue, step)
         const sessionId = await startSession(project, 'design', mockupPrompt(project, issue, repeat), issue)
         st.session = { role: 'design', issue: issue.number, title: issue.title, sessionId, startedAt: new Date().toISOString() }
@@ -3936,14 +3936,14 @@ export default {
       }
 
       if (role === 'devops-delivery') {
-        const sessionId = await startSession(project, 'devops-delivery', mergePrompt(project, issue, !!existingDialog(project, 'devops-delivery', issue.number)), issue)
+        const sessionId = await startSession(project, 'devops-delivery', mergePrompt(project, issue, dialogReusable(project, 'devops-delivery', issue.number)), issue)
         st.session = { role: 'devops-delivery', issue: issue.number, title: issue.title, sessionId, startedAt: new Date().toISOString() }
         st.run.sessions = (st.run.sessions || 0) + 1
         return { action: 'dispatched', project: project.id, role: 'devops-delivery', issue: issue.number, sessionId }
       }
 
       if (role === 'code-review') {
-        const sessionId = await startSession(project, 'code-review', reviewPrompt(project, issue, !!existingDialog(project, 'code-review', issue.number)), issue)
+        const sessionId = await startSession(project, 'code-review', reviewPrompt(project, issue, dialogReusable(project, 'code-review', issue.number)), issue)
         // Сессия создана — только теперь ревизия считается показанной ревьюеру;
         // новый коммит обнуляет накопленные пустые круги.
         if (reviewSha) {
@@ -3957,7 +3957,7 @@ export default {
         return { action: 'dispatched', project: project.id, role: 'code-review', issue: issue.number, sessionId }
       }
 
-      const sessionId = await startSession(project, 'tester', testerPrompt(project, issue, !!existingDialog(project, 'tester', issue.number)), issue)
+      const sessionId = await startSession(project, 'tester', testerPrompt(project, issue, dialogReusable(project, 'tester', issue.number)), issue)
       st.session = { role: 'tester', issue: issue.number, title: issue.title, sessionId, startedAt: new Date().toISOString() }
       st.run.sessions = (st.run.sessions || 0) + 1
       return { action: 'dispatched', project: project.id, role: 'tester', issue: issue.number, sessionId }
