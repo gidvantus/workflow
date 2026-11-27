@@ -40,6 +40,7 @@ from app.api.projects import (
 )
 from app.api.usage import (
     MAX_COST,
+    MAX_MANUAL_COST,
     SHIFT_NOT_FOUND,
     rates_snapshot,
 )
@@ -445,7 +446,7 @@ def recalculate_expense(
         if _prices_are_empty(project):
             raise _reject(NO_PRICES)
         amount = amount_for(_expense_counts(expense), prices)
-        if amount > MAX_COST:
+        if amount > MAX_MANUAL_COST:
             raise _reject(COST_OVERFLOW)
         expense.amount = amount
         total = store_project_total(db, project)

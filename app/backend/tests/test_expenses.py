@@ -14,6 +14,7 @@
 """
 
 from collections.abc import Iterator
+from datetime import date
 from decimal import Decimal
 from typing import Any
 
@@ -27,6 +28,7 @@ from app import main
 from app.api import expenses as api
 from app.api import usage as usage_api
 from app.config import Settings, get_settings
+from app.models.expense import ProjectExpense
 
 PROJECT: dict[str, str] = {
     "name": "Workflow",
@@ -1208,8 +1210,13 @@ def test_recalculate_without_prices_refuses(machine: TestClient, kind: str) -> N
     assert sum(Decimal(item["amount"]) for item in journal["items"]) == Decimal("0.540000")
 
 
-def test_recalculate_manual_overflow_refuses_without_changing_row(client: TestClient) -> None:
-    """Сумма сверх `Numeric(14,6)` — `422` про предел журнала, строка остаётся прежней."""
+def test_recalculate_manual_beyond_shift_ceiling_succeeds(client: TestClient) -> None:
+    """Строка дороже потолка смены пересчитывается: её колонка шире `Numeric(14,6)`.
+
+    `POST` принимает ручную запись с суммой 10^14 — это валидный ввод контракта, — и
+    потолок смены (`MAX_COST`) к ней не применим: сравнение шло бы с чужим пределом, и
+    строку, которую сервер сам принял, нельзя было бы пересчитать никогда.
+    """
     project = _create_project(
         client,
         price_input="100000000",
@@ -1222,10 +1229,49 @@ def test_recalculate_manual_overflow_refuses_without_changing_row(client: TestCl
 
     response = _recalculate(client, project["id"], "manual", row["id"])
 
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json()["item"]["amount"] == "100000000000000.000000"
+    assert response.json()["total"] == "100000000000000.000000"
+
+
+def test_recalculate_manual_overflow_refuses_without_changing_row(
+    client: TestClient,
+    session_factory: sessionmaker[Session],
+) -> None:
+    """Сумма сверх `Numeric(24,6)` — `422` про предел журнала, строка остаётся прежней.
+
+    Контракт цен (10 знаков до точки) и количеств (до 10^12) даёт не больше 4·10^16, а
+    колонка журнала держит 10^18: ручка записи такую строку не создаёт. Поэтому строка с
+    количеством сверх `TOKENS_MAX` кладётся в базу напрямую — проверяется последняя защита
+    колонки, а не вход ручки.
+    """
+    project = _create_project(
+        client,
+        price_input="9999999999",
+        price_output="0",
+        price_cache_read="0",
+        price_cache_write="0",
+    )
+    with session_factory() as session:
+        expense = ProjectExpense(
+            project_id=project["id"],
+            spent_on=date(2026, 11, 19),
+            tokens_input=10**15,
+            tokens_output=0,
+            tokens_cache_read=0,
+            tokens_cache_write=0,
+            amount=Decimal("1"),
+        )
+        session.add(expense)
+        session.commit()
+        row_id = expense.id
+
+    response = _recalculate(client, project["id"], "manual", row_id)
+
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     assert response.json()["detail"] == api.COST_OVERFLOW
     journal = client.get(f"/api/projects/{project['id']}/expenses").json()
-    assert journal["items"][0]["amount"] == "100000000000000.000000"
+    assert journal["items"][0]["amount"] == "1.000000"
 
 
 def test_recalculate_shift_overflow_refuses_without_touching_shift(machine: TestClient) -> None:
