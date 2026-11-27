@@ -1,7 +1,7 @@
 {
   "name": "dsh-dev-department",
   "version": "1.1.0",
-  "description": "Отдел разработки для DeepSeek Harness: bundle-патч профиля (четыре хост-плагина) и десять ролей, которые плагин раскладывает в ~/.dsh/.agent-presets",
+  "description": "Отдел разработки для DeepSeek Harness: bundle-патч профиля (пять хост-плагинов) и десять ролей, которые плагин раскладывает в ~/.dsh/.agent-presets",
   "type": "module",
   "exports": {
     "./plugins/state-paths.mjs": "./plugins/state-paths.mjs",
@@ -11,6 +11,7 @@
     "./plugins/process.mjs": "./plugins/process.mjs",
     "./plugins/role-sessions.mjs": "./plugins/role-sessions.mjs",
     "./plugins/role-permissions.mjs": "./plugins/role-permissions.mjs",
+    "./plugins/attach-image.mjs": "./plugins/attach-image.mjs",
     "./plugins/tg-bridge.mjs": "./plugins/tg-bridge.mjs",
     "./plugins/usage-ledger.mjs": "./plugins/usage-ledger.mjs",
     "./plugins/usage-web.mjs": "./plugins/usage-web.mjs",
@@ -26,6 +27,7 @@
     "/plugins/process.mjs",
     "/plugins/role-sessions.mjs",
     "/plugins/role-permissions.mjs",
+    "/plugins/attach-image.mjs",
     "/plugins/tg-bridge.mjs",
     "/plugins/usage-ledger.mjs",
     "/plugins/usage-web.mjs",

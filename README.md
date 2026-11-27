@@ -17,7 +17,7 @@
 `package.json` с полем `dsh.bundle.patch`, а сам слой композиции профиля —
 `plugins/cordis.patch.yml`. Одна команда
 `dsh plugin add github:gidvantus/workflow#<commit>` ставит его зависимостью профиля,
-и после перезапуска DSH в профиле появляются четыре хост-плагина отдела и десять
+и после перезапуска DSH в профиле появляются пять хост-плагинов отдела и десять
 ролей — без раскладки файлов руками.
 
 В репозитории две директории: `plugins/` — сам пакет отдела и всё его
@@ -55,10 +55,12 @@ plugins/                        ОТДЕЛ РАЗРАБОТКИ: пакет и �
                                 раскладка ролей в ~/.dsh/.agent-presets
   usage-ledger.mjs              книга привязок «сессия → тикет» и счёт токенов
   usage-web.mjs                 отправка закрытой смены в веб и очередь недоотправленного
-  state-paths.mjs               где живёт состояние отдела: каталог, девять имён,
+  state-paths.mjs               где живёт состояние отдела: каталог, десять имён,
                                 однократный перенос со старого места
   role-sessions.mjs             инструменты open_role_session / list_agent_presets
   role-permissions.mjs          роли получают danger-full-access (без запросов)
+  attach-image.mjs              картинки в комментариях: инструмент attach_image
+                                загружает PNG/JPG в user-attachments GitHub
   tg-bridge.mjs                 мост в Telegram
   plugins/agent-presets/                агент-плоскость DSH: роли, они же десять пресетов в
                                 списке (плагин кладёт их в ~/.dsh/.agent-presets)
@@ -164,7 +166,7 @@ DSH собирается из композиций Cordis. Здесь их дв�
 
    Команда кладёт пакет `dsh-dev-department` зависимостью профиля
    (`~/.dsh/profiles/desktop/node_modules/dsh-dev-department`) и дописывает его в
-   `dsh.profile.bundles`. Дальше DSH применяет его патч: четыре хост-плагина
+   `dsh.profile.bundles`. Дальше DSH применяет его патч: пять хост-плагинов
    отдела и корень пресетов — каталог `plugins/agent-presets/` внутри пакета.
 
    Терминал DSH подставляет активный профиль и `DSH_HOME` сам. Если команду
@@ -360,6 +362,7 @@ DSH собирается из композиций Cordis. Здесь их дв�
   dev-department-mcp.log         журнал транспорта MCP
   role-sessions.log              журнал role-sessions
   role-permissions.log           журнал role-permissions
+  attach-image.log               журнал загрузок картинок в комментарии
 ```
 
 Почему не рядом с модулями: `dsh plugin add` переустанавливает пакет, и файл внутри
@@ -484,7 +487,7 @@ node usage-ledger.test.mjs              # книга учёта токенов, 
 node dev-department-usage.test.mjs      # привязка при выдаче роли, карточка usage в статусе, сводка смены
 node usage-web.test.mjs                 # журнал расхода в веб: тело смены, отправка, очередь и её потолок
 node issue-tokens.test.mjs              # plugins/tools/issue-tokens.mjs: таблица по тикету, сверка, непривязанные сессии
-node state-paths.test.mjs               # модуль путей состояния: каталог, девять имён, однократный перенос
+node state-paths.test.mjs               # модуль путей состояния: каталог, десять имён, однократный перенос
 node plugin-manifests.test.mjs          # манифесты хост-плагинов: без name+version каждый ход падает с REQUEST_EXTENSION
 node plugin-paths.test.mjs              # сам помощник раскладок: порядок поиска, приоритет, отказной сценарий
 ```

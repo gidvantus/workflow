@@ -44,3 +44,8 @@
     # работа не упиралась в запросы подтверждения.
     - id: role-permissions
       name: 'dsh-dev-department/plugins/role-permissions.mjs'
+
+    # Картинки в комментариях: attach_image загружает PNG/JPG в user-attachments
+    # GitHub и отдаёт markdown-строку вместо пути на диске (issue #87).
+    - id: attach-image
+      name: 'dsh-dev-department/plugins/attach-image.mjs'
