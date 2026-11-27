@@ -2896,11 +2896,12 @@ export default {
 
     // ── heartbeat диспетчера ────────────────────────────────────────────────
     //
-    // Агент `dsh` — это сам диспетчер. Перед ходом он пишет себе `busy` с номером
-    // тикета, после хода — `idle`: экран «Агенты» и `dev_department_status` видят, чем
-    // отдел занят, не заглядывая в журнал. Сбой веба **не срывает ход**: та же политика,
-    // что у `registrySync` — причина уходит в `lastError`, конвейер продолжается на
-    // локальном состоянии.
+    // Агент `dsh` — это сам диспетчер. Он пишет себе `busy` с номером тикета перед
+    // каждым ходом и `idle` после него, а ещё отмечается на связи каждый тик: экран
+    // «Агенты» и `dev_department_status` отличают простаивающего диспетчера от не
+    // выходившего на связь, не заглядывая в журнал. Сбой веба **не срывает ход**: та же
+    // политика, что у `registrySync` — причина уходит в `lastError`, конвейер
+    // продолжается на локальном состоянии.
     const AGENT_HEARTBEAT_TIMEOUT_MS = 5 * 1000
 
     function sendAgentStatus(code, agentState, issueNumber) {
@@ -2960,9 +2961,12 @@ export default {
     // Занятость отдела считается по `st.session`, а не по флагу «сейчас тикаю»:
     // сессия ставится после старта хода и снимается сторожем, поэтому тик и
     // `startSession` видят одно состояние. Иначе `idle` тика затёр бы `busy`
-    // идущей сессии.
+    // идущей сессии. Проекты вне `state.servedIds` не считаются: отдел их больше
+    // не обслуживает, их `st.session` уже не снимет сторож, и висящий `busy` врал бы
+    // человеку бессрочно.
     function dispatcherPresence() {
-      for (const st of Object.values(state.projects)) {
+      for (const [id, st] of Object.entries(state.projects)) {
+        if (!state.servedIds.includes(id)) continue
         const session = st && st.session
         if (!session) continue
         return {
