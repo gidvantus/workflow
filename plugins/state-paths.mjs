@@ -24,6 +24,7 @@
 //   <DSH_HOME>/profiles/desktop/dsh-dev-department/dev-department-mcp.log
 //   <DSH_HOME>/profiles/desktop/dsh-dev-department/role-sessions.log
 //   <DSH_HOME>/profiles/desktop/dsh-dev-department/role-permissions.log
+//   <DSH_HOME>/profiles/desktop/dsh-dev-department/attach-image.log
 //
 // Имена файлов не меняются — меняется только каталог. Формат `projects.json` и
 // `dev-department.json` тоже не меняется: перенос — это путь, а не новая схема.
@@ -46,7 +47,7 @@ import path from 'node:path'
 export const STATE_PROFILE = 'desktop'
 
 /**
- * Девять имён состояния отдела. Ключ — для кода, значение — имя файла на диске:
+ * Десять имён состояния отдела. Ключ — для кода, значение — имя файла на диске:
  * имена знают и плагины, и инструменты, поэтому переименование здесь — смена
  * контракта, а не косметика.
  */
@@ -62,6 +63,9 @@ export const STATE_FILES = {
   // Приём смен журнала расхода отвечает не всегда: стенд может быть не поднят, и
   // посчитанный расход надо где-то придержать до следующего тика (#57).
   usageQueue: 'dev-department-usage-queue.json',
+  // Загрузки картинок в комментарии (attach_image): консольный вывод плагинов в
+  // логи DSH не попадает, поэтому каждая загрузка и отказ пишутся сюда (#87).
+  attachImage: 'attach-image.log',
 }
 
 /**
