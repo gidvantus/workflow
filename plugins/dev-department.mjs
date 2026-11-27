@@ -2896,11 +2896,12 @@ export default {
 
     // ── heartbeat диспетчера ────────────────────────────────────────────────
     //
-    // Агент `dsh` — это сам диспетчер. Перед ходом он пишет себе `busy` с номером
-    // тикета, после хода — `idle`: экран «Агенты» и `dev_department_status` видят, чем
-    // отдел занят, не заглядывая в журнал. Сбой веба **не срывает ход**: та же политика,
-    // что у `registrySync` — причина уходит в `lastError`, конвейер продолжается на
-    // локальном состоянии.
+    // Агент `dsh` — это сам диспетчер. Он пишет себе `busy` с номером тикета перед
+    // каждым ходом и `idle` после него, а ещё отмечается на связи каждый тик: экран
+    // «Агенты» и `dev_department_status` отличают простаивающего диспетчера от не
+    // выходившего на связь, не заглядывая в журнал. Сбой веба **не срывает ход**: та же
+    // политика, что у `registrySync` — причина уходит в `lastError`, конвейер
+    // продолжается на локальном состоянии.
     const AGENT_HEARTBEAT_TIMEOUT_MS = 5 * 1000
 
     function sendAgentStatus(code, agentState, issueNumber) {
@@ -2955,6 +2956,34 @@ export default {
       }
       if (result.error) state.lastError = 'агент ' + code + ': ' + result.error
       return result
+    }
+
+    // Занятость отдела считается по `st.session`, а не по флагу «сейчас тикаю»:
+    // сессия ставится после старта хода и снимается сторожем, поэтому тик и
+    // `startSession` видят одно состояние. Иначе `idle` тика затёр бы `busy`
+    // идущей сессии. Проекты вне `state.servedIds` не считаются: отдел их больше
+    // не обслуживает, их `st.session` уже не снимет сторож, и висящий `busy` врал бы
+    // человеку бессрочно.
+    function dispatcherPresence() {
+      for (const [id, st] of Object.entries(state.projects)) {
+        if (!state.servedIds.includes(id)) continue
+        const session = st && st.session
+        if (!session) continue
+        return {
+          state: 'busy',
+          issue_number: Number.isInteger(session.issue) ? session.issue : null,
+        }
+      }
+      return { state: 'idle', issue_number: null }
+    }
+
+    // Тик отмечается на связи каждый раз, а не только вокруг сессии: иначе живой,
+    // но простаивающий диспетчер в «Агентах» выглядел бы как не выходивший на
+    // связь. Сбой веба тик не срывает — причина уходит в `lastError`, как у
+    // `registrySync`.
+    async function reportDispatcherPresence() {
+      const presence = dispatcherPresence()
+      return reportAgentStatus(DISPATCHER_AGENT_CODE, presence.state, presence.issue_number)
     }
 
     // Ход отдела: heartbeat `busy` ставится до подъёма сессии, `idle` — после того как
@@ -4574,6 +4603,10 @@ export default {
       config = loadConfig()
       const now = new Date()
       state.lastTickAt = now.toISOString()
+
+      // Отметка «на связи» — каждый тик, до всякого запуска сессии: по ней экран
+      // «Агенты» отличает простаивающего диспетчера от не выходившего на связь.
+      await reportDispatcherPresence()
 
       // Кеш реестра обновляется до чтения проектов: тик должен работать на том
       // документе, который только что пришёл из веба.

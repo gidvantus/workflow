@@ -213,8 +213,8 @@ syncBuiltinESMExports()
 // ходит туда же — на адрес `registry.apiUrl`, поэтому тела смен складываются в
 // `usagePosts`: по ним видно, с каким ключом смена уехала в веб (Б1).
 const usagePosts = []
-// Heartbeat диспетчера ходит на тот же веб: тела проверяют порядок `busy` → `idle`
-// вокруг выдачи роли, а не только успешный факт самого хода.
+// Heartbeat диспетчера ходит на тот же веб: тела проверяют порядок `idle` (от тика)
+// → `busy` → `idle` вокруг выдачи роли, а не только успешный факт самого хода.
 const agentPosts = []
 // Занятые пары `(project_ref, shift_key)` — то же, что хранит настоящий веб.
 // Без этого подделка отвечала `changed:true` на любой ключ, и совпавшие ключи двух
@@ -485,9 +485,9 @@ let app = await boot()
 let step = await app.tick()
 check('тикет выдан фронтенд-разработчику', step.action + ':' + step.role, 'dispatched:dev-frontend')
 const devSession = step.sessionId
-check('heartbeat стоит busy до выдачи и idle после',
+check('heartbeat: idle от тика, busy до выдачи, idle после',
   agentPosts.map(({ state, issue_number }) => [state, issue_number]),
-  [['busy', 15], ['idle', null]])
+  [['idle', null], ['busy', 15], ['idle', null]])
 
 let book = readBook()
 check('запись появилась при выдаче', book.length, 1)
@@ -498,10 +498,15 @@ check('форма записи для диспетчера', {
 check('запись была в книге ДО первого хода', lastPrompt().bookAtPrompt.length, 1)
 check('номер попытки записан', book[0].attempt, 1)
 
-// Роль работает — диспетчер ждёт и книгу не трогает.
+// Роль работает — диспетчер ждёт и книгу не трогает. Сессия уже лежит в `st.session`,
+// поэтому тик обязан отметить `busy` именно по ней.
+agentPosts.length = 0
 step = await app.tick()
 check('пока роль работает — ждём', step.action, 'waiting')
 check('ожидание книгу не меняет', readBook().length, 1)
+check('тик во время сессии отмечает busy по её тикету',
+  agentPosts.map(({ state, issue_number }) => [state, issue_number]),
+  [['busy', 15]])
 
 endTurn(devSession)
 setLabels(15, ['for-code-review', 'area:frontend'])
