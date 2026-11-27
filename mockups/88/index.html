@@ -8,7 +8,9 @@
       /*
        * МАКЕТ постановки issue #88: в строке журнала расходов проекта появляются
        * «Пересчитать» и «Удалить», у смены действий становится три, у ручной записи два,
-       * и каждое действие спрашивает подтверждение окном.
+       * и каждое действие спрашивает подтверждение окном. Действия строки — пиктограммы
+       * (список, круговая стрелка, корзина): подписи в шести строках журнала читались
+       * громче самих сумм.
        *
        * Стили ниже — не продукт: это копия токенов и компонентов
        * app/frontend/src/index.css в одном файле, чтобы макет открывался двойным
@@ -44,12 +46,14 @@
         --danger-soft: #fbeeea;
 
         /*
-         * НОВОЕ (#88): ширина колонки действий одной переменной. Колонка обязана быть
-         * фиксированной, иначе у смены (три кнопки) и у ручной записи (две) ширина
-         * последней колонки сетки разная, и «сумма» у половин журнала стоит на разной
-         * вертикали. Значение — по самой широкой тройке кнопок плюс два зазора.
+         * НОВОЕ (#88): ширина колонки действий одной переменной. Колонка фиксированная,
+         * потому что у смены действий три, а у ручной записи два: с `auto` сумма у половин
+         * журнала встала бы на разной вертикали. Значение — три кнопки по 1.75rem плюс два
+         * зазора по 0.25rem = 5.75rem. Пиктограммы вместо подписей освободили строке
+         * почти 8rem: колонка подписей занимала 13.5rem, теперь 5.75rem, и эти 8rem
+         * вернулись токенам.
          */
-        --journal-actions: 13.5rem;
+        --journal-actions: 5.75rem;
 
         font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
         color: var(--ink);
@@ -355,28 +359,42 @@
       }
 
       /*
-       * НОВОЕ (#88): кнопка строки журнала. Три полных подписи в каждой строке — это
-       * громче, чем сами суммы, поэтому вид у них тише обычного `.btn`: тот же размер
-       * и та же форма (одного вида и размера, как требует постановка), но кегль 12 px —
-       * как у кнопки строки цен, — тихий цвет и прозрачная рамка. Рамка есть всегда и
-       * на наведении только проявляется: иначе кнопка «прыгала» бы на пиксель.
-       * Красного в строке нет: удаление подтверждается окном, и красный принадлежит
-       * ему одному, а не шести строкам журнала.
+       * НОВОЕ (#88): действие строки журнала — пиктограмма, а не подпись. Три полных
+       * подписи в каждой строке были громче самих сумм; пиктограмма той же формы, что и
+       * `.btn`, но 1.75rem × 1.75rem (28 px — выше минимума 24 px из WCAG 2.5.8), внутри
+       * знак 16 px с толщиной штриха 1.4 — как у всех знаков продукта. Квадрат: у всех
+       * действий строки один размер и одна форма, поэтому кнопки смены и ручной записи
+       * стоят в одних и тех же местах. Рамка есть всегда и на наведении только проявляется:
+       * иначе кнопка «прыгала» бы на пиксель. В покое в строке нет красного — удаление
+       * подтверждается окном; красный появляется только на наведении на корзину, потому
+       * что «Удалить» больше не написано словом и наведение берёт эту работу на себя.
        */
       .btn--row {
-        padding: 0.3125rem 0.4375rem;
-        font-size: 0.75rem;
-        font-weight: 500;
+        display: inline-grid;
+        place-items: center;
+        width: 1.75rem;
+        height: 1.75rem;
+        padding: 0;
         color: var(--muted);
         background-color: transparent;
         border-color: transparent;
-        white-space: nowrap;
       }
 
       .btn--row:hover {
         color: var(--ink);
         background-color: var(--shell);
         border-color: var(--border);
+      }
+
+      .btn--row--danger:hover {
+        color: var(--danger);
+        background-color: var(--danger-soft);
+        border-color: var(--danger);
+      }
+
+      .btn__icon {
+        display: block;
+        pointer-events: none;
       }
 
       .btn:focus-visible,
@@ -394,6 +412,19 @@
         border-color: var(--border);
         outline: 2px solid var(--ink);
         outline-offset: 2px;
+      }
+
+      /* Только для макета: состояния кнопки строки в легенде — на снимке не навести. */
+      .btn--row.is-hover {
+        color: var(--ink);
+        background-color: var(--shell);
+        border-color: var(--border);
+      }
+
+      .btn--row.is-hover-danger {
+        color: var(--danger);
+        background-color: var(--danger-soft);
+        border-color: var(--danger);
       }
 
       /* ==================== карточка и её шапка ==================== */
@@ -643,12 +674,13 @@
        * ручной записи: у ручной нет «Сессии», и две её кнопки встают ровно на места
        * второй и третьей, а на месте первой остаётся пусто. Так «Пересчитать» и
        * «Удалить» стоят на одной вертикали у обеих половин журнала, а глаз не ищет
-       * действие в каждом ряду заново.
+       * действие в каждом ряду заново. Пиктограммы одного размера делают это правило
+       * буквальным: 28 px у каждого действия, поэтому сетка не зависит от длины подписи.
        */
       .journal-row__actions {
         grid-area: actions;
         display: flex;
-        flex-wrap: wrap;
+        flex-wrap: nowrap;
         justify-content: flex-end;
         align-items: center;
         align-self: center;
@@ -787,16 +819,16 @@
       /* ==================== брейкпоинты продукта ==================== */
 
       /*
-       * ≤ 1309 px — НОВОЕ (#88). Пять колонок строки держатся от 1310 px: колонке
-       * токенов нужно 269 px (две пары «метка — количество» в ряд), а до 1300 px ей
-       * остаётся 264 и меньше — количества начинают заезжать под сумму. Уступать может
-       * только колонка действий, поэтому на этой ширине действия уходят строкой под
-       * ведомость, справа. Ничего не прячется в меню и подписи не рвутся: обе половины
-       * журнала и здесь стоят одинаково. Пары токенов на этой ширине текут строкой
+       * ≤ 1180 px — НОВОЕ (#88). Пять колонок строки держатся от 1181 px: колонке
+       * токенов нужно 269 px (две пары «метка — количество» в ряд), а ниже ей остаётся
+       * меньше — количества начинают заезжать под сумму. Уступать может только колонка
+       * действий, поэтому на этой ширине действия уходят строкой под ведомость, справа.
+       * Ничего не прячется в меню и подписи не рвутся: обе половины журнала и здесь
+       * стоят одинаково. Пары токенов на этой ширине текут строкой
        * (`.journal-row__tokens` становится flex) — так они переносятся целиком, а не
        * вылезают из ячейки.
        */
-      @media (max-width: 1309px) {
+      @media (max-width: 1180px) {
         .journal-row {
           grid-template-columns: 6.75rem 9rem minmax(0, 1fr) 7rem;
           grid-template-areas:
@@ -984,10 +1016,9 @@
       }
 
       /*
-       * ≤ 380 px: три подписи «Сессии · Пересчитать · Удалить» на 375 px помещаются в
-       * строку без переноса (192 px из 297 доступных), поэтому отдельных правил на узкий
-       * экран нет: `white-space: nowrap` держит подпись на одной линии, а перенос
-       * подписи на две строки в постановке назван браком.
+       * ≤ 380 px отдельных правил нет: три знака по 28 px с зазорами занимают 88 px из
+       * 283 доступных на 375 px, переноса и обрезки не бывает даже на самой узкой ширине.
+       * Знак от ширины экрана не зависит — это и было целью пиктограмм.
        */
 
       @media (prefers-reduced-motion: reduce) {
@@ -1043,6 +1074,100 @@
       .sheet__meta code {
         font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
         font-size: 0.75rem;
+      }
+
+      /*
+       * Только для макета: легенда пиктограмм. В продукте подсказку показывает `title`
+       * на наведении и на фокусе, а на статичном снимке подсказки не видно — поэтому
+       * знаки объяснены здесь, отдельно от кадров.
+       */
+      .legend {
+        display: flex;
+        flex-direction: column;
+        gap: 0.625rem;
+        padding: 0.875rem 1rem;
+        background-color: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 0.75rem;
+      }
+
+      .legend__label {
+        margin: 0;
+        font-size: 0.75rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--muted);
+      }
+
+      .legend__list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem 2rem;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .legend__item {
+        display: flex;
+        align-items: center;
+        gap: 0.625rem;
+        font-size: 0.875rem;
+      }
+
+      .legend__glyph {
+        display: inline-grid;
+        place-items: center;
+        width: 1.75rem;
+        height: 1.75rem;
+        color: var(--muted);
+        border: 1px dashed var(--border);
+        border-radius: 0.5rem;
+      }
+
+      .legend__text {
+        color: var(--ink);
+      }
+
+      .legend__hint {
+        color: var(--muted);
+      }
+
+      .legend__note {
+        margin: 0;
+        max-width: 92ch;
+        font-size: 0.8125rem;
+        line-height: 1.5;
+        color: var(--muted);
+      }
+
+      .legend__note code {
+        font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+        font-size: 0.75rem;
+        color: var(--ink);
+      }
+
+      .legend__states {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem 2rem;
+        margin: 0;
+        padding: 0.75rem 0 0;
+        list-style: none;
+        border-top: 1px solid var(--border);
+      }
+
+      .legend__state {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-size: 0.8125rem;
+        color: var(--muted);
+      }
+
+      .legend__state .btn--row {
+        pointer-events: none;
       }
 
       .frame {
@@ -1153,11 +1278,12 @@
       <header class="sheet__head">
         <h1 class="sheet__title">«Пересчитать» и «Удалить» в журнале расходов</h1>
         <p class="sheet__lead">
-          У каждой строки журнала появляются два действия: «Пересчитать» считает сумму
-          строки заново по текущим ценам проекта, «Удалить» убирает строку. Итог проекта в
-          обоих случаях пересобирается с сервера суммой оставшихся строк — фронт деньги не
-          считает. У смены действий три (рядом с ними прежняя «Сессии»), у ручной записи
-          два. Оба действия необратимы, поэтому каждое спрашивает подтверждение окном.
+          У каждой строки журнала появляются два действия, и оба — пиктограммами:
+          круговая стрелка «Пересчитать» считает сумму строки заново по текущим ценам
+          проекта, корзина «Удалить» убирает строку из журнала. У смены действий три —
+          рядом с ними прежняя «Сессии» (список). Итог проекта в обоих случаях
+          пересобирается с сервера суммой оставшихся строк: фронт деньги не считает. Оба
+          действия необратимы, поэтому каждое спрашивает подтверждение окном.
         </p>
         <p class="sheet__meta">
           <span>issue #88 · макет постановки</span>
@@ -1165,26 +1291,188 @@
           <span>токены и классы — <code>app/frontend/src/index.css</code></span>
           <span>кадры 1440 и 375</span>
         </p>
+
+        <div class="legend">
+          <p class="legend__label">Пиктограммы действий строки</p>
+          <ul class="legend__list">
+            <li class="legend__item">
+              <span class="legend__glyph">
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.4"
+                  stroke-linecap="round"
+                  aria-hidden="true"
+                >
+                  <path d="M5.8 4.5h7.2M5.8 8h7.2M5.8 10.5h4.8" />
+                  <circle cx="3.4" cy="4.5" r=".9" fill="currentColor" stroke="none" />
+                  <circle cx="3.4" cy="8" r=".9" fill="currentColor" stroke="none" />
+                  <circle cx="3.4" cy="10.5" r=".9" fill="currentColor" stroke="none" />
+                </svg>
+              </span>
+              <span
+                ><span class="legend__text">Сессии</span>
+                <span class="legend__hint">— из каких сессий сложилась смена</span></span
+              >
+            </li>
+            <li class="legend__item">
+              <span class="legend__glyph">
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.4"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M12.6 8a4.6 4.6 0 1 1-1.5-3.4" />
+                  <path d="M12.9 2.6v3.1h-3.1" />
+                </svg>
+              </span>
+              <span
+                ><span class="legend__text">Пересчитать</span>
+                <span class="legend__hint">— сумма строки заново по текущим ценам</span></span
+              >
+            </li>
+            <li class="legend__item">
+              <span class="legend__glyph">
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.4"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M2.6 4.6h10.8" />
+                  <path d="M6.2 4.6V3h3.6v1.6" />
+                  <path d="M4.2 4.6l.6 8.2h6.4l.6-8.2" />
+                </svg>
+              </span>
+              <span
+                ><span class="legend__text">Удалить</span>
+                <span class="legend__hint">— строка исчезнет из журнала</span></span
+              >
+            </li>
+          </ul>
+          <p class="legend__note">
+            Знак 16 px в кнопке 28 px (пунктиром показана площадь нажатия). Подсказку с
+            датой строки даёт нативный <code>title</code> — он же <code>aria-label</code>;
+            на статичном снимке подсказки не видно, поэтому знаки объяснены здесь.
+          </p>
+          <ul class="legend__states">
+            <li class="legend__state">
+              <span class="btn btn--row" aria-hidden="true">
+                <svg
+                  class="btn__icon"
+                  width="16"
+                  height="16"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.4"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="M12.6 8a4.6 4.6 0 1 1-1.5-3.4" />
+                  <path d="M12.9 2.6v3.1h-3.1" />
+                </svg>
+              </span>
+              <span>покой: серый знак, ни фона, ни рамки</span>
+            </li>
+            <li class="legend__state">
+              <span class="btn btn--row is-hover" aria-hidden="true">
+                <svg
+                  class="btn__icon"
+                  width="16"
+                  height="16"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.4"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="M12.6 8a4.6 4.6 0 1 1-1.5-3.4" />
+                  <path d="M12.9 2.6v3.1h-3.1" />
+                </svg>
+              </span>
+              <span>наведение: знак чернеет, появляются фон и рамка</span>
+            </li>
+            <li class="legend__state">
+              <span class="btn btn--row btn--row--danger is-hover-danger" aria-hidden="true">
+                <svg
+                  class="btn__icon"
+                  width="16"
+                  height="16"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.4"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="M2.6 4.6h10.8" />
+                  <path d="M6.2 4.6V3h3.6v1.6" />
+                  <path d="M4.2 4.6l.6 8.2h6.4l.6-8.2" />
+                </svg>
+              </span>
+              <span
+                >наведение на «Удалить»: единственный красный в строке</span
+              >
+            </li>
+            <li class="legend__state">
+              <span class="btn btn--row is-focus" aria-hidden="true">
+                <svg
+                  class="btn__icon"
+                  width="16"
+                  height="16"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.4"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="M12.6 8a4.6 4.6 0 1 1-1.5-3.4" />
+                  <path d="M12.9 2.6v3.1h-3.1" />
+                </svg>
+              </span>
+              <span>фокус клавиатуры: кольцо 2 px, как у всех кнопок продукта</span>
+            </li>
+          </ul>
+        </div>
       </header>
 
       <!-- ==================== КАДР 1: ЖУРНАЛ НА ШИРОКОМ ЭКРАНЕ ==================== -->
       <figure class="frame">
         <figcaption class="frame__cap">
           <span class="frame__name"
-            >1 · Журнал: три действия у смены, два у ручной записи</span
+            >1 · Журнал: три пиктограммы у смены, две у ручной записи</span
           >
           <span class="frame__meta">
             Колонка действий одна и той же ширины у обеих половин журнала. «Сессии» —
             первая из трёх, у ручной записи её нет, и две её кнопки встают ровно на места
             второй и третьей: «Пересчитать» и «Удалить» стоят на одной вертикали во всех
             строках, а дата, источник, токены и сумма — на своих местах, потому что
-            колонка действий фиксированная (<code>--journal-actions</code>). Кнопки тихие:
-            кегль 12 px, серые подписи, рамка проявляется на наведении; красного в строке
-            нет — красный принадлежит окну подтверждения. Последняя строка кадра — с
-            клавиатурным фокусом на «Пересчитать» (кольцо 2 px, как у всех кнопок
-            продукта). Цены и суммы здесь — до правки цен; в кадрах 2–4 цены уже другие
-            (вход 0,34 · выход 1,20 · кэш-чтение 0,08 · кэш-запись 0,40), поэтому
-            пересчёт смены 27 ноя даёт 1,92 $ вместо 1,64 $.
+            колонка действий фиксированная (<code>--journal-actions: 5.75rem</code>).
+            Действия тихие: серый знак 16 px в кнопке 28 px, рамка проявляется на
+            наведении — она стоит всегда, поэтому кнопка не «прыгает» на пиксель. В покое
+            в строке нет красного: красный принадлежит окну подтверждения и появляется на
+            наведении на корзину. Последняя строка кадра — с клавиатурным фокусом на
+            «Пересчитать» (кольцо 2 px, как у всех кнопок продукта). Цены и суммы здесь —
+            до правки цен; в кадрах 2–4 цены уже другие (вход 0,34 · выход 1,20 ·
+            кэш-чтение 0,08 · кэш-запись 0,40), поэтому пересчёт смены 27 ноя даёт 1,92 $
+            вместо 1,64 $.
           </span>
         </figcaption>
 
@@ -1412,24 +1700,69 @@
                         type="button"
                         data-testid="expense-open"
                         aria-label="Сессии смены 27 ноя 2026 с 09:00 до 17:00"
+                        title="Сессии смены 27 ноя 2026 с 09:00 до 17:00"
                       >
-                        Сессии
+                        <svg
+                          class="btn__icon"
+                          width="16"
+                          height="16"
+                          viewBox="0 0 16 16"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="1.4"
+                          stroke-linecap="round"
+                          aria-hidden="true"
+                        >
+                          <path d="M5.8 4.5h7.2M5.8 8h7.2M5.8 10.5h4.8" />
+                          <circle cx="3.4" cy="4.5" r=".9" fill="currentColor" stroke="none" />
+                          <circle cx="3.4" cy="8" r=".9" fill="currentColor" stroke="none" />
+                          <circle cx="3.4" cy="10.5" r=".9" fill="currentColor" stroke="none" />
+                        </svg>
                       </button>
                       <button
                         class="btn btn--row"
                         type="button"
                         data-testid="expense-recalc"
                         aria-label="Пересчитать запись 27 ноя 2026"
+                        title="Пересчитать запись 27 ноя 2026"
                       >
-                        Пересчитать
+                        <svg
+                          class="btn__icon"
+                          width="16"
+                          height="16"
+                          viewBox="0 0 16 16"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="1.4"
+                          stroke-linecap="round" stroke-linejoin="round"
+                          aria-hidden="true"
+                        >
+                          <path d="M12.6 8a4.6 4.6 0 1 1-1.5-3.4" />
+                          <path d="M12.9 2.6v3.1h-3.1" />
+                        </svg>
                       </button>
                       <button
-                        class="btn btn--row"
+                        class="btn btn--row btn--row--danger"
                         type="button"
                         data-testid="expense-delete"
                         aria-label="Удалить запись 27 ноя 2026"
+                        title="Удалить запись 27 ноя 2026"
                       >
-                        Удалить
+                        <svg
+                          class="btn__icon"
+                          width="16"
+                          height="16"
+                          viewBox="0 0 16 16"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="1.4"
+                          stroke-linecap="round" stroke-linejoin="round"
+                          aria-hidden="true"
+                        >
+                          <path d="M2.6 4.6h10.8" />
+                          <path d="M6.2 4.6V3h3.6v1.6" />
+                          <path d="M4.2 4.6l.6 8.2h6.4l.6-8.2" />
+                        </svg>
                       </button>
                     </div>
                   </li>
@@ -1458,16 +1791,45 @@
                         type="button"
                         data-testid="expense-recalc"
                         aria-label="Пересчитать запись 26 ноя 2026"
+                        title="Пересчитать запись 26 ноя 2026"
                       >
-                        Пересчитать
+                        <svg
+                          class="btn__icon"
+                          width="16"
+                          height="16"
+                          viewBox="0 0 16 16"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="1.4"
+                          stroke-linecap="round" stroke-linejoin="round"
+                          aria-hidden="true"
+                        >
+                          <path d="M12.6 8a4.6 4.6 0 1 1-1.5-3.4" />
+                          <path d="M12.9 2.6v3.1h-3.1" />
+                        </svg>
                       </button>
                       <button
-                        class="btn btn--row"
+                        class="btn btn--row btn--row--danger"
                         type="button"
                         data-testid="expense-delete"
                         aria-label="Удалить запись 26 ноя 2026"
+                        title="Удалить запись 26 ноя 2026"
                       >
-                        Удалить
+                        <svg
+                          class="btn__icon"
+                          width="16"
+                          height="16"
+                          viewBox="0 0 16 16"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="1.4"
+                          stroke-linecap="round" stroke-linejoin="round"
+                          aria-hidden="true"
+                        >
+                          <path d="M2.6 4.6h10.8" />
+                          <path d="M6.2 4.6V3h3.6v1.6" />
+                          <path d="M4.2 4.6l.6 8.2h6.4l.6-8.2" />
+                        </svg>
                       </button>
                     </div>
                   </li>
@@ -1506,24 +1868,69 @@
                         type="button"
                         data-testid="expense-open"
                         aria-label="Сессии смены 25 ноя 2026 с 10:00 до 19:00"
+                        title="Сессии смены 25 ноя 2026 с 10:00 до 19:00"
                       >
-                        Сессии
+                        <svg
+                          class="btn__icon"
+                          width="16"
+                          height="16"
+                          viewBox="0 0 16 16"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="1.4"
+                          stroke-linecap="round"
+                          aria-hidden="true"
+                        >
+                          <path d="M5.8 4.5h7.2M5.8 8h7.2M5.8 10.5h4.8" />
+                          <circle cx="3.4" cy="4.5" r=".9" fill="currentColor" stroke="none" />
+                          <circle cx="3.4" cy="8" r=".9" fill="currentColor" stroke="none" />
+                          <circle cx="3.4" cy="10.5" r=".9" fill="currentColor" stroke="none" />
+                        </svg>
                       </button>
                       <button
                         class="btn btn--row"
                         type="button"
                         data-testid="expense-recalc"
                         aria-label="Пересчитать запись 25 ноя 2026"
+                        title="Пересчитать запись 25 ноя 2026"
                       >
-                        Пересчитать
+                        <svg
+                          class="btn__icon"
+                          width="16"
+                          height="16"
+                          viewBox="0 0 16 16"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="1.4"
+                          stroke-linecap="round" stroke-linejoin="round"
+                          aria-hidden="true"
+                        >
+                          <path d="M12.6 8a4.6 4.6 0 1 1-1.5-3.4" />
+                          <path d="M12.9 2.6v3.1h-3.1" />
+                        </svg>
                       </button>
                       <button
-                        class="btn btn--row"
+                        class="btn btn--row btn--row--danger"
                         type="button"
                         data-testid="expense-delete"
                         aria-label="Удалить запись 25 ноя 2026"
+                        title="Удалить запись 25 ноя 2026"
                       >
-                        Удалить
+                        <svg
+                          class="btn__icon"
+                          width="16"
+                          height="16"
+                          viewBox="0 0 16 16"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="1.4"
+                          stroke-linecap="round" stroke-linejoin="round"
+                          aria-hidden="true"
+                        >
+                          <path d="M2.6 4.6h10.8" />
+                          <path d="M6.2 4.6V3h3.6v1.6" />
+                          <path d="M4.2 4.6l.6 8.2h6.4l.6-8.2" />
+                        </svg>
                       </button>
                     </div>
                   </li>
@@ -1552,16 +1959,45 @@
                         type="button"
                         data-testid="expense-recalc"
                         aria-label="Пересчитать запись 24 ноя 2026"
+                        title="Пересчитать запись 24 ноя 2026"
                       >
-                        Пересчитать
+                        <svg
+                          class="btn__icon"
+                          width="16"
+                          height="16"
+                          viewBox="0 0 16 16"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="1.4"
+                          stroke-linecap="round" stroke-linejoin="round"
+                          aria-hidden="true"
+                        >
+                          <path d="M12.6 8a4.6 4.6 0 1 1-1.5-3.4" />
+                          <path d="M12.9 2.6v3.1h-3.1" />
+                        </svg>
                       </button>
                       <button
-                        class="btn btn--row"
+                        class="btn btn--row btn--row--danger"
                         type="button"
                         data-testid="expense-delete"
                         aria-label="Удалить запись 24 ноя 2026"
+                        title="Удалить запись 24 ноя 2026"
                       >
-                        Удалить
+                        <svg
+                          class="btn__icon"
+                          width="16"
+                          height="16"
+                          viewBox="0 0 16 16"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="1.4"
+                          stroke-linecap="round" stroke-linejoin="round"
+                          aria-hidden="true"
+                        >
+                          <path d="M2.6 4.6h10.8" />
+                          <path d="M6.2 4.6V3h3.6v1.6" />
+                          <path d="M4.2 4.6l.6 8.2h6.4l.6-8.2" />
+                        </svg>
                       </button>
                     </div>
                   </li>
@@ -1604,24 +2040,69 @@
                         type="button"
                         data-testid="expense-open"
                         aria-label="Сессии смены 22 ноя 2026 с 08:30 до 16:30"
+                        title="Сессии смены 22 ноя 2026 с 08:30 до 16:30"
                       >
-                        Сессии
+                        <svg
+                          class="btn__icon"
+                          width="16"
+                          height="16"
+                          viewBox="0 0 16 16"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="1.4"
+                          stroke-linecap="round"
+                          aria-hidden="true"
+                        >
+                          <path d="M5.8 4.5h7.2M5.8 8h7.2M5.8 10.5h4.8" />
+                          <circle cx="3.4" cy="4.5" r=".9" fill="currentColor" stroke="none" />
+                          <circle cx="3.4" cy="8" r=".9" fill="currentColor" stroke="none" />
+                          <circle cx="3.4" cy="10.5" r=".9" fill="currentColor" stroke="none" />
+                        </svg>
                       </button>
                       <button
                         class="btn btn--row"
                         type="button"
                         data-testid="expense-recalc"
                         aria-label="Пересчитать запись 22 ноя 2026"
+                        title="Пересчитать запись 22 ноя 2026"
                       >
-                        Пересчитать
+                        <svg
+                          class="btn__icon"
+                          width="16"
+                          height="16"
+                          viewBox="0 0 16 16"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="1.4"
+                          stroke-linecap="round" stroke-linejoin="round"
+                          aria-hidden="true"
+                        >
+                          <path d="M12.6 8a4.6 4.6 0 1 1-1.5-3.4" />
+                          <path d="M12.9 2.6v3.1h-3.1" />
+                        </svg>
                       </button>
                       <button
-                        class="btn btn--row"
+                        class="btn btn--row btn--row--danger"
                         type="button"
                         data-testid="expense-delete"
                         aria-label="Удалить запись 22 ноя 2026"
+                        title="Удалить запись 22 ноя 2026"
                       >
-                        Удалить
+                        <svg
+                          class="btn__icon"
+                          width="16"
+                          height="16"
+                          viewBox="0 0 16 16"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="1.4"
+                          stroke-linecap="round" stroke-linejoin="round"
+                          aria-hidden="true"
+                        >
+                          <path d="M2.6 4.6h10.8" />
+                          <path d="M6.2 4.6V3h3.6v1.6" />
+                          <path d="M4.2 4.6l.6 8.2h6.4l.6-8.2" />
+                        </svg>
                       </button>
                     </div>
                   </li>
@@ -1650,16 +2131,45 @@
                         type="button"
                         data-testid="expense-recalc"
                         aria-label="Пересчитать запись 20 ноя 2026"
+                        title="Пересчитать запись 20 ноя 2026"
                       >
-                        Пересчитать
+                        <svg
+                          class="btn__icon"
+                          width="16"
+                          height="16"
+                          viewBox="0 0 16 16"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="1.4"
+                          stroke-linecap="round" stroke-linejoin="round"
+                          aria-hidden="true"
+                        >
+                          <path d="M12.6 8a4.6 4.6 0 1 1-1.5-3.4" />
+                          <path d="M12.9 2.6v3.1h-3.1" />
+                        </svg>
                       </button>
                       <button
-                        class="btn btn--row"
+                        class="btn btn--row btn--row--danger"
                         type="button"
                         data-testid="expense-delete"
                         aria-label="Удалить запись 20 ноя 2026"
+                        title="Удалить запись 20 ноя 2026"
                       >
-                        Удалить
+                        <svg
+                          class="btn__icon"
+                          width="16"
+                          height="16"
+                          viewBox="0 0 16 16"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="1.4"
+                          stroke-linecap="round" stroke-linejoin="round"
+                          aria-hidden="true"
+                        >
+                          <path d="M2.6 4.6h10.8" />
+                          <path d="M6.2 4.6V3h3.6v1.6" />
+                          <path d="M4.2 4.6l.6 8.2h6.4l.6-8.2" />
+                        </svg>
                       </button>
                     </div>
                   </li>
@@ -1771,9 +2281,69 @@
                       </p>
                       <p class="journal-row__amount">1,64 $</p>
                       <div class="journal-row__actions">
-                        <button class="btn btn--row" type="button">Сессии</button>
-                        <button class="btn btn--row" type="button">Пересчитать</button>
-                        <button class="btn btn--row" type="button">Удалить</button>
+                        <button
+                          class="btn btn--row"
+                          type="button"
+                          title="Сессии"
+                        >
+                          <svg
+                            class="btn__icon"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 16 16"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.4"
+                            stroke-linecap="round"
+                            aria-hidden="true"
+                          >
+                            <path d="M5.8 4.5h7.2M5.8 8h7.2M5.8 10.5h4.8" />
+                            <circle cx="3.4" cy="4.5" r=".9" fill="currentColor" stroke="none" />
+                            <circle cx="3.4" cy="8" r=".9" fill="currentColor" stroke="none" />
+                            <circle cx="3.4" cy="10.5" r=".9" fill="currentColor" stroke="none" />
+                          </svg>
+                        </button>
+                        <button
+                          class="btn btn--row"
+                          type="button"
+                          title="Пересчитать запись"
+                        >
+                          <svg
+                            class="btn__icon"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 16 16"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.4"
+                            stroke-linecap="round" stroke-linejoin="round"
+                            aria-hidden="true"
+                          >
+                            <path d="M12.6 8a4.6 4.6 0 1 1-1.5-3.4" />
+                            <path d="M12.9 2.6v3.1h-3.1" />
+                          </svg>
+                        </button>
+                        <button
+                          class="btn btn--row btn--row--danger"
+                          type="button"
+                          title="Удалить запись"
+                        >
+                          <svg
+                            class="btn__icon"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 16 16"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.4"
+                            stroke-linecap="round" stroke-linejoin="round"
+                            aria-hidden="true"
+                          >
+                            <path d="M2.6 4.6h10.8" />
+                            <path d="M6.2 4.6V3h3.6v1.6" />
+                            <path d="M4.2 4.6l.6 8.2h6.4l.6-8.2" />
+                          </svg>
+                        </button>
                       </div>
                     </li>
                     <li class="journal-row">
@@ -1791,8 +2361,47 @@
                       </p>
                       <p class="journal-row__amount">0,41 $</p>
                       <div class="journal-row__actions">
-                        <button class="btn btn--row" type="button">Пересчитать</button>
-                        <button class="btn btn--row" type="button">Удалить</button>
+                        <button
+                          class="btn btn--row"
+                          type="button"
+                          title="Пересчитать запись"
+                        >
+                          <svg
+                            class="btn__icon"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 16 16"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.4"
+                            stroke-linecap="round" stroke-linejoin="round"
+                            aria-hidden="true"
+                          >
+                            <path d="M12.6 8a4.6 4.6 0 1 1-1.5-3.4" />
+                            <path d="M12.9 2.6v3.1h-3.1" />
+                          </svg>
+                        </button>
+                        <button
+                          class="btn btn--row btn--row--danger"
+                          type="button"
+                          title="Удалить запись"
+                        >
+                          <svg
+                            class="btn__icon"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 16 16"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.4"
+                            stroke-linecap="round" stroke-linejoin="round"
+                            aria-hidden="true"
+                          >
+                            <path d="M2.6 4.6h10.8" />
+                            <path d="M6.2 4.6V3h3.6v1.6" />
+                            <path d="M4.2 4.6l.6 8.2h6.4l.6-8.2" />
+                          </svg>
+                        </button>
                       </div>
                     </li>
                     <li class="journal-row">
@@ -1816,9 +2425,69 @@
                       </p>
                       <p class="journal-row__amount">0,45 $</p>
                       <div class="journal-row__actions">
-                        <button class="btn btn--row" type="button">Сессии</button>
-                        <button class="btn btn--row" type="button">Пересчитать</button>
-                        <button class="btn btn--row" type="button">Удалить</button>
+                        <button
+                          class="btn btn--row"
+                          type="button"
+                          title="Сессии"
+                        >
+                          <svg
+                            class="btn__icon"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 16 16"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.4"
+                            stroke-linecap="round"
+                            aria-hidden="true"
+                          >
+                            <path d="M5.8 4.5h7.2M5.8 8h7.2M5.8 10.5h4.8" />
+                            <circle cx="3.4" cy="4.5" r=".9" fill="currentColor" stroke="none" />
+                            <circle cx="3.4" cy="8" r=".9" fill="currentColor" stroke="none" />
+                            <circle cx="3.4" cy="10.5" r=".9" fill="currentColor" stroke="none" />
+                          </svg>
+                        </button>
+                        <button
+                          class="btn btn--row"
+                          type="button"
+                          title="Пересчитать запись"
+                        >
+                          <svg
+                            class="btn__icon"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 16 16"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.4"
+                            stroke-linecap="round" stroke-linejoin="round"
+                            aria-hidden="true"
+                          >
+                            <path d="M12.6 8a4.6 4.6 0 1 1-1.5-3.4" />
+                            <path d="M12.9 2.6v3.1h-3.1" />
+                          </svg>
+                        </button>
+                        <button
+                          class="btn btn--row btn--row--danger"
+                          type="button"
+                          title="Удалить запись"
+                        >
+                          <svg
+                            class="btn__icon"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 16 16"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.4"
+                            stroke-linecap="round" stroke-linejoin="round"
+                            aria-hidden="true"
+                          >
+                            <path d="M2.6 4.6h10.8" />
+                            <path d="M6.2 4.6V3h3.6v1.6" />
+                            <path d="M4.2 4.6l.6 8.2h6.4l.6-8.2" />
+                          </svg>
+                        </button>
                       </div>
                     </li>
                   </ul>
@@ -1937,9 +2606,69 @@
                       </p>
                       <p class="journal-row__amount">1,64 $</p>
                       <div class="journal-row__actions">
-                        <button class="btn btn--row" type="button">Сессии</button>
-                        <button class="btn btn--row" type="button">Пересчитать</button>
-                        <button class="btn btn--row" type="button">Удалить</button>
+                        <button
+                          class="btn btn--row"
+                          type="button"
+                          title="Сессии"
+                        >
+                          <svg
+                            class="btn__icon"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 16 16"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.4"
+                            stroke-linecap="round"
+                            aria-hidden="true"
+                          >
+                            <path d="M5.8 4.5h7.2M5.8 8h7.2M5.8 10.5h4.8" />
+                            <circle cx="3.4" cy="4.5" r=".9" fill="currentColor" stroke="none" />
+                            <circle cx="3.4" cy="8" r=".9" fill="currentColor" stroke="none" />
+                            <circle cx="3.4" cy="10.5" r=".9" fill="currentColor" stroke="none" />
+                          </svg>
+                        </button>
+                        <button
+                          class="btn btn--row"
+                          type="button"
+                          title="Пересчитать запись"
+                        >
+                          <svg
+                            class="btn__icon"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 16 16"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.4"
+                            stroke-linecap="round" stroke-linejoin="round"
+                            aria-hidden="true"
+                          >
+                            <path d="M12.6 8a4.6 4.6 0 1 1-1.5-3.4" />
+                            <path d="M12.9 2.6v3.1h-3.1" />
+                          </svg>
+                        </button>
+                        <button
+                          class="btn btn--row btn--row--danger"
+                          type="button"
+                          title="Удалить запись"
+                        >
+                          <svg
+                            class="btn__icon"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 16 16"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.4"
+                            stroke-linecap="round" stroke-linejoin="round"
+                            aria-hidden="true"
+                          >
+                            <path d="M2.6 4.6h10.8" />
+                            <path d="M6.2 4.6V3h3.6v1.6" />
+                            <path d="M4.2 4.6l.6 8.2h6.4l.6-8.2" />
+                          </svg>
+                        </button>
                       </div>
                     </li>
                   </ul>
@@ -2048,9 +2777,69 @@
                       </p>
                       <p class="journal-row__amount">1,64 $</p>
                       <div class="journal-row__actions">
-                        <button class="btn btn--row" type="button">Сессии</button>
-                        <button class="btn btn--row" type="button">Пересчитать</button>
-                        <button class="btn btn--row" type="button">Удалить</button>
+                        <button
+                          class="btn btn--row"
+                          type="button"
+                          title="Сессии"
+                        >
+                          <svg
+                            class="btn__icon"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 16 16"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.4"
+                            stroke-linecap="round"
+                            aria-hidden="true"
+                          >
+                            <path d="M5.8 4.5h7.2M5.8 8h7.2M5.8 10.5h4.8" />
+                            <circle cx="3.4" cy="4.5" r=".9" fill="currentColor" stroke="none" />
+                            <circle cx="3.4" cy="8" r=".9" fill="currentColor" stroke="none" />
+                            <circle cx="3.4" cy="10.5" r=".9" fill="currentColor" stroke="none" />
+                          </svg>
+                        </button>
+                        <button
+                          class="btn btn--row"
+                          type="button"
+                          title="Пересчитать запись"
+                        >
+                          <svg
+                            class="btn__icon"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 16 16"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.4"
+                            stroke-linecap="round" stroke-linejoin="round"
+                            aria-hidden="true"
+                          >
+                            <path d="M12.6 8a4.6 4.6 0 1 1-1.5-3.4" />
+                            <path d="M12.9 2.6v3.1h-3.1" />
+                          </svg>
+                        </button>
+                        <button
+                          class="btn btn--row btn--row--danger"
+                          type="button"
+                          title="Удалить запись"
+                        >
+                          <svg
+                            class="btn__icon"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 16 16"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.4"
+                            stroke-linecap="round" stroke-linejoin="round"
+                            aria-hidden="true"
+                          >
+                            <path d="M2.6 4.6h10.8" />
+                            <path d="M6.2 4.6V3h3.6v1.6" />
+                            <path d="M4.2 4.6l.6 8.2h6.4l.6-8.2" />
+                          </svg>
+                        </button>
                       </div>
                     </li>
                   </ul>
@@ -2176,9 +2965,69 @@
                       </p>
                       <p class="journal-row__amount">2,92 $</p>
                       <div class="journal-row__actions">
-                        <button class="btn btn--row" type="button">Сессии</button>
-                        <button class="btn btn--row" type="button">Пересчитать</button>
-                        <button class="btn btn--row" type="button">Удалить</button>
+                        <button
+                          class="btn btn--row"
+                          type="button"
+                          title="Сессии"
+                        >
+                          <svg
+                            class="btn__icon"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 16 16"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.4"
+                            stroke-linecap="round"
+                            aria-hidden="true"
+                          >
+                            <path d="M5.8 4.5h7.2M5.8 8h7.2M5.8 10.5h4.8" />
+                            <circle cx="3.4" cy="4.5" r=".9" fill="currentColor" stroke="none" />
+                            <circle cx="3.4" cy="8" r=".9" fill="currentColor" stroke="none" />
+                            <circle cx="3.4" cy="10.5" r=".9" fill="currentColor" stroke="none" />
+                          </svg>
+                        </button>
+                        <button
+                          class="btn btn--row"
+                          type="button"
+                          title="Пересчитать запись"
+                        >
+                          <svg
+                            class="btn__icon"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 16 16"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.4"
+                            stroke-linecap="round" stroke-linejoin="round"
+                            aria-hidden="true"
+                          >
+                            <path d="M12.6 8a4.6 4.6 0 1 1-1.5-3.4" />
+                            <path d="M12.9 2.6v3.1h-3.1" />
+                          </svg>
+                        </button>
+                        <button
+                          class="btn btn--row btn--row--danger"
+                          type="button"
+                          title="Удалить запись"
+                        >
+                          <svg
+                            class="btn__icon"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 16 16"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.4"
+                            stroke-linecap="round" stroke-linejoin="round"
+                            aria-hidden="true"
+                          >
+                            <path d="M2.6 4.6h10.8" />
+                            <path d="M6.2 4.6V3h3.6v1.6" />
+                            <path d="M4.2 4.6l.6 8.2h6.4l.6-8.2" />
+                          </svg>
+                        </button>
                       </div>
                     </li>
                   </ul>
@@ -2324,9 +3173,69 @@
                       </p>
                       <p class="journal-row__amount">1,92 $</p>
                       <div class="journal-row__actions">
-                        <button class="btn btn--row" type="button">Сессии</button>
-                        <button class="btn btn--row" type="button">Пересчитать</button>
-                        <button class="btn btn--row" type="button">Удалить</button>
+                        <button
+                          class="btn btn--row"
+                          type="button"
+                          title="Сессии"
+                        >
+                          <svg
+                            class="btn__icon"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 16 16"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.4"
+                            stroke-linecap="round"
+                            aria-hidden="true"
+                          >
+                            <path d="M5.8 4.5h7.2M5.8 8h7.2M5.8 10.5h4.8" />
+                            <circle cx="3.4" cy="4.5" r=".9" fill="currentColor" stroke="none" />
+                            <circle cx="3.4" cy="8" r=".9" fill="currentColor" stroke="none" />
+                            <circle cx="3.4" cy="10.5" r=".9" fill="currentColor" stroke="none" />
+                          </svg>
+                        </button>
+                        <button
+                          class="btn btn--row"
+                          type="button"
+                          title="Пересчитать запись"
+                        >
+                          <svg
+                            class="btn__icon"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 16 16"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.4"
+                            stroke-linecap="round" stroke-linejoin="round"
+                            aria-hidden="true"
+                          >
+                            <path d="M12.6 8a4.6 4.6 0 1 1-1.5-3.4" />
+                            <path d="M12.9 2.6v3.1h-3.1" />
+                          </svg>
+                        </button>
+                        <button
+                          class="btn btn--row btn--row--danger"
+                          type="button"
+                          title="Удалить запись"
+                        >
+                          <svg
+                            class="btn__icon"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 16 16"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.4"
+                            stroke-linecap="round" stroke-linejoin="round"
+                            aria-hidden="true"
+                          >
+                            <path d="M2.6 4.6h10.8" />
+                            <path d="M6.2 4.6V3h3.6v1.6" />
+                            <path d="M4.2 4.6l.6 8.2h6.4l.6-8.2" />
+                          </svg>
+                        </button>
                       </div>
                     </li>
                     <li class="journal-row">
@@ -2344,8 +3253,47 @@
                       </p>
                       <p class="journal-row__amount">0,41 $</p>
                       <div class="journal-row__actions">
-                        <button class="btn btn--row" type="button">Пересчитать</button>
-                        <button class="btn btn--row" type="button">Удалить</button>
+                        <button
+                          class="btn btn--row"
+                          type="button"
+                          title="Пересчитать запись"
+                        >
+                          <svg
+                            class="btn__icon"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 16 16"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.4"
+                            stroke-linecap="round" stroke-linejoin="round"
+                            aria-hidden="true"
+                          >
+                            <path d="M12.6 8a4.6 4.6 0 1 1-1.5-3.4" />
+                            <path d="M12.9 2.6v3.1h-3.1" />
+                          </svg>
+                        </button>
+                        <button
+                          class="btn btn--row btn--row--danger"
+                          type="button"
+                          title="Удалить запись"
+                        >
+                          <svg
+                            class="btn__icon"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 16 16"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.4"
+                            stroke-linecap="round" stroke-linejoin="round"
+                            aria-hidden="true"
+                          >
+                            <path d="M2.6 4.6h10.8" />
+                            <path d="M6.2 4.6V3h3.6v1.6" />
+                            <path d="M4.2 4.6l.6 8.2h6.4l.6-8.2" />
+                          </svg>
+                        </button>
                       </div>
                     </li>
                   </ul>
@@ -2461,9 +3409,69 @@
                       </p>
                       <p class="journal-row__amount">1,92 $</p>
                       <div class="journal-row__actions">
-                        <button class="btn btn--row" type="button">Сессии</button>
-                        <button class="btn btn--row" type="button">Пересчитать</button>
-                        <button class="btn btn--row" type="button">Удалить</button>
+                        <button
+                          class="btn btn--row"
+                          type="button"
+                          title="Сессии"
+                        >
+                          <svg
+                            class="btn__icon"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 16 16"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.4"
+                            stroke-linecap="round"
+                            aria-hidden="true"
+                          >
+                            <path d="M5.8 4.5h7.2M5.8 8h7.2M5.8 10.5h4.8" />
+                            <circle cx="3.4" cy="4.5" r=".9" fill="currentColor" stroke="none" />
+                            <circle cx="3.4" cy="8" r=".9" fill="currentColor" stroke="none" />
+                            <circle cx="3.4" cy="10.5" r=".9" fill="currentColor" stroke="none" />
+                          </svg>
+                        </button>
+                        <button
+                          class="btn btn--row"
+                          type="button"
+                          title="Пересчитать запись"
+                        >
+                          <svg
+                            class="btn__icon"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 16 16"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.4"
+                            stroke-linecap="round" stroke-linejoin="round"
+                            aria-hidden="true"
+                          >
+                            <path d="M12.6 8a4.6 4.6 0 1 1-1.5-3.4" />
+                            <path d="M12.9 2.6v3.1h-3.1" />
+                          </svg>
+                        </button>
+                        <button
+                          class="btn btn--row btn--row--danger"
+                          type="button"
+                          title="Удалить запись"
+                        >
+                          <svg
+                            class="btn__icon"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 16 16"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.4"
+                            stroke-linecap="round" stroke-linejoin="round"
+                            aria-hidden="true"
+                          >
+                            <path d="M2.6 4.6h10.8" />
+                            <path d="M6.2 4.6V3h3.6v1.6" />
+                            <path d="M4.2 4.6l.6 8.2h6.4l.6-8.2" />
+                          </svg>
+                        </button>
                       </div>
                     </li>
                   </ul>
@@ -2584,8 +3592,47 @@
                       </p>
                       <p class="journal-row__amount">0,41 $</p>
                       <div class="journal-row__actions">
-                        <button class="btn btn--row" type="button">Пересчитать</button>
-                        <button class="btn btn--row" type="button">Удалить</button>
+                        <button
+                          class="btn btn--row"
+                          type="button"
+                          title="Пересчитать запись"
+                        >
+                          <svg
+                            class="btn__icon"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 16 16"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.4"
+                            stroke-linecap="round" stroke-linejoin="round"
+                            aria-hidden="true"
+                          >
+                            <path d="M12.6 8a4.6 4.6 0 1 1-1.5-3.4" />
+                            <path d="M12.9 2.6v3.1h-3.1" />
+                          </svg>
+                        </button>
+                        <button
+                          class="btn btn--row btn--row--danger"
+                          type="button"
+                          title="Удалить запись"
+                        >
+                          <svg
+                            class="btn__icon"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 16 16"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.4"
+                            stroke-linecap="round" stroke-linejoin="round"
+                            aria-hidden="true"
+                          >
+                            <path d="M2.6 4.6h10.8" />
+                            <path d="M6.2 4.6V3h3.6v1.6" />
+                            <path d="M4.2 4.6l.6 8.2h6.4l.6-8.2" />
+                          </svg>
+                        </button>
                       </div>
                     </li>
                   </ul>
@@ -2702,9 +3749,69 @@
                       </p>
                       <p class="journal-row__amount">0,45 $</p>
                       <div class="journal-row__actions">
-                        <button class="btn btn--row" type="button">Сессии</button>
-                        <button class="btn btn--row" type="button">Пересчитать</button>
-                        <button class="btn btn--row" type="button">Удалить</button>
+                        <button
+                          class="btn btn--row"
+                          type="button"
+                          title="Сессии"
+                        >
+                          <svg
+                            class="btn__icon"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 16 16"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.4"
+                            stroke-linecap="round"
+                            aria-hidden="true"
+                          >
+                            <path d="M5.8 4.5h7.2M5.8 8h7.2M5.8 10.5h4.8" />
+                            <circle cx="3.4" cy="4.5" r=".9" fill="currentColor" stroke="none" />
+                            <circle cx="3.4" cy="8" r=".9" fill="currentColor" stroke="none" />
+                            <circle cx="3.4" cy="10.5" r=".9" fill="currentColor" stroke="none" />
+                          </svg>
+                        </button>
+                        <button
+                          class="btn btn--row"
+                          type="button"
+                          title="Пересчитать запись"
+                        >
+                          <svg
+                            class="btn__icon"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 16 16"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.4"
+                            stroke-linecap="round" stroke-linejoin="round"
+                            aria-hidden="true"
+                          >
+                            <path d="M12.6 8a4.6 4.6 0 1 1-1.5-3.4" />
+                            <path d="M12.9 2.6v3.1h-3.1" />
+                          </svg>
+                        </button>
+                        <button
+                          class="btn btn--row btn--row--danger"
+                          type="button"
+                          title="Удалить запись"
+                        >
+                          <svg
+                            class="btn__icon"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 16 16"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.4"
+                            stroke-linecap="round" stroke-linejoin="round"
+                            aria-hidden="true"
+                          >
+                            <path d="M2.6 4.6h10.8" />
+                            <path d="M6.2 4.6V3h3.6v1.6" />
+                            <path d="M4.2 4.6l.6 8.2h6.4l.6-8.2" />
+                          </svg>
+                        </button>
                       </div>
                     </li>
                     <li class="journal-row">
@@ -2722,8 +3829,47 @@
                       </p>
                       <p class="journal-row__amount">0,10 $</p>
                       <div class="journal-row__actions">
-                        <button class="btn btn--row" type="button">Пересчитать</button>
-                        <button class="btn btn--row" type="button">Удалить</button>
+                        <button
+                          class="btn btn--row"
+                          type="button"
+                          title="Пересчитать запись"
+                        >
+                          <svg
+                            class="btn__icon"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 16 16"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.4"
+                            stroke-linecap="round" stroke-linejoin="round"
+                            aria-hidden="true"
+                          >
+                            <path d="M12.6 8a4.6 4.6 0 1 1-1.5-3.4" />
+                            <path d="M12.9 2.6v3.1h-3.1" />
+                          </svg>
+                        </button>
+                        <button
+                          class="btn btn--row btn--row--danger"
+                          type="button"
+                          title="Удалить запись"
+                        >
+                          <svg
+                            class="btn__icon"
+                            width="16"
+                            height="16"
+                            viewBox="0 0 16 16"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.4"
+                            stroke-linecap="round" stroke-linejoin="round"
+                            aria-hidden="true"
+                          >
+                            <path d="M2.6 4.6h10.8" />
+                            <path d="M6.2 4.6V3h3.6v1.6" />
+                            <path d="M4.2 4.6l.6 8.2h6.4l.6-8.2" />
+                          </svg>
+                        </button>
                       </div>
                     </li>
                   </ul>
@@ -2889,24 +4035,69 @@
                     type="button"
                     data-testid="expense-open"
                     aria-label="Сессии смены 27 ноя 2026 с 09:00 до 17:00"
+                    title="Сессии смены 27 ноя 2026 с 09:00 до 17:00"
                   >
-                    Сессии
+                    <svg
+                      class="btn__icon"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.4"
+                      stroke-linecap="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M5.8 4.5h7.2M5.8 8h7.2M5.8 10.5h4.8" />
+                      <circle cx="3.4" cy="4.5" r=".9" fill="currentColor" stroke="none" />
+                      <circle cx="3.4" cy="8" r=".9" fill="currentColor" stroke="none" />
+                      <circle cx="3.4" cy="10.5" r=".9" fill="currentColor" stroke="none" />
+                    </svg>
                   </button>
                   <button
                     class="btn btn--row"
                     type="button"
                     data-testid="expense-recalc"
                     aria-label="Пересчитать запись 27 ноя 2026"
+                    title="Пересчитать запись 27 ноя 2026"
                   >
-                    Пересчитать
+                    <svg
+                      class="btn__icon"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.4"
+                      stroke-linecap="round" stroke-linejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M12.6 8a4.6 4.6 0 1 1-1.5-3.4" />
+                      <path d="M12.9 2.6v3.1h-3.1" />
+                    </svg>
                   </button>
                   <button
-                    class="btn btn--row"
+                    class="btn btn--row btn--row--danger"
                     type="button"
                     data-testid="expense-delete"
                     aria-label="Удалить запись 27 ноя 2026"
+                    title="Удалить запись 27 ноя 2026"
                   >
-                    Удалить
+                    <svg
+                      class="btn__icon"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.4"
+                      stroke-linecap="round" stroke-linejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M2.6 4.6h10.8" />
+                      <path d="M6.2 4.6V3h3.6v1.6" />
+                      <path d="M4.2 4.6l.6 8.2h6.4l.6-8.2" />
+                    </svg>
                   </button>
                 </div>
               </li>
@@ -2935,16 +4126,45 @@
                     type="button"
                     data-testid="expense-recalc"
                     aria-label="Пересчитать запись 26 ноя 2026"
+                    title="Пересчитать запись 26 ноя 2026"
                   >
-                    Пересчитать
+                    <svg
+                      class="btn__icon"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.4"
+                      stroke-linecap="round" stroke-linejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M12.6 8a4.6 4.6 0 1 1-1.5-3.4" />
+                      <path d="M12.9 2.6v3.1h-3.1" />
+                    </svg>
                   </button>
                   <button
-                    class="btn btn--row"
+                    class="btn btn--row btn--row--danger"
                     type="button"
                     data-testid="expense-delete"
                     aria-label="Удалить запись 26 ноя 2026"
+                    title="Удалить запись 26 ноя 2026"
                   >
-                    Удалить
+                    <svg
+                      class="btn__icon"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.4"
+                      stroke-linecap="round" stroke-linejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M2.6 4.6h10.8" />
+                      <path d="M6.2 4.6V3h3.6v1.6" />
+                      <path d="M4.2 4.6l.6 8.2h6.4l.6-8.2" />
+                    </svg>
                   </button>
                 </div>
               </li>
@@ -2983,24 +4203,69 @@
                     type="button"
                     data-testid="expense-open"
                     aria-label="Сессии смены 25 ноя 2026 с 10:00 до 19:00"
+                    title="Сессии смены 25 ноя 2026 с 10:00 до 19:00"
                   >
-                    Сессии
+                    <svg
+                      class="btn__icon"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.4"
+                      stroke-linecap="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M5.8 4.5h7.2M5.8 8h7.2M5.8 10.5h4.8" />
+                      <circle cx="3.4" cy="4.5" r=".9" fill="currentColor" stroke="none" />
+                      <circle cx="3.4" cy="8" r=".9" fill="currentColor" stroke="none" />
+                      <circle cx="3.4" cy="10.5" r=".9" fill="currentColor" stroke="none" />
+                    </svg>
                   </button>
                   <button
                     class="btn btn--row"
                     type="button"
                     data-testid="expense-recalc"
                     aria-label="Пересчитать запись 25 ноя 2026"
+                    title="Пересчитать запись 25 ноя 2026"
                   >
-                    Пересчитать
+                    <svg
+                      class="btn__icon"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.4"
+                      stroke-linecap="round" stroke-linejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M12.6 8a4.6 4.6 0 1 1-1.5-3.4" />
+                      <path d="M12.9 2.6v3.1h-3.1" />
+                    </svg>
                   </button>
                   <button
-                    class="btn btn--row"
+                    class="btn btn--row btn--row--danger"
                     type="button"
                     data-testid="expense-delete"
                     aria-label="Удалить запись 25 ноя 2026"
+                    title="Удалить запись 25 ноя 2026"
                   >
-                    Удалить
+                    <svg
+                      class="btn__icon"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.4"
+                      stroke-linecap="round" stroke-linejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M2.6 4.6h10.8" />
+                      <path d="M6.2 4.6V3h3.6v1.6" />
+                      <path d="M4.2 4.6l.6 8.2h6.4l.6-8.2" />
+                    </svg>
                   </button>
                 </div>
               </li>
@@ -3029,16 +4294,45 @@
                     type="button"
                     data-testid="expense-recalc"
                     aria-label="Пересчитать запись 24 ноя 2026"
+                    title="Пересчитать запись 24 ноя 2026"
                   >
-                    Пересчитать
+                    <svg
+                      class="btn__icon"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.4"
+                      stroke-linecap="round" stroke-linejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M12.6 8a4.6 4.6 0 1 1-1.5-3.4" />
+                      <path d="M12.9 2.6v3.1h-3.1" />
+                    </svg>
                   </button>
                   <button
-                    class="btn btn--row"
+                    class="btn btn--row btn--row--danger"
                     type="button"
                     data-testid="expense-delete"
                     aria-label="Удалить запись 24 ноя 2026"
+                    title="Удалить запись 24 ноя 2026"
                   >
-                    Удалить
+                    <svg
+                      class="btn__icon"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.4"
+                      stroke-linecap="round" stroke-linejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M2.6 4.6h10.8" />
+                      <path d="M6.2 4.6V3h3.6v1.6" />
+                      <path d="M4.2 4.6l.6 8.2h6.4l.6-8.2" />
+                    </svg>
                   </button>
                 </div>
               </li>
@@ -3081,24 +4375,69 @@
                     type="button"
                     data-testid="expense-open"
                     aria-label="Сессии смены 22 ноя 2026 с 08:30 до 16:30"
+                    title="Сессии смены 22 ноя 2026 с 08:30 до 16:30"
                   >
-                    Сессии
+                    <svg
+                      class="btn__icon"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.4"
+                      stroke-linecap="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M5.8 4.5h7.2M5.8 8h7.2M5.8 10.5h4.8" />
+                      <circle cx="3.4" cy="4.5" r=".9" fill="currentColor" stroke="none" />
+                      <circle cx="3.4" cy="8" r=".9" fill="currentColor" stroke="none" />
+                      <circle cx="3.4" cy="10.5" r=".9" fill="currentColor" stroke="none" />
+                    </svg>
                   </button>
                   <button
                     class="btn btn--row"
                     type="button"
                     data-testid="expense-recalc"
                     aria-label="Пересчитать запись 22 ноя 2026"
+                    title="Пересчитать запись 22 ноя 2026"
                   >
-                    Пересчитать
+                    <svg
+                      class="btn__icon"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.4"
+                      stroke-linecap="round" stroke-linejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M12.6 8a4.6 4.6 0 1 1-1.5-3.4" />
+                      <path d="M12.9 2.6v3.1h-3.1" />
+                    </svg>
                   </button>
                   <button
-                    class="btn btn--row"
+                    class="btn btn--row btn--row--danger"
                     type="button"
                     data-testid="expense-delete"
                     aria-label="Удалить запись 22 ноя 2026"
+                    title="Удалить запись 22 ноя 2026"
                   >
-                    Удалить
+                    <svg
+                      class="btn__icon"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.4"
+                      stroke-linecap="round" stroke-linejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M2.6 4.6h10.8" />
+                      <path d="M6.2 4.6V3h3.6v1.6" />
+                      <path d="M4.2 4.6l.6 8.2h6.4l.6-8.2" />
+                    </svg>
                   </button>
                 </div>
               </li>
@@ -3127,16 +4466,45 @@
                     type="button"
                     data-testid="expense-recalc"
                     aria-label="Пересчитать запись 20 ноя 2026"
+                    title="Пересчитать запись 20 ноя 2026"
                   >
-                    Пересчитать
+                    <svg
+                      class="btn__icon"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.4"
+                      stroke-linecap="round" stroke-linejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M12.6 8a4.6 4.6 0 1 1-1.5-3.4" />
+                      <path d="M12.9 2.6v3.1h-3.1" />
+                    </svg>
                   </button>
                   <button
-                    class="btn btn--row"
+                    class="btn btn--row btn--row--danger"
                     type="button"
                     data-testid="expense-delete"
                     aria-label="Удалить запись 20 ноя 2026"
+                    title="Удалить запись 20 ноя 2026"
                   >
-                    Удалить
+                    <svg
+                      class="btn__icon"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.4"
+                      stroke-linecap="round" stroke-linejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M2.6 4.6h10.8" />
+                      <path d="M6.2 4.6V3h3.6v1.6" />
+                      <path d="M4.2 4.6l.6 8.2h6.4l.6-8.2" />
+                    </svg>
                   </button>
                 </div>
               </li>
@@ -3210,16 +4578,45 @@
                     type="button"
                     data-testid="expense-recalc"
                     aria-label="Пересчитать запись 26 ноя 2026"
+                    title="Пересчитать запись 26 ноя 2026"
                   >
-                    Пересчитать
+                    <svg
+                      class="btn__icon"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.4"
+                      stroke-linecap="round" stroke-linejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M12.6 8a4.6 4.6 0 1 1-1.5-3.4" />
+                      <path d="M12.9 2.6v3.1h-3.1" />
+                    </svg>
                   </button>
                   <button
-                    class="btn btn--row"
+                    class="btn btn--row btn--row--danger"
                     type="button"
                     data-testid="expense-delete"
                     aria-label="Удалить запись 26 ноя 2026"
+                    title="Удалить запись 26 ноя 2026"
                   >
-                    Удалить
+                    <svg
+                      class="btn__icon"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.4"
+                      stroke-linecap="round" stroke-linejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M2.6 4.6h10.8" />
+                      <path d="M6.2 4.6V3h3.6v1.6" />
+                      <path d="M4.2 4.6l.6 8.2h6.4l.6-8.2" />
+                    </svg>
                   </button>
                 </div>
               </li>
@@ -3258,24 +4655,69 @@
                     type="button"
                     data-testid="expense-open"
                     aria-label="Сессии смены 25 ноя 2026 с 10:00 до 19:00"
+                    title="Сессии смены 25 ноя 2026 с 10:00 до 19:00"
                   >
-                    Сессии
+                    <svg
+                      class="btn__icon"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.4"
+                      stroke-linecap="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M5.8 4.5h7.2M5.8 8h7.2M5.8 10.5h4.8" />
+                      <circle cx="3.4" cy="4.5" r=".9" fill="currentColor" stroke="none" />
+                      <circle cx="3.4" cy="8" r=".9" fill="currentColor" stroke="none" />
+                      <circle cx="3.4" cy="10.5" r=".9" fill="currentColor" stroke="none" />
+                    </svg>
                   </button>
                   <button
                     class="btn btn--row"
                     type="button"
                     data-testid="expense-recalc"
                     aria-label="Пересчитать запись 25 ноя 2026"
+                    title="Пересчитать запись 25 ноя 2026"
                   >
-                    Пересчитать
+                    <svg
+                      class="btn__icon"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.4"
+                      stroke-linecap="round" stroke-linejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M12.6 8a4.6 4.6 0 1 1-1.5-3.4" />
+                      <path d="M12.9 2.6v3.1h-3.1" />
+                    </svg>
                   </button>
                   <button
-                    class="btn btn--row"
+                    class="btn btn--row btn--row--danger"
                     type="button"
                     data-testid="expense-delete"
                     aria-label="Удалить запись 25 ноя 2026"
+                    title="Удалить запись 25 ноя 2026"
                   >
-                    Удалить
+                    <svg
+                      class="btn__icon"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.4"
+                      stroke-linecap="round" stroke-linejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M2.6 4.6h10.8" />
+                      <path d="M6.2 4.6V3h3.6v1.6" />
+                      <path d="M4.2 4.6l.6 8.2h6.4l.6-8.2" />
+                    </svg>
                   </button>
                 </div>
               </li>
@@ -3304,16 +4746,45 @@
                     type="button"
                     data-testid="expense-recalc"
                     aria-label="Пересчитать запись 24 ноя 2026"
+                    title="Пересчитать запись 24 ноя 2026"
                   >
-                    Пересчитать
+                    <svg
+                      class="btn__icon"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.4"
+                      stroke-linecap="round" stroke-linejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M12.6 8a4.6 4.6 0 1 1-1.5-3.4" />
+                      <path d="M12.9 2.6v3.1h-3.1" />
+                    </svg>
                   </button>
                   <button
-                    class="btn btn--row"
+                    class="btn btn--row btn--row--danger"
                     type="button"
                     data-testid="expense-delete"
                     aria-label="Удалить запись 24 ноя 2026"
+                    title="Удалить запись 24 ноя 2026"
                   >
-                    Удалить
+                    <svg
+                      class="btn__icon"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.4"
+                      stroke-linecap="round" stroke-linejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M2.6 4.6h10.8" />
+                      <path d="M6.2 4.6V3h3.6v1.6" />
+                      <path d="M4.2 4.6l.6 8.2h6.4l.6-8.2" />
+                    </svg>
                   </button>
                 </div>
               </li>
@@ -3356,24 +4827,69 @@
                     type="button"
                     data-testid="expense-open"
                     aria-label="Сессии смены 22 ноя 2026 с 08:30 до 16:30"
+                    title="Сессии смены 22 ноя 2026 с 08:30 до 16:30"
                   >
-                    Сессии
+                    <svg
+                      class="btn__icon"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.4"
+                      stroke-linecap="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M5.8 4.5h7.2M5.8 8h7.2M5.8 10.5h4.8" />
+                      <circle cx="3.4" cy="4.5" r=".9" fill="currentColor" stroke="none" />
+                      <circle cx="3.4" cy="8" r=".9" fill="currentColor" stroke="none" />
+                      <circle cx="3.4" cy="10.5" r=".9" fill="currentColor" stroke="none" />
+                    </svg>
                   </button>
                   <button
                     class="btn btn--row"
                     type="button"
                     data-testid="expense-recalc"
                     aria-label="Пересчитать запись 22 ноя 2026"
+                    title="Пересчитать запись 22 ноя 2026"
                   >
-                    Пересчитать
+                    <svg
+                      class="btn__icon"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.4"
+                      stroke-linecap="round" stroke-linejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M12.6 8a4.6 4.6 0 1 1-1.5-3.4" />
+                      <path d="M12.9 2.6v3.1h-3.1" />
+                    </svg>
                   </button>
                   <button
-                    class="btn btn--row"
+                    class="btn btn--row btn--row--danger"
                     type="button"
                     data-testid="expense-delete"
                     aria-label="Удалить запись 22 ноя 2026"
+                    title="Удалить запись 22 ноя 2026"
                   >
-                    Удалить
+                    <svg
+                      class="btn__icon"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.4"
+                      stroke-linecap="round" stroke-linejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M2.6 4.6h10.8" />
+                      <path d="M6.2 4.6V3h3.6v1.6" />
+                      <path d="M4.2 4.6l.6 8.2h6.4l.6-8.2" />
+                    </svg>
                   </button>
                 </div>
               </li>
@@ -3402,16 +4918,45 @@
                     type="button"
                     data-testid="expense-recalc"
                     aria-label="Пересчитать запись 20 ноя 2026"
+                    title="Пересчитать запись 20 ноя 2026"
                   >
-                    Пересчитать
+                    <svg
+                      class="btn__icon"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.4"
+                      stroke-linecap="round" stroke-linejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M12.6 8a4.6 4.6 0 1 1-1.5-3.4" />
+                      <path d="M12.9 2.6v3.1h-3.1" />
+                    </svg>
                   </button>
                   <button
-                    class="btn btn--row"
+                    class="btn btn--row btn--row--danger"
                     type="button"
                     data-testid="expense-delete"
                     aria-label="Удалить запись 20 ноя 2026"
+                    title="Удалить запись 20 ноя 2026"
                   >
-                    Удалить
+                    <svg
+                      class="btn__icon"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.4"
+                      stroke-linecap="round" stroke-linejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M2.6 4.6h10.8" />
+                      <path d="M6.2 4.6V3h3.6v1.6" />
+                      <path d="M4.2 4.6l.6 8.2h6.4l.6-8.2" />
+                    </svg>
                   </button>
                 </div>
               </li>
