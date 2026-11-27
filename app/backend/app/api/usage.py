@@ -215,8 +215,13 @@ def _moment(value: Any) -> datetime | None:
     return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed
 
 
-def _rates_snapshot(project: Project | None) -> dict[str, float]:
+def rates_snapshot(project: Project | None) -> dict[str, float]:
     """Снимок цен проекта для колонки `usage_shifts.rates`: по какой цене считалась смена.
+
+    Функция публичная: её переиспользует пересчёт строки журнала
+    (`POST /api/projects/{id}/expenses/shift/{id}/recalculate`), чтобы снимок цен после
+    пересчёта собирался той же формулой, что и при приёме смены. Копия собрала бы другой
+    снимок, и старая цена осталась бы в строке рядом с новой суммой.
 
     Проекта в вебе нет — снимок пустой: цены не было, и выдумывать нули в четыре поля
     значило бы утверждать, что смена считалась по нулевому прайсу. Пустой объект читается
@@ -553,7 +558,7 @@ def store_shift(
         tokens_cache_read=sum(item.tokens_cache_read for item, _ in amounts),
         tokens_cache_write=sum(item.tokens_cache_write for item, _ in amounts),
         cost_usd=total_cost,
-        rates=_rates_snapshot(project),
+        rates=rates_snapshot(project),
     )
     db.add(shift)
     try:

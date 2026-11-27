@@ -1,13 +1,14 @@
 /**
- * Подтверждение мягкого удаления — общее окно для «Проектов» и «Отделов».
+ * Подтверждение необратимого действия — общее окно «Проектов», «Отделов» и журнала.
  *
  * Сам текст подтверждения и вызов API остаются у вызывающей стороны: экран знает, что
- * именно исчезает и какой ручкой это удаляется, а окно отвечает только за поведение —
- * занятость кнопок, отказ сервера дословно из `detail` и закрытие после успеха.
+ * именно исчезает или пересчитывается и какой ручкой это делается, а окно отвечает
+ * только за поведение — занятость кнопок, отказ сервера дословно из `detail` и закрытие
+ * после успеха.
  *
- * Удаление необратимо через интерфейс: строка исчезает из списка и остаётся в базе
- * с отметкой, восстановить её экранами приложения нельзя — об этом прямо говорит текст
- * окна, который передаёт вызывающая сторона.
+ * Вид основного действия — свойство вызывающей стороны: удаление красное (`.btn--danger`,
+ * по умолчанию), а пересчёт строки журнала — обычное тёмное (`.btn--dark`): это починка
+ * суммы, а не разрушение.
  */
 
 import { useId, useState, type ReactNode } from 'react';
@@ -15,19 +16,24 @@ import { useId, useState, type ReactNode } from 'react';
 import { ApiError, UNREACHABLE_TEXT } from '../api/http';
 import Dialog from './Dialog';
 
+/** Вид основной кнопки: `danger` — удаление, `dark` — обычное необратимое действие. */
+export type ConfirmDialogVariant = 'danger' | 'dark';
+
 type ConfirmDialogProps = {
   /** `data-testid` окна по контракту; ошибка получает `-error` к этому же имени. */
   testId: string;
   title: string;
-  /** Текст подтверждения: что исчезнет и что восстановить нельзя. */
+  /** Текст подтверждения: что исчезнет или изменится и что восстановить нельзя. */
   text: ReactNode;
   /** Подпись основной кнопки в покое, например «Удалить». */
   submitLabel: string;
   /** Подпись основной кнопки, пока запрос в полёте, например «Удаляю…». */
   busyLabel: string;
-  /** Запрос удаления; успех закрывает окно силами вызывающей стороны. */
+  /** Запрос действия; успех закрывает окно силами вызывающей стороны. */
   onConfirm: () => Promise<void>;
   onClose: () => void;
+  /** Вид основной кнопки; по умолчанию красный — прежнее поведение удаления. */
+  variant?: ConfirmDialogVariant;
 };
 
 export default function ConfirmDialog({
@@ -38,6 +44,7 @@ export default function ConfirmDialog({
   busyLabel,
   onConfirm,
   onClose,
+  variant = 'danger',
 }: ConfirmDialogProps): JSX.Element {
   const textId = useId();
   const [busy, setBusy] = useState(false);
@@ -77,7 +84,7 @@ export default function ConfirmDialog({
             Отмена
           </button>
           <button
-            className="btn btn--danger"
+            className={variant === 'dark' ? 'btn btn--dark' : 'btn btn--danger'}
             type="button"
             data-testid={`${testId}-submit`}
             onClick={() => void handleConfirm()}

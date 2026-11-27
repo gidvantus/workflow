@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app import main
 from app.api import expenses as api
+from app.api import usage as usage_api
 from app.config import Settings, get_settings
 
 PROJECT: dict[str, str] = {
@@ -832,3 +833,424 @@ def test_validate_spent_on_rejects_non_string(value: object) -> None:
         api.validate_spent_on(value)
     assert excinfo.value.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
     assert excinfo.value.detail == api.SPENT_ON_INVALID
+
+
+# ── пересчёт строки по текущим ценам (#88) ──────────────────────────────────
+
+
+def _patch_prices(client: TestClient, project_id: int, **prices: str) -> None:
+    """Сменить цены проекта ручкой `PATCH` — цену строки считает сервер, а не тест."""
+    response = client.patch(f"/api/projects/{project_id}", json=prices)
+    assert response.status_code == status.HTTP_200_OK, response.text
+
+
+def _recalculate(client: TestClient, project_id: int, kind: str, row_id: int) -> Any:
+    """Позвать пересчёт строки и вернуть ответ — успех и отказ различает тест."""
+    return client.post(f"/api/projects/{project_id}/expenses/{kind}/{row_id}/recalculate")
+
+
+def _delete(client: TestClient, project_id: int, kind: str, row_id: int) -> Any:
+    """Позвать удаление строки и вернуть ответ."""
+    return client.delete(f"/api/projects/{project_id}/expenses/{kind}/{row_id}")
+
+
+def test_recalculate_manual_uses_current_prices(client: TestClient) -> None:
+    """Пересчёт ручной записи: новая сумма по текущим ценам, факты строки не меняются."""
+    project = _create_project(client, **ACCEPTANCE_PRICES)
+    row = _post(client, project["id"], spent_on="2026-11-19", **{"in": 1_500_000})
+    assert row["amount"] == "0.405000"
+    _patch_prices(
+        client,
+        project["id"],
+        price_input="0.54",
+        price_output="2.20",
+        price_cache_read="0.14",
+        price_cache_write="0.68",
+    )
+
+    response = _recalculate(client, project["id"], "manual", row["id"])
+
+    assert response.status_code == status.HTTP_200_OK, response.text
+    body = response.json()
+    # 1 500 000 × 0,54 / 1 000 000 = 0,81.
+    assert body["total"] == "0.810000"
+    assert body["item"] == {
+        "kind": "manual",
+        "id": row["id"],
+        "spent_on": "2026-11-19",
+        "tokens": {"in": 1_500_000, "out": 0, "cacheRead": 0, "cacheWrite": 0},
+        "amount": "0.810000",
+    }
+    journal = client.get(f"/api/projects/{project['id']}/expenses").json()
+    assert journal == {"total": "0.810000", "items": [body["item"]]}
+
+
+def test_recalculate_shift_rewrites_session_costs_and_rates(machine: TestClient) -> None:
+    """Пересчёт смены: суммы сессий и смены новые, снимок цен текущий, токены прежние."""
+    project = _create_project(machine, code="workflow", **ACCEPTANCE_PRICES)
+    sent = machine.post(
+        "/api/usage/shifts",
+        headers=AUTH,
+        json=_shift_document(
+            project_ref="workflow",
+            sessions=[
+                _shift_session("sess-1"),
+                _shift_session("sess-2", tokens=_tokens(**{"in": 2_000_000})),
+            ],
+        ),
+    )
+    assert sent.status_code == status.HTTP_201_CREATED, sent.text
+    shift_id = sent.json()["shift_id"]
+    assert sent.json()["cost_usd"] == "0.810000"
+    _patch_prices(
+        machine,
+        project["id"],
+        price_input="1",
+        price_output="2",
+        price_cache_read="3",
+        price_cache_write="4",
+    )
+
+    response = _recalculate(machine, project["id"], "shift", shift_id)
+
+    assert response.status_code == status.HTTP_200_OK, response.text
+    body = response.json()
+    assert body["item"]["kind"] == "shift"
+    assert body["item"]["id"] == shift_id
+    # Сессии: 1 000 000 × 1 / 1 000 000 = 1,00 и 2 000 000 × 1 / 1 000 000 = 2,00.
+    assert body["item"]["amount"] == "3.000000"
+    assert body["item"]["tokens"] == {
+        "in": 3_000_000,
+        "out": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+    }
+    assert body["item"]["sessions_count"] == 2
+    assert body["total"] == "3.000000"
+
+    detail = machine.get(f"/api/usage/shifts/{shift_id}").json()
+    assert detail["cost_usd"] == "3.000000"
+    assert detail["tokens"] == {"in": 3_000_000, "out": 0, "cacheRead": 0, "cacheWrite": 0}
+    assert detail["sessions_count"] == 2
+    # Снимок цен перезаписан текущими ценами проекта — той же формулой, что при записи.
+    assert detail["rates"] == {
+        "inputUsdPerM": 1.0,
+        "cacheReadUsdPerM": 3.0,
+        "cacheWriteUsdPerM": 4.0,
+        "outputUsdPerM": 2.0,
+    }
+    costs = {session["session"]: session["cost_usd"] for session in detail["sessions"]}
+    assert costs == {"sess-1": "1.000000", "sess-2": "2.000000"}
+    # Ходы и тикеты — факты, а не деньги: пересчёт их не трогает.
+    assert [session["turns"] for session in detail["sessions"]] == [3, 3]
+
+
+def test_recalculate_is_idempotent(client: TestClient) -> None:
+    """Повторный пересчёт при неизменных ценах отдаёт те же числа и не копит сумму."""
+    project = _create_project(client, **ACCEPTANCE_PRICES)
+    row = _post(client, project["id"], **{"in": 1_000_000})
+
+    first = _recalculate(client, project["id"], "manual", row["id"])
+    second = _recalculate(client, project["id"], "manual", row["id"])
+
+    assert first.status_code == status.HTTP_200_OK, first.text
+    assert second.status_code == status.HTTP_200_OK, second.text
+    assert second.json() == first.json()
+    journal = client.get(f"/api/projects/{project['id']}/expenses").json()
+    assert journal["total"] == "0.270000"
+    assert [item["amount"] for item in journal["items"]] == ["0.270000"]
+
+
+def test_recalculated_total_equals_sum_of_journal_rows(machine: TestClient) -> None:
+    """Итог после пересчёта — сумма всех строк журнала, обеих половин, а не дельта."""
+    project = _create_project(machine, code="workflow", **ACCEPTANCE_PRICES)
+    manual = _post(machine, project["id"], spent_on="2026-11-19", **{"in": 1_500_000})
+    shift = _post_shift(machine, project_ref="workflow")
+    assert shift["cost_usd"] == "0.270000"
+    _patch_prices(
+        machine,
+        project["id"],
+        price_input="0.54",
+        price_output="0.54",
+        price_cache_read="0.54",
+        price_cache_write="0.54",
+    )
+
+    recalculated = _recalculate(machine, project["id"], "manual", manual["id"])
+    assert recalculated.status_code == status.HTTP_200_OK, recalculated.text
+
+    journal = machine.get(f"/api/projects/{project['id']}/expenses").json()
+    # Ручная запись — 0,81 по новой цене, смена осталась прежней: её ещё не пересчитали.
+    assert journal["total"] == "1.080000"
+    assert sum(Decimal(item["amount"]) for item in journal["items"]) == Decimal("1.080000")
+
+    recalculated_shift = _recalculate(machine, project["id"], "shift", shift["shift_id"])
+    assert recalculated_shift.status_code == status.HTTP_200_OK, recalculated_shift.text
+
+    journal = machine.get(f"/api/projects/{project['id']}/expenses").json()
+    assert journal["total"] == "1.350000"
+    assert sum(Decimal(item["amount"]) for item in journal["items"]) == Decimal("1.350000")
+
+
+# ── удаление строки журнала (#88) ───────────────────────────────────────────
+
+
+def test_delete_manual_removes_row_and_rebuilds_total(client: TestClient) -> None:
+    """Удаление ручной записи: строка исчезает из журнала, итог — сумма оставшихся строк."""
+    project = _create_project(client, **ACCEPTANCE_PRICES)
+    gone = _post(client, project["id"], spent_on="2026-11-18", **{"in": 1_000_000})
+    kept = _post(client, project["id"], spent_on="2026-11-19", **{"in": 1_500_000})
+
+    response = _delete(client, project["id"], "manual", gone["id"])
+
+    assert response.status_code == status.HTTP_200_OK, response.text
+    assert response.json() == {"total": "0.405000"}
+    journal = client.get(f"/api/projects/{project['id']}/expenses").json()
+    assert journal["items"] == [kept]
+    assert journal["total"] == "0.405000"
+
+
+def test_delete_shift_removes_shift_and_its_sessions(machine: TestClient) -> None:
+    """Удаление смены убирает и её сессии: детализация даёт 404, сумм проекта нет."""
+    project = _create_project(machine, code="workflow", **ACCEPTANCE_PRICES)
+    manual = _post(machine, project["id"], spent_on="2026-11-19", **{"in": 1_500_000})
+    shift = _post_shift(machine, project_ref="workflow")
+    shift_id = shift["shift_id"]
+
+    response = _delete(machine, project["id"], "shift", shift_id)
+
+    assert response.status_code == status.HTTP_200_OK, response.text
+    assert response.json() == {"total": "0.405000"}
+    journal = machine.get(f"/api/projects/{project['id']}/expenses").json()
+    assert journal == {"total": "0.405000", "items": [manual]}
+
+    detail = machine.get(f"/api/usage/shifts/{shift_id}")
+    assert detail.status_code == status.HTTP_404_NOT_FOUND
+    assert detail.json()["detail"] == usage_api.SHIFT_NOT_FOUND
+    # Смен в разрезе проектов больше нет — и сессий удалённой смены в них тоже.
+    assert machine.get("/api/usage/projects").json() == []
+
+
+def test_total_stays_sum_of_rows_after_series_of_actions(machine: TestClient) -> None:
+    """Серия пересчётов и удалений: итог после каждого шага равен сумме строк журнала."""
+    project = _create_project(machine, code="workflow", **ACCEPTANCE_PRICES)
+    first = _post(machine, project["id"], spent_on="2026-11-17", **{"in": 1_000_000})
+    second = _post(machine, project["id"], spent_on="2026-11-18", **{"in": 2_000_000})
+    shift = _post_shift(machine, project_ref="workflow")
+    _patch_prices(
+        machine,
+        project["id"],
+        price_input="0.54",
+        price_output="1.10",
+        price_cache_read="0.07",
+        price_cache_write="0.34",
+    )
+
+    def assert_total_matches() -> None:
+        journal = machine.get(f"/api/projects/{project['id']}/expenses").json()
+        assert Decimal(journal["total"]) == sum(
+            Decimal(item["amount"]) for item in journal["items"]
+        )
+
+    _recalculate(machine, project["id"], "manual", first["id"])
+    assert_total_matches()
+    assert _delete(machine, project["id"], "manual", second["id"]).status_code == status.HTTP_200_OK
+    assert_total_matches()
+    recalculated = _recalculate(machine, project["id"], "shift", shift["shift_id"])
+    assert recalculated.status_code == status.HTTP_200_OK, recalculated.text
+    assert_total_matches()
+    assert _delete(machine, project["id"], "shift", shift["shift_id"]).status_code == (
+        status.HTTP_200_OK
+    )
+    assert_total_matches()
+    assert machine.get(f"/api/projects/{project['id']}/expenses").json()["total"] == "0.540000"
+
+
+# ── отказы новых ручек ──────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("kind", "row_id"),
+    [("manual", 1), ("shift", 1)],
+)
+def test_recalculate_checks_project_first(client: TestClient, kind: str, row_id: int) -> None:
+    """Несуществующий проект — `404 «Проект не найден»` раньше проверки строки."""
+    response = _recalculate(client, 999, kind, row_id)
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert response.json()["detail"] == "Проект не найден"
+
+
+@pytest.mark.parametrize("kind", ["manual", "shift"])
+def test_mutations_return_404_for_deleted_project(client: TestClient, kind: str) -> None:
+    """Мягко удалённый проект — тот же `404` проекта на пересчёте и удалении."""
+    project = _create_project(client, **ACCEPTANCE_PRICES)
+    client.delete(f"/api/projects/{project['id']}")
+
+    recalc = _recalculate(client, project["id"], kind, 1)
+    removed = _delete(client, project["id"], kind, 1)
+
+    assert recalc.status_code == status.HTTP_404_NOT_FOUND
+    assert recalc.json()["detail"] == "Проект не найден"
+    assert removed.status_code == status.HTTP_404_NOT_FOUND
+    assert removed.json()["detail"] == "Проект не найден"
+
+
+def test_recalculate_unknown_kind_and_missing_rows(machine: TestClient) -> None:
+    """Неизвестный вид и чужая ручная запись — «Запись не найдена», чужая смена — своя."""
+    project = _create_project(machine, code="workflow", **ACCEPTANCE_PRICES)
+    other = _create_project(
+        machine,
+        name="Другой",
+        repo_url="gidvantus/other",
+        code="other",
+        **ACCEPTANCE_PRICES,
+    )
+    foreign = _post(machine, other["id"], **{"in": 1_000_000})
+    foreign_shift = _post_shift(machine, project_ref="other")
+
+    for response in (
+        _recalculate(machine, project["id"], "cost", 1),
+        _recalculate(machine, project["id"], "manual", 999),
+        _recalculate(machine, project["id"], "manual", foreign["id"]),
+    ):
+        assert response.status_code == status.HTTP_404_NOT_FOUND
+        assert response.json()["detail"] == api.ROW_NOT_FOUND
+
+    shift_response = _recalculate(machine, project["id"], "shift", foreign_shift["shift_id"])
+    assert shift_response.status_code == status.HTTP_404_NOT_FOUND
+    assert shift_response.json()["detail"] == usage_api.SHIFT_NOT_FOUND
+
+
+def test_recalculate_shift_of_other_project_is_shift_not_found(machine: TestClient) -> None:
+    """Смена соседнего проекта — `404 «Смена не найдена»`, как и несуществующая."""
+    project = _create_project(machine, code="workflow", **ACCEPTANCE_PRICES)
+    _create_project(
+        machine,
+        name="Другой",
+        repo_url="gidvantus/other",
+        code="other",
+        **ACCEPTANCE_PRICES,
+    )
+    foreign = _post_shift(machine, project_ref="other")
+
+    for action in (
+        _recalculate(machine, project["id"], "shift", foreign["shift_id"]),
+        _delete(machine, project["id"], "shift", foreign["shift_id"]),
+    ):
+        assert action.status_code == status.HTTP_404_NOT_FOUND
+        assert action.json()["detail"] == usage_api.SHIFT_NOT_FOUND
+
+
+def test_delete_refuses_unknown_kind_and_rows(machine: TestClient) -> None:
+    """Удаление неизвестного вида и чужой ручной записи — «Запись не найдена»."""
+    project = _create_project(machine, code="workflow", **ACCEPTANCE_PRICES)
+    other = _create_project(
+        machine,
+        name="Другой",
+        repo_url="gidvantus/other",
+        code="other",
+        **ACCEPTANCE_PRICES,
+    )
+    foreign = _post(machine, other["id"], **{"in": 1_000_000})
+
+    for action in (
+        _delete(machine, project["id"], "cost", 1),
+        _delete(machine, project["id"], "manual", 999),
+        _delete(machine, project["id"], "manual", foreign["id"]),
+    ):
+        assert action.status_code == status.HTTP_404_NOT_FOUND
+        assert action.json()["detail"] == api.ROW_NOT_FOUND
+    # Чужая запись не пострадала.
+    other_journal = machine.get(f"/api/projects/{other['id']}/expenses").json()
+    assert other_journal["items"] == [foreign]
+
+
+def test_recalculate_checks_row_before_prices(client: TestClient) -> None:
+    """Порядок отказов: строка раньше цен — у проекта без цен пропавшая строка даёт `404`."""
+    project = _create_project(client)
+
+    response = _recalculate(client, project["id"], "manual", 999)
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert response.json()["detail"] == api.ROW_NOT_FOUND
+
+
+@pytest.mark.parametrize("kind", ["manual", "shift"])
+def test_recalculate_without_prices_refuses(machine: TestClient, kind: str) -> None:
+    """Все четыре цены нули — `422 «Цены проекта не заполнены»`, строка не меняется."""
+    project = _create_project(
+        machine,
+        code="workflow",
+        price_input="0.27",
+        price_output="1.10",
+        price_cache_read="0.07",
+        price_cache_write="0.34",
+    )
+    row = _post(machine, project["id"], **{"in": 1_000_000})
+    shift = _post_shift(machine, project_ref="workflow")
+    _patch_prices(
+        machine,
+        project["id"],
+        price_input="0",
+        price_output="0",
+        price_cache_read="0",
+        price_cache_write="0",
+    )
+    row_id = row["id"] if kind == "manual" else shift["shift_id"]
+
+    response = _recalculate(machine, project["id"], kind, row_id)
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert response.json()["detail"] == api.NO_PRICES
+    journal = machine.get(f"/api/projects/{project['id']}/expenses").json()
+    assert journal["total"] == "0.540000"
+    assert sum(Decimal(item["amount"]) for item in journal["items"]) == Decimal("0.540000")
+
+
+def test_recalculate_manual_overflow_refuses_without_changing_row(client: TestClient) -> None:
+    """Сумма сверх `Numeric(14,6)` — `422` про предел журнала, строка остаётся прежней."""
+    project = _create_project(
+        client,
+        price_input="100000000",
+        price_output="0",
+        price_cache_read="0",
+        price_cache_write="0",
+    )
+    row = _post(client, project["id"], **{"in": 10**12})
+    assert row["amount"] == "100000000000000.000000"
+
+    response = _recalculate(client, project["id"], "manual", row["id"])
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert response.json()["detail"] == api.COST_OVERFLOW
+    journal = client.get(f"/api/projects/{project['id']}/expenses").json()
+    assert journal["items"][0]["amount"] == "100000000000000.000000"
+
+
+def test_recalculate_shift_overflow_refuses_without_touching_shift(machine: TestClient) -> None:
+    """Смена сверх предела журнала не пересчитывается: отказ, прежние суммы и снимок цен."""
+    project = _create_project(machine, code="workflow", **ACCEPTANCE_PRICES)
+    shift = _post_shift(
+        machine,
+        project_ref="workflow",
+        tokens=_tokens(**{"in": 10**12}),
+    )
+    _patch_prices(
+        machine,
+        project["id"],
+        price_input="100000000",
+        price_output="0",
+        price_cache_read="0",
+        price_cache_write="0",
+    )
+
+    response = _recalculate(machine, project["id"], "shift", shift["shift_id"])
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert response.json()["detail"] == api.COST_OVERFLOW
+    detail = machine.get(f"/api/usage/shifts/{shift['shift_id']}").json()
+    # 10^12 × 0,27 / 10^6 = 270 000 — прежняя сумма, и снимок цен прежний.
+    assert detail["cost_usd"] == "270000.000000"
+    assert detail["rates"]["inputUsdPerM"] == 0.27
+    assert detail["sessions"][0]["cost_usd"] == "270000.000000"

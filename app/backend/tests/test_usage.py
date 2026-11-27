@@ -881,3 +881,29 @@ def test_usage_projects_sums_by_project(api: TestClient) -> None:
     assert body[1]["project_title"] == TITLE
     # Последняя смена проекта — по времени окончания, а не по порядку записи.
     assert body[1]["last_shift_at"].startswith("2024-05-03T02:00:00")
+
+
+# ── удаление смены и повторная отправка (#88) ───────────────────────────────
+
+
+def test_repost_of_deleted_shift_creates_it_again(api: TestClient, project: dict[str, Any]) -> None:
+    """Удалённая смена освобождает ключ, и очередь, отправив её снова, заводит её заново.
+
+    Это известное следствие физического удаления (#88), документируется тестом, а не
+    правится: повторная отправка той же пары `(project_ref, shift_key)` после `DELETE`
+    создаёт новую смену и снова прибавляет деньги к итогу проекта. Уникальность пары
+    держит только живая строка — мягкого удаления у смен нет.
+    """
+    first = post_shift(api, shift_body())
+    assert first.status_code == 201, first.text
+    shift_id = first.json()["shift_id"]
+    removed = api.delete(f"/api/projects/{project['id']}/expenses/shift/{shift_id}")
+    assert removed.status_code == 200, removed.text
+    assert journal(api, project)["total"] == "0.000000"
+
+    again = post_shift(api, shift_body())
+
+    assert again.status_code == 201, again.text
+    assert again.json()["changed"] is True
+    assert again.json()["accepted"] == 1
+    assert journal(api, project)["total"] == DAILY_COST

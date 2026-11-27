@@ -22,7 +22,9 @@
  * половины вместе (`ProjectExpenses`). Отдельной вкладки «Стоимость» больше нет — раньше
  * там жил второй журнал в рублях, и одна и та же стоимость проекта печаталась на экране
  * дважды. Её итог остался в паспорте как проверка первого числа, а цены за токены
- * правятся окном прямо из строки цен этой вкладки.
+ * правятся окном прямо из строки цен этой вкладки. Строку журнала можно пересчитать по
+ * текущим ценам проекта и удалить (#88): оба действия необратимы, поэтому спрашивают
+ * подтверждение (`ConfirmDialog`), а после успеха журнал и итог перечитываются с сервера.
  *
  * Журнал читается при открытии страницы, а не при первом заходе на вкладку: итог нужен
  * паспорту, и списки задач и отделов читаются так же — переключение вкладки запросов
@@ -36,7 +38,12 @@
 import { useCallback, useEffect, useId, useState } from 'react';
 
 import { deleteDepartment, listDepartments, type Department } from '../api/departments';
-import { listExpenses, type JournalEntry } from '../api/expenses';
+import {
+  deleteExpense,
+  listExpenses,
+  recalculateExpense,
+  type JournalEntry,
+} from '../api/expenses';
 import { ApiError, UNREACHABLE_TEXT } from '../api/http';
 import type { Project } from '../api/projects';
 import { listTasks, type Task } from '../api/tasks';
@@ -115,6 +122,16 @@ type DepartmentDialogState =
   | { kind: 'delete'; department: Department }
   | null;
 
+/**
+ * Открытое окно строки журнала: пересчёт по текущим ценам или удаление. Оба действия
+ * необратимы (прежняя сумма и снимок цен не сохраняются; удалённую строку не вернуть),
+ * поэтому оба спрашивают подтверждение.
+ */
+type ExpenseDialogState =
+  | { kind: 'recalc'; entry: JournalEntry }
+  | { kind: 'delete'; entry: JournalEntry }
+  | null;
+
 type ProjectPageProps = {
   project: Project;
   /** Возврат к списку: страница закрывается, загруженный список не перечитывается. */
@@ -146,6 +163,7 @@ export default function ProjectPage({
   const [expenseFormOpen, setExpenseFormOpen] = useState(false);
   const [pricesOpen, setPricesOpen] = useState(false);
   const [departmentDialog, setDepartmentDialog] = useState<DepartmentDialogState>(null);
+  const [expenseDialog, setExpenseDialog] = useState<ExpenseDialogState>(null);
   /**
    * Открытая страница правки отдела. Как и страница проекта, она занимает содержимое
    * раздела целиком: крошки, шапка и вкладки проекта ей не нужны.
@@ -219,6 +237,27 @@ export default function ProjectPage({
   /** Запись добавлена — окно закрыто, журнал и итог перечитаны с сервера. */
   function handleExpenseSaved(): void {
     setExpenseFormOpen(false);
+    void loadExpenses();
+  }
+
+  /**
+   * Пересчёт или удаление строки прошло — окно закрыто, журнал и итог перечитаны.
+   *
+   * Ошибку окно ловит само (`ConfirmDialog`): отказ сервера показывается дословно, а
+   * закрываем окно только после успеха. Строки и итог фронт не правит сам — новый
+   * `amount` и `total` приходят только из повторного `GET`.
+   */
+  async function confirmExpenseAction(): Promise<void> {
+    if (expenseDialog === null) {
+      return;
+    }
+    const { entry } = expenseDialog;
+    if (expenseDialog.kind === 'recalc') {
+      await recalculateExpense(project.id, entry.kind, entry.id);
+    } else {
+      await deleteExpense(project.id, entry.kind, entry.id);
+    }
+    setExpenseDialog(null);
     void loadExpenses();
   }
 
@@ -423,6 +462,8 @@ export default function ProjectPage({
             onRetry={() => void loadExpenses()}
             onCreate={() => setExpenseFormOpen(true)}
             onEditPrices={() => setPricesOpen(true)}
+            onRecalculate={(entry) => setExpenseDialog({ kind: 'recalc', entry })}
+            onDelete={(entry) => setExpenseDialog({ kind: 'delete', entry })}
           />
         </div>
       </main>
@@ -448,6 +489,39 @@ export default function ProjectPage({
           project={project}
           onClose={() => setPricesOpen(false)}
           onSaved={handlePricesSaved}
+        />
+      )}
+
+      {expenseDialog !== null && expenseDialog.kind === 'recalc' && (
+        <ConfirmDialog
+          testId="expense-recalc-confirm"
+          title="Пересчитать запись?"
+          text={
+            'Сумма записи будет пересчитана по текущим ценам проекта. ' +
+            `Прежнее значение (${formatCost(expenseDialog.entry.amount)}) не сохранится.`
+          }
+          submitLabel="Пересчитать"
+          busyLabel="Пересчитываю…"
+          variant="dark"
+          onConfirm={confirmExpenseAction}
+          onClose={() => setExpenseDialog(null)}
+        />
+      )}
+
+      {expenseDialog !== null && expenseDialog.kind === 'delete' && (
+        <ConfirmDialog
+          testId="expense-delete-confirm"
+          title="Удалить запись?"
+          text={
+            expenseDialog.entry.kind === 'shift'
+              ? 'Запись исчезнет из журнала, и восстановить её через интерфейс нельзя. ' +
+                'Вместе с ней исчезнут и её сессии.'
+              : 'Запись исчезнет из журнала, и восстановить её через интерфейс нельзя.'
+          }
+          submitLabel="Удалить"
+          busyLabel="Удаляю…"
+          onConfirm={confirmExpenseAction}
+          onClose={() => setExpenseDialog(null)}
         />
       )}
 

@@ -17,6 +17,11 @@
  * - различие половин — два признака, а не цвет: у смены есть вторая строка даты
  *   (интервал) и кнопка «Сессии», у ручной записи нет ни того, ни другого. Числа ручной
  *   записи и есть запись, раскрывать её некуда;
+ * - у каждой строки есть действия «Пересчитать» (`expense-recalc`) и «Удалить»
+ *   (`expense-delete`): пересчёт меняет только сумму строки по текущим ценам проекта,
+ *   удаление убирает строку из журнала. Обе кнопки открывают подтверждение на странице
+ *   проекта (`ProjectPage`), а после успеха журнал и итог перечитываются с сервера —
+ *   карточка не правит ни строку, ни итог сама;
  * - детализация смены — прежний экран: возврат, итог смены и список сессий. Снимок цен
  *   смены (`rates`) не печатается: вторые цены на экране снова развели бы деньги на два
  *   прайса, а цена видна в строке цен.
@@ -206,16 +211,22 @@ type DetailState =
 type JournalRowProps = {
   entry: JournalEntry;
   onOpen: (shiftId: number) => void;
+  /** Открыть окно пересчёта строки по текущим ценам проекта. */
+  onRecalculate: (entry: JournalEntry) => void;
+  /** Открыть окно удаления строки из журнала. */
+  onDelete: (entry: JournalEntry) => void;
 };
 
 /**
- * Строка журнала: пять колонок вместо трёх у ручной записи и шести у смены.
+ * Строка журнала: дата, источник, количества, сумма и столбец действий.
  *
  * Источник — общий признак строки, а не повод рисовать вторую вкладку, поэтому у обеих
- * половин одна сетка `when · source · tokens · amount · open`. Пустые виды токенов не
- * печатаются: ноль в этой ведомости не факт, а отсутствие факта.
+ * половин одна сетка `when · source · tokens · amount · actions`. У смены в действиях
+ * три кнопки («Сессии», «Пересчитать», «Удалить»), у ручной записи две: место «Сессии»
+ * остаётся пустым, чтобы две другие кнопки не сдвигались между половинами. Пустые виды
+ * токенов не печатаются: ноль в этой ведомости не факт, а отсутствие факта.
  */
-function JournalRow({ entry, onOpen }: JournalRowProps): JSX.Element {
+function JournalRow({ entry, onOpen, onRecalculate, onDelete }: JournalRowProps): JSX.Element {
   const isShift = entry.kind === 'shift';
   const spentOn = formatSpentOn(entry.spent_on);
   const period =
@@ -253,14 +264,14 @@ function JournalRow({ entry, onOpen }: JournalRowProps): JSX.Element {
       <p className="journal-row__amount" data-testid="expense-item-amount">
         {formatCost(entry.amount)}
       </p>
-      {isShift && (
-        <div className="journal-row__open">
-          {/* Доступное имя начинается с видимой подписи «Сессии» (WCAG 2.5.3, «Label in
-              Name»): человек, управляющий голосом, произносит то, что видит, а скринридер
-              читает то же действие. Дата и интервал отличают строки между собой, но
-              видимую подпись не подменяют. */}
+      <div className="journal-row__actions">
+        {/* Доступные имена начинаются с видимых подписей (WCAG 2.5.3, «Label in
+            Name»): человек, управляющий голосом, произносит то, что видит, а дата
+            отличает строки между собой, не подменяя видимое слово. Место «Сессии» у
+            ручной записи пустое: две другие кнопки стоят на одной вертикали со сменой. */}
+        {isShift && (
           <button
-            className="btn"
+            className="btn btn--row journal-row__open"
             type="button"
             data-testid="expense-open"
             aria-label={`Сессии смены ${spentOn} с ${
@@ -270,8 +281,26 @@ function JournalRow({ entry, onOpen }: JournalRowProps): JSX.Element {
           >
             Сессии
           </button>
-        </div>
-      )}
+        )}
+        <button
+          className="btn btn--row journal-row__recalc"
+          type="button"
+          data-testid="expense-recalc"
+          aria-label={`Пересчитать запись ${spentOn}`}
+          onClick={() => onRecalculate(entry)}
+        >
+          Пересчитать
+        </button>
+        <button
+          className="btn btn--row journal-row__delete"
+          type="button"
+          data-testid="expense-delete"
+          aria-label={`Удалить запись ${spentOn}`}
+          onClick={() => onDelete(entry)}
+        >
+          Удалить
+        </button>
+      </div>
     </li>
   );
 }
@@ -314,6 +343,10 @@ type ProjectExpensesProps = {
   onRetry: () => void;
   onCreate: () => void;
   onEditPrices: () => void;
+  /** Открыть окно пересчёта строки: сумму меняет сервер по текущим ценам проекта. */
+  onRecalculate: (entry: JournalEntry) => void;
+  /** Открыть окно удаления строки: удаление необратимо, подтверждение обязательно. */
+  onDelete: (entry: JournalEntry) => void;
 };
 
 export default function ProjectExpenses({
@@ -325,6 +358,8 @@ export default function ProjectExpenses({
   onRetry,
   onCreate,
   onEditPrices,
+  onRecalculate,
+  onDelete,
 }: ProjectExpensesProps): JSX.Element {
   const [detail, setDetail] = useState<DetailState>({ status: 'closed' });
   // Номер последнего запроса детализации: ответ, пришедший после возврата к журналу, на
@@ -543,7 +578,13 @@ export default function ProjectExpenses({
       {detail.status === 'closed' && ready && entries.length > 0 && (
         <ul className="table__body" data-testid="expenses-list">
           {entries.map((entry) => (
-            <JournalRow key={`${entry.kind}-${entry.id}`} entry={entry} onOpen={openShift} />
+            <JournalRow
+              key={`${entry.kind}-${entry.id}`}
+              entry={entry}
+              onOpen={openShift}
+              onRecalculate={onRecalculate}
+              onDelete={onDelete}
+            />
           ))}
         </ul>
       )}
