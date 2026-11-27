@@ -425,13 +425,14 @@ ripgrep), и роль начинает «проверять по чтению».
 | Файл | Ответственность |
 |---|---|
 | `package.json` (корень) | манифест bundle-пакета `dsh-dev-department`: `name`/`version`, `exports` на модули плагинов, патч и сам манифест, `files`, `dsh.bundle.patch` |
-| `plugins/cordis.patch.yml` | патч бандла: строки четырёх хост-плагинов, адресованные спецификатором пакета |
+| `plugins/cordis.patch.yml` | патч бандла: строки пяти хост-плагинов, адресованные спецификатором пакета |
 | `plugins/profiles/desktop/cordis.patch.yml` | раскладка профиля прежним способом (`plugins/sync.mjs`) и машинная настройка человека — MCP GitHub и Playwright MCP; вместе с пакетом не подключается |
 | `plugins/profiles/desktop/plugins/package.json` | манифест пачки хост-плагинов для раскладки `plugins/sync.mjs`: без непустых `name` и `version` DSH валит каждый запрос с `REQUEST_EXTENSION` |
 | `plugins/dev-department.mjs` | расписание смен, выбор задачи, запуск ролей, диалоги, сторож, сводка в Telegram, раскладка ролей в `~/.dsh/.agent-presets` |
 | `plugins/usage-ledger.mjs` | книга привязок «сессия → тикет» и счёт токенов по правилу проекции `tokenUsage` |
 | `plugins/role-sessions.mjs` | инструменты `open_role_session`, `list_agent_presets`; создаёт сессию роли в нужной рабочей области |
 | `plugins/role-permissions.mjs` | выдаёт ролевым сессиям `danger-full-access` |
+| `plugins/attach-image.mjs` | инструмент `attach_image`: загружает PNG/JPG в user-attachments GitHub и отдаёт markdown-строку вместо пути на диске |
 | `plugins/tg-bridge.mjs` | мост в Telegram |
 | `plugins/profiles/desktop/plugins/voice-input/` | голосовой ввод в GUI: кнопка в композере и ручка `POST /dsh-voice/transcribe` (в пакет не входит) |
 | `plugins/agent-presets/<id>/agent.cordis.yml` | композиция роли: персона, скиллы, инструменты, строка `mcp-github` |
