@@ -1749,6 +1749,23 @@ check('agentSync успех виден в статусе', {
   error: heartbeatStatus.agentSync.error,
 }, { ok: true, code: 'dsh', state: 'idle', issue_number: null, error: null })
 
+// Ветка `busy` тикового heartbeat (Б2 ревью PR #86): на втором тике сессия уже
+// лежит в `st.session`, поэтому диспетчер обязан отметиться `busy` по её тикету,
+// а не `idle`. Без этого поломка `dispatcherPresence()` в части `busy` прошла бы
+// мимо всех наборов: в 41б сессий нет, а в 41 первый тик идёт до выдачи роли.
+heartbeats.length = 0
+step = await tick(app)
+check('второй тик ждёт идущую сессию', step.result.action, 'waiting')
+check('тик во время сессии отмечает busy по её тикету', heartbeats.map(({ state, issue_number }) => [state, issue_number]), [['busy', 4100]])
+heartbeatStatus = await app.status()
+check('agentSync во время сессии называет busy', {
+  ok: heartbeatStatus.agentSync.ok,
+  code: heartbeatStatus.agentSync.code,
+  state: heartbeatStatus.agentSync.state,
+  issue_number: heartbeatStatus.agentSync.issue_number,
+  error: heartbeatStatus.agentSync.error,
+}, { ok: true, code: 'dsh', state: 'busy', issue_number: 4100, error: null })
+
 console.log('\n=== сценарий 41б: тик без сессий отмечается на связи сам ===')
 // В тикетах нет ни одного с меткой конвейера: тик ничего не запускает, но
 // живой диспетчер обязан отметиться.
