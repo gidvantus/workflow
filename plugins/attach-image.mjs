@@ -38,7 +38,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import https from 'node:https'
 import { STATE_FILES, stateFile, readStateFile, dshHome } from './state-paths.mjs'
-import { stripBom, parseRegistry, projectsOf, projectRoots, developmentOf, findProjectByRoots } from './registry.mjs'
+import { readRegistryFile, projectsOf, projectRoots, developmentOf, findProjectByRoots } from './registry.mjs'
 
 /** Предел размера: больше GitHub не примет, а обрезать картинку — не наше дело. */
 export const MAX_IMAGE_BYTES = 8 * 1024 * 1024
@@ -55,11 +55,6 @@ const MIME_BY_EXTENSION = new Map([
  * регистре: имена репозиториев GitHub регистронезависимы.
  */
 const repositoryIdCache = new Map()
-
-/** Сброс кеша: нужен набору, чтобы порядок проверок не зависел от соседних. */
-export function resetRepositoryIdCache() {
-  repositoryIdCache.clear()
-}
 
 // Журнал отдела. Запись не должна ломать инструмент: сбой журнала — не сбой загрузки.
 function trace(line) {
@@ -156,16 +151,7 @@ export function readToken() {
 
 /** Реестр проектов как документ. Нечитаемый файл или чужой формат — отказ. */
 export function readProjectsDocument() {
-  const file = readStateFile(STATE_FILES.projects)
-  let raw
-  try {
-    raw = JSON.parse(stripBom(fs.readFileSync(file, 'utf8')))
-  } catch (error) {
-    throw new Error('attach_image: не читается реестр проектов ' + file + ': ' + messageOf(error))
-  }
-  const parsed = parseRegistry(raw, file)
-  if (parsed.fatal) throw new Error('attach_image: ' + parsed.fatal)
-  return parsed.document
+  return readRegistryFile(readStateFile(STATE_FILES.projects)).document
 }
 
 /** Проект по рабочей области и его `repo`. Незнакомый путь — отказ с путём. */
@@ -205,6 +191,10 @@ export function httpRequest(spec) {
       let body = ''
       res.on('data', (chunk) => { body += chunk })
       res.on('end', () => resolve({ status: res.statusCode, body }))
+      // Обрыв уже после прихода статуса: без слушателя `res` эмитит `error` и
+      // промис не оседает. Отказ честный — роль впишет путь в комментарий.
+      res.on('error', (error) => reject(new Error('attach_image: соединение оборвалось при ответе GitHub (' + messageOf(error) + ') — впиши путь и скажи, что картинка не приложилась')))
+      res.on('aborted', () => reject(new Error('attach_image: GitHub оборвал ответ — впиши путь и скажи, что картинка не приложилась')))
     })
     req.setTimeout(30000, () => req.destroy(new Error('таймаут запроса к GitHub')))
     req.on('error', reject)
