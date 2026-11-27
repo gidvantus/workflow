@@ -110,21 +110,49 @@ class ExpenseCreate(BaseModel):
     tokens: JournalTokensInput | None = None
 
 
-class ExpenseListResponse(BaseModel):
-    """Ответ `GET .../expenses`: итог проекта и обе половины журнала одним списком.
+class _ExpenseTotal(BaseModel):
+    """Итог проекта строкой ровно с шестью знаками — общий для всех ответов журнала.
 
-    `total` — хранимая стоимость проекта (`projects.total_cost`), а не сумма прочитанных
-    строк: смену прибавляет ручка приёма смены, ручную запись — ручка записи, и обе
-    прибавляют уже округлённые суммы. Пустой журнал — `{"total": "0.000000", "items": []}`.
-
-    Порядок строк задаёт сервер (`spent_on DESC, sort_at DESC, id DESC`): фронт его не
-    пересортировывает.
+    Валидатор один на все ответы (`format_cost` из `app.money`): второй копии формата
+    денег быть не должно, иначе чтение журнала, пересчёт строки и удаление печатали бы
+    одно и то же число по-разному.
     """
 
     total: str
-    items: list[JournalEntry]
 
     @field_validator("total", mode="before")
     @classmethod
     def _format_total(cls, value: object) -> str:
         return format_cost(value)
+
+
+class ExpenseListResponse(_ExpenseTotal):
+    """Ответ `GET .../expenses`: итог проекта и обе половины журнала одним списком.
+
+    `total` — хранимая стоимость проекта (`projects.total_cost`), а не сумма прочитанных
+    строк: смену прибавляет ручка приёма смены, ручную запись — ручка записи, и обе
+    прибавляют уже округлённые суммы; пересчёт и удаление пересобирают его суммой строк.
+    Пустой журнал — `{"total": "0.000000", "items": []}`.
+
+    Порядок строк задаёт сервер (`spent_on DESC, sort_at DESC, id DESC`): фронт его не
+    пересортировывает.
+    """
+
+    items: list[JournalEntry]
+
+
+class ExpenseRecalculated(_ExpenseTotal):
+    """Ответ `POST .../recalculate`: пересчитанная строка журнала и новый итог проекта.
+
+    `item` — та же строка, что отдаёт `GET`: ручная запись или смена, с новым `amount`.
+    `total` — итог проекта после пересчёта, пересобранный суммой строк.
+    """
+
+    item: JournalEntry
+
+
+class ExpenseDeleted(_ExpenseTotal):
+    """Ответ `DELETE` строки журнала: новый итог проекта.
+
+    Строки в ответе нет: её уже нет в журнале, и показывать нечего.
+    """

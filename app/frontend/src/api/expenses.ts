@@ -14,7 +14,12 @@
  * Сумм фронт не считает и в запросе не передаёт. Сервер перемножает четыре количества на
  * четыре цены проекта (`$` за 1 000 000 токенов), округляет до шести знаков и прибавляет к
  * стоимости проекта. `amount` строки и `total` журнала приходят строками ровно с шестью
- * знаками — на экран они выводятся как `119,23 $` и не пересчитываются.
+ * знаками — на экран они выводятся как `119,23 $`, а фронт их не пересчитывает.
+ *
+ * С #88 строку можно пересчитать и удалить: `recalculateExpense` пересчитывает сумму
+ * одной строки по текущим ценам проекта (итог проекта пересобирается сервером), а
+ * `deleteExpense` убирает строку из журнала. Оба ответа несут новый `total`, но экран
+ * берёт строки и итог из повторного `GET`, а не из ответа мутации.
  */
 
 import { ApiError, UNREACHABLE_TEXT, isRecord, readDetail, readJson, send } from './http';
@@ -64,12 +69,23 @@ export type ExpenseInput = {
  * Ответ журнала: итог проекта и обе половины одним списком.
  *
  * `total` — хранимая стоимость проекта (`projects.total_cost`), а не сумма прочитанных
- * строк: её прибавляют обе ручки записи, и прибавляют уже округлённые суммы. Поэтому
- * сумма строк на экране сходится с итогом и с паспортом проекта.
+ * строк: её прибавляют обе ручки записи, а пересчёт и удаление пересобирают суммой
+ * строк. Поэтому сумма строк на экране сходится с итогом и с паспортом проекта.
  */
 export type ExpenseJournal = {
   total: string;
   items: JournalEntry[];
+};
+
+/** Ответ пересчёта строки: сама строка в форме журнала и новый итог проекта. */
+export type ExpenseRecalculated = {
+  item: JournalEntry;
+  total: string;
+};
+
+/** Ответ удаления строки: только новый итог проекта — строки в журнале уже нет. */
+export type ExpenseDeleted = {
+  total: string;
 };
 
 /** Путь журнала одного проекта. Хост и порт не зашиты: `/api/` проксирует nginx. */
@@ -176,4 +192,61 @@ export async function createExpense(
     throw new ApiError(await readDetail(response));
   }
   return readEntryBody(response);
+}
+
+/** Путь одной строки журнала: `kind` — `manual` или `shift`, `id` — id в своей таблице. */
+function expenseRowUrl(projectId: number, kind: JournalKind, id: number): string {
+  return `${expensesUrl(projectId)}/${kind}/${id}`;
+}
+
+/**
+ * `POST .../expenses/{kind}/{id}/recalculate` — `200` с пересчитанной строкой и итогом.
+ *
+ * Тело запроса пустое: суммы и цен в нём нет, сервер берёт количества строки и текущие
+ * цены проекта. Отказ приходит текстом в `detail` (цены не заполнены, сумма сверх
+ * предела журнала) и показывается пользователю дословно.
+ */
+export async function recalculateExpense(
+  projectId: number,
+  kind: JournalKind,
+  id: number,
+): Promise<ExpenseRecalculated> {
+  const response = await send(`${expenseRowUrl(projectId, kind, id)}/recalculate`, {
+    method: 'POST',
+  });
+  if (!response.ok) {
+    throw new ApiError(await readDetail(response));
+  }
+  const payload = await readJson(response);
+  if (!isRecord(payload) || typeof payload.total !== 'string') {
+    throw new ApiError(UNREACHABLE_TEXT);
+  }
+  const item = readEntry(payload.item);
+  if (item === null) {
+    throw new ApiError(UNREACHABLE_TEXT);
+  }
+  return { item, total: payload.total };
+}
+
+/**
+ * `DELETE .../expenses/{kind}/{id}` — `200` с новым итогом проекта.
+ *
+ * У смены сервер удаляет сначала её сессии, потом саму смену; восстановить строку через
+ * интерфейс нельзя. Экран после успеха перечитывает журнал целиком (`listExpenses`), а
+ * не правит строки и итог сам.
+ */
+export async function deleteExpense(
+  projectId: number,
+  kind: JournalKind,
+  id: number,
+): Promise<ExpenseDeleted> {
+  const response = await send(expenseRowUrl(projectId, kind, id), { method: 'DELETE' });
+  if (!response.ok) {
+    throw new ApiError(await readDetail(response));
+  }
+  const payload = await readJson(response);
+  if (!isRecord(payload) || typeof payload.total !== 'string') {
+    throw new ApiError(UNREACHABLE_TEXT);
+  }
+  return { total: payload.total };
 }
